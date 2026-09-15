@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +21,50 @@ import (
 )
 
 type fakeMaintenance struct{ calls int }
+
+func TestAgentMaintenanceReportsBinaryUpdateStatus(t *testing.T) {
+	content := []byte("test agent binary")
+	sha := fmt.Sprintf("%x", sha256.Sum256(content))
+	for _, tc := range []struct {
+		name, current string
+		missingBinary bool
+		outdated      bool
+	}{
+		{name: "same binary despite version display suffix", current: strings.ToUpper(sha)},
+		{name: "same version with different binary", current: strings.Repeat("0", 64), outdated: true},
+		{name: "agent has not reported binary"},
+		{name: "controller binary unavailable", current: sha, missingBinary: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestAPI(t)
+			c.api.Config.Version = "v0.1.0 (abcdef1)"
+			c.api.Config.AgentBinDir = t.TempDir()
+			if !tc.missingBinary {
+				if err := os.WriteFile(filepath.Join(c.api.Config.AgentBinDir, "ctlvps-agent-linux-amd64"), content, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			c.do("POST", "/api/v1/auth/setup", map[string]any{"setup_token": testSetupToken, "username": "admin", "password": "password123"}, 200)
+			srv := c.do("POST", "/api/v1/servers", map[string]any{"name": "test-vps"}, 201)
+			path := fmt.Sprintf("/api/v1/servers/%.0f", srv["id"])
+			et := c.do("POST", path+"/enroll-token", nil, 200)
+			en := c.do("POST", "/api/agent/v1/enroll", agentproto.EnrollRequest{EnrollToken: et["token"].(string), Version: "v0.1.0", Arch: "amd64"}, 200)
+			c.agent = en["agent_token"].(string)
+			c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "v0.1.0", TS: time.Now(), Epoch: "test", Metrics: agentproto.Metrics{Arch: "amd64"}, Diagnostics: agentproto.Diagnostics{Maintenance: 1, BinarySHA256: tc.current}}, 200)
+			status := c.do("GET", path+"/maintenance", nil, 200)
+			update := status["agent_update"].(map[string]any)
+			if status["available"] != true || update["outdated"] != tc.outdated {
+				t.Fatalf("unexpected update status: %v", status)
+			}
+			if tc.current != "" && update["current_sha"] != tc.current {
+				t.Fatalf("current binary not returned: %v", update)
+			}
+			if !tc.missingBinary && update["latest_sha"] != sha {
+				t.Fatalf("target binary not returned: %v", update)
+			}
+		})
+	}
+}
 
 func (f *fakeMaintenance) Call(_ context.Context, method, path string, in, out any) error {
 	if method == "POST" {

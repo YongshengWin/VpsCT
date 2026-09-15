@@ -1,8 +1,9 @@
 import * as React from "react";
 import { MaintenancePanel } from "@/components/maintenance";
+import { ServerActions } from "@/components/server-actions";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle, Wrench } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
 import type { Server, Node, Series } from "@/lib/types";
 import { fmtBytes, fmtAgo, fmtDuration, fmtRate, gbToBytes, bytesToGb, parseResetDay, copyText, STATUS_LABELS, PROTOCOL_LABELS, fmtDate, defaultNodeName } from "@/lib/utils";
@@ -200,9 +201,11 @@ export function ServerDetailPage() {
   const [confirmReset, setConfirmReset] = React.useState(false);
   const [tab, setTab] = React.useState<"nodes" | "diag" | "revisions">("nodes");
   const [nodeDetail, setNodeDetail] = React.useState<Node | null>(null);
+  const [maintenanceOpen, setMaintenanceOpen] = React.useState(false);
+  const [maintenanceBusy, setMaintenanceBusy] = React.useState(false);
 
   const enrollM = useMutation({ mutationFn: () => post<{ token: string; install_command: string; expires_at: string }>(`/api/v1/servers/${id}/enroll-token`), onSuccess: setEnroll, onError: (e) => toast.fromError(e) });
-  const republish = useMutation({ mutationFn: () => post(`/api/v1/servers/${id}/republish`), onSuccess: () => { toast.success("已重新下发配置"); qc.invalidateQueries({ queryKey: ["servers", id] }); }, onError: (e) => toast.fromError(e) });
+  const republish = useMutation({ mutationFn: () => post(`/api/v1/servers/${id}/republish`), onSuccess: () => { toast.success("已请求重新应用节点配置"); qc.invalidateQueries({ queryKey: ["servers", id] }); }, onError: (e) => toast.fromError(e) });
   const checkAgentUpdate = useMutation({
     mutationFn: () => post<{ queued?: boolean; manual?: boolean; message: string; agent_update?: { command?: string } }>(`/api/v1/servers/${id}/update-agent`),
     onSuccess: async (r) => {
@@ -237,30 +240,29 @@ export function ServerDetailPage() {
             {s.agent_status === "pending" && <Button size="sm" onClick={() => enrollM.mutate()} loading={enrollM.isPending}><KeyRound className="h-4 w-4" /> 生成安装命令</Button>}
             <Button size="sm" variant="outline" onClick={() => setDeploy(true)}><Plus className="h-4 w-4" /> 部署节点</Button>
             <Button size="sm" variant="outline" onClick={() => setEdit(true)}><Pencil className="h-4 w-4" /> 编辑</Button>
-            {s.agent && !s.diagnostics?.maintenance && (
-              <Button size="sm" variant="outline" onClick={() => checkAgentUpdate.mutate()} loading={checkAgentUpdate.isPending} title={s.agent_update?.supported ? "检查与控制端提供的 agent 版本是否一致；有差异时会随心跳自动更新" : "复制命令，在该 VPS 上执行一次以启用自动更新"}>
-                {s.agent_update?.supported ? <RefreshCw className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {s.agent_update?.supported ? "检查 agent 更新" : "复制 agent 更新命令"}
-              </Button>
-            )}
-            <Button size="sm" variant="outline" onClick={() => republish.mutate()} loading={republish.isPending} title="让此 VPS 重新应用当前节点配置"><RefreshCw className="h-4 w-4" /> 重新下发配置</Button>
-            <Button size="sm" variant="ghost" className="text-red-500" onClick={() => setConfirmDel(true)}><Trash2 className="h-4 w-4" /></Button>
+            <ServerActions items={[
+              { label: "agent 维护", icon: <Wrench className="h-4 w-4" />, onClick: () => setMaintenanceOpen(true) },
+              ...(s.agent && !s.diagnostics?.maintenance ? [{ label: s.agent_update?.supported ? "检查 agent 更新" : "复制 agent 更新命令", icon: <Copy className="h-4 w-4" />, onClick: () => checkAgentUpdate.mutate(), disabled: checkAgentUpdate.isPending || maintenanceBusy }] : []),
+              { label: "重新应用节点配置", icon: <RefreshCw className="h-4 w-4" />, onClick: () => republish.mutate(), disabled: republish.isPending || maintenanceBusy },
+              { label: "删除服务器记录", icon: <Trash2 className="h-4 w-4" />, onClick: () => setConfirmDel(true), disabled: maintenanceBusy, destructive: true },
+            ]} />
           </>
         }
       />
 
-      <MaintenancePanel server={{ id: s.id, name: s.name }} />
+      <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} />
 
       {s.agent?.apply_error && (
         <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
       )}
       {s.agent && s.agent_update && !s.agent_update.supported && (
         <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          当前 agent 需手动更新一次。复制 agent 更新命令，在该 VPS 上执行后，即可随心跳自动同步控制端提供的版本。
+          当前 agent 需手动更新一次。在「更多」中复制 agent 更新命令，在该 VPS 上执行后，即可随心跳自动同步控制端提供的版本。
         </div>
       )}
-      {s.agent_update?.outdated && (
+      {s.agent_update?.outdated && !s.diagnostics?.maintenance && (
         <div className="mb-4 rounded-md border border-sky-500/40 bg-sky-500/5 p-3 text-sm">
-          agent 与控制端提供的版本不同。新版的同步进度见上方维护记录，失败后可点击「升级 agent」重试；旧版随心跳自动同步。
+          agent 与控制端提供的版本不同，将随心跳自动同步。
         </div>
       )}
 

@@ -4,6 +4,7 @@ import { AlertTriangle, RefreshCw, Trash2 } from "lucide-react";
 import { get, post } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { fmtDate } from "@/lib/utils";
+import type { AgentUpdateInfo } from "@/lib/types";
 import { Button, Card, Dialog, Field, Input, Select } from "@/components/ui";
 
 interface Job {
@@ -21,6 +22,7 @@ interface Status {
   reason?: string;
   version: string;
   target_version?: string;
+  agent_update?: AgentUpdateInfo;
   jobs: Job[];
 }
 interface Release { version: string; url: string }
@@ -34,7 +36,13 @@ function newerRelease(target: string, current: string) {
   return current.includes("-") && !target.includes("-");
 }
 
-export function MaintenancePanel({ server }: { server?: { id: number; name: string } }) {
+export function MaintenancePanel({ server, open = false, onOpen, onClose, onBusyChange }: {
+  server?: { id: number; name: string };
+  open?: boolean;
+  onOpen?: () => void;
+  onClose?: () => void;
+  onBusyChange?: (busy: boolean) => void;
+}) {
   const controller = !server;
   const role = controller ? "controller" : "agent";
   const endpoint = controller ? "/api/v1/system/maintenance" : `/api/v1/servers/${server.id}/maintenance`;
@@ -53,12 +61,16 @@ export function MaintenancePanel({ server }: { server?: { id: number; name: stri
   const [error, setError] = React.useState("");
   const latest = useMutation({ mutationFn: () => get<Release>(endpoint + "/latest") });
   const target = controller ? latest.data?.version : q.data?.target_version;
-  const upgradeAvailable = !!target && (!controller || newerRelease(target, q.data?.version ?? ""));
+  const update = q.data?.agent_update;
+  const versionKnown = !!update?.current_sha && !!update?.latest_sha;
+  const upgradeAvailable = !!target && (controller ? newerRelease(target, q.data?.version ?? "") : !!update?.outdated);
   const expected = controller ? "VpsCT" : server.name;
   const jobs = q.data?.jobs?.length ? q.data.jobs : (submitted ? [submitted] : []);
   const busy = jobs.some(active);
+  React.useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const disconnected = !!q.error || (controller && !!submitted && !q.data?.available);
   const lastKnown = jobs[0] ?? submitted;
+  const attention = jobs.find(active) ?? (lastKnown && ["failed", "rolled_back", "interrupted", "expired"].includes(lastKnown.status) ? lastKnown : null);
   const start = useMutation({
     mutationFn: () => post<Job>(endpoint, {
       id: requestID, role, action: selected, version: selected === "update" ? target : undefined,
@@ -67,7 +79,7 @@ export function MaintenancePanel({ server }: { server?: { id: number; name: stri
     }),
     onSuccess: (job) => {
       setSubmitted(job); setSelected(null); setPassword(""); setCode(""); setConfirm(""); setError("");
-      qc.setQueryData<Status>(key, (old) => ({ available: old?.available ?? true, version: old?.version ?? "", target_version: old?.target_version, jobs: [job, ...(old?.jobs ?? []).filter((j) => j.id !== job.id)] }));
+      qc.setQueryData<Status>(key, (old) => ({ ...old, available: old?.available ?? true, version: old?.version ?? "", jobs: [job, ...(old?.jobs ?? []).filter((j) => j.id !== job.id)] }));
       void qc.invalidateQueries({ queryKey: key });
     },
     onError: (e) => setError(e instanceof Error ? e.message : "提交失败，请检查任务记录后重试"),
@@ -78,17 +90,16 @@ export function MaintenancePanel({ server }: { server?: { id: number; name: stri
   }
   function close() { if (!start.isPending) { setSelected(null); setPassword(""); setCode(""); } }
 
-  return <>
-    <Card className="my-4 p-5 sm:p-6">
+  const content = <>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h3 className="font-bold">{controller ? "控制端维护" : "agent 维护"}</h3>
+          {controller && <h3 className="font-bold">控制端维护</h3>}
           <p className="mt-1 text-sm text-muted-foreground">当前版本 {q.data?.version || "—"}{!controller && target ? ` · 控制端提供 ${target}` : ""}</p>
           <p className="mt-1 text-xs text-muted-foreground">{controller ? "升级前自动备份，启动失败自动恢复。" : "升级同步控制端提供的程序；卸载会停止这台服务器上由 VpsCT 部署的服务。"}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {controller && <Button size="sm" variant="outline" disabled={!q.data?.available || busy} loading={latest.isPending} onClick={() => latest.mutate()}><RefreshCw className="h-4 w-4" /> 检查新版本</Button>}
-          <Button size="sm" variant="outline" disabled={!q.data?.available || !upgradeAvailable || busy} onClick={() => choose("update")}>{controller ? "升级控制端" : "升级 agent"}</Button>
+          <Button size="sm" variant="outline" disabled={!q.data?.available || !upgradeAvailable || busy} onClick={() => choose("update")}>{controller ? "升级控制端" : busy ? "维护进行中" : upgradeAvailable ? "升级 agent" : versionKnown ? "已同步" : "等待版本信息"}</Button>
           <Button size="sm" variant="ghost" className="text-destructive" disabled={!q.data?.available || busy} onClick={() => choose("uninstall")}><Trash2 className="h-4 w-4" /> {controller ? "卸载控制端" : "卸载 agent"}</Button>
         </div>
       </div>
@@ -99,7 +110,9 @@ export function MaintenancePanel({ server }: { server?: { id: number; name: stri
         <AlertTriangle className="mr-1 inline h-4 w-4" />连接已中断，暂时无法确认最终结果。独立维护进程会继续执行。
         {lastKnown.action === "uninstall" && controller ? "控制端卸载后，此站点将不可用。" : "服务恢复后会自动刷新进度。"}
       </div>}
-      {!!jobs.length && <div className="mt-4 space-y-3 border-t pt-4" aria-live="polite">
+      {!!jobs.length && <details className="mt-4 border-t pt-4" open={controller || !!attention || undefined}>
+        <summary className="cursor-pointer text-sm font-medium">操作记录</summary>
+        <div className="mt-3 space-y-3" aria-live="polite">
         {jobs.slice(0, 3).map((j) => <div key={j.id} className="text-sm">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="font-medium">{j.action === "update" ? `升级 ${j.version || ""}` : `卸载 · ${j.purge ? "清空数据" : "保留数据"}`} <span className={j.status === "succeeded" ? "text-emerald-600" : ["failed", "interrupted"].includes(j.status) ? "text-destructive" : "text-muted-foreground"}>· {labels[j.status] ?? j.status}</span></span>
@@ -108,8 +121,18 @@ export function MaintenancePanel({ server }: { server?: { id: number; name: stri
           <p className="mt-1 text-muted-foreground">{j.message}</p>
           <details className="mt-1 text-xs text-muted-foreground"><summary className="cursor-pointer">终端查看结果与日志</summary><pre className="mt-2 overflow-x-auto rounded-lg bg-muted p-3">{`sudo cat /var/lib/ctlvps-maintenance/${j.id}/status.json\nsudo cat /var/lib/ctlvps-maintenance/${j.id}/worker.log`}</pre></details>
         </div>)}
+        </div>
+      </details>}
+  </>;
+
+  return <>
+    {controller ? <Card className="my-4 p-5 sm:p-6">{content}</Card> : <>
+      {attention && <div role="status" className={`mb-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl px-4 py-2 text-sm ${active(attention) ? "bg-sky-500/10 text-sky-700 dark:text-sky-300" : "bg-amber-500/10 text-amber-700 dark:text-amber-300"}`}>
+        <span>{active(attention) ? <RefreshCw className="mr-2 inline h-4 w-4 animate-spin" /> : <AlertTriangle className="mr-2 inline h-4 w-4" />}agent {attention.action === "update" ? "升级" : "卸载"} · {q.error ? "连接中断，结果待确认" : labels[attention.status] ?? attention.status}</span>
+        <Button variant="link" size="sm" onClick={onOpen}>查看详情</Button>
       </div>}
-    </Card>
+      <Dialog open={open && !selected} onClose={() => onClose?.()} title="agent 维护" description={server.name}>{content}</Dialog>
+    </>}
     <Dialog open={!!selected} onClose={close} title={selected === "update" ? `升级${controller ? "控制端" : " agent"}` : `卸载${controller ? "控制端" : " agent"}`} description={controller ? "目标：当前 VpsCT 控制端" : `目标：${server.name}`} footer={<>
       <Button variant="ghost" disabled={start.isPending} onClick={close}>取消</Button>
       <Button variant={selected === "uninstall" ? "destructive" : "default"} loading={start.isPending} disabled={!password || (user?.totp_enabled && !code) || (selected === "uninstall" && confirm !== expected)} onClick={() => start.mutate()}>{selected === "update" ? "确认升级" : "确认卸载"}</Button>

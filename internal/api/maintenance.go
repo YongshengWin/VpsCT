@@ -138,12 +138,14 @@ func (a *API) serverMaintenance(w http.ResponseWriter, r *http.Request) error {
 	ag, err := a.Store.GetAgentByServer(r.Context(), id)
 	var d agentproto.Diagnostics
 	_ = json.Unmarshal(ag.Diagnostics, &d)
+	var m agentproto.Metrics
+	_ = json.Unmarshal(ag.Metrics, &m)
 	available := err == nil && d.Maintenance >= maintenance.Protocol && a.agentStatus(ag) == domain.AgentOnline
 	reason := ""
 	if !available {
 		reason = "需要在线且支持网页维护的 agent；旧版请先通过安装命令更新一次"
 	}
-	httpx.OK(w, map[string]any{"available": available, "reason": reason, "version": ag.Version, "target_version": a.Config.Version, "jobs": jobs})
+	httpx.OK(w, map[string]any{"available": available, "reason": reason, "version": ag.Version, "target_version": a.Config.Version, "agent_update": a.agentUpdateInfo(r, &m, &d), "jobs": jobs})
 	return nil
 }
 
