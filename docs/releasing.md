@@ -45,22 +45,28 @@ make release VERSION=v0.1.0 REPOSITORY=YongshengWin/VpsCT
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
+| `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
 | `ctlvps-v0.1.0-linux-amd64.tar.gz`、`ctlvps-v0.1.0-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、完整说明文档与许可文件 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
-校验文件完整性不等于验证发布者身份。当前发行流程尚未配置独立的发布签名。
+README 的安装与更新命令使用 `releases/latest/download/install.sh`，发布新正式版后无需修改版本号。每份 Release 附件内仍记录自身版本，确保一次安装的程序和校验文件一致；Release 页面中的命令用于安装该页对应的版本。
+
+2026-09-15，经维护者明确要求，`v0.1.0` 原有附件替换为包含网页维护及卸载器的构建，同时同步源码标签、校验清单和发行说明。通常发布仍使用新版本号；覆盖已发布版本只在维护者明确要求时执行，并先保留原附件以供恢复。校验文件完整性不等于验证发布者身份。当前发行流程尚未配置独立的发布签名。
 
 ### 2.3 安装、升级与恢复验收
 
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-bash scripts/test-install-container.sh release/v0.1.0
+release_dir=release/v0.1.0 # 替换为刚用当前源码构建的待发布版本目录
+bash scripts/test-install-container.sh "$release_dir"
+bash scripts/test-uninstall-container.sh
+bash scripts/test-maintenance-container.sh "$release_dir"
 bash scripts/test-docker.sh
 ```
 
-容器测试中的 systemd 为测试替身。公开前还需在明确授权的全新 Linux 测试主机上验收真实 systemd、HTTPS 证书、管理员初始化和 agent 接入，并验证从上一版升级及恢复数据的流程。
+安装器容器测试中的 systemd 为测试替身；卸载测试使用独立的真实 systemd / nftables 容器，覆盖两端同机、数据保留、清空、重复运行及异常路径。网页维护测试使用真实控制端、agent、独立维护进程和 systemd，发行下载由固定本地附件替代；需传入当前源码构建的发行目录，不能用已发布的旧版附件代替。公开前还需在明确授权的全新 Linux 测试主机上验收 HTTPS 证书、管理员初始化和 agent 接入，并验证从上一版升级及恢复数据的流程。
 
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
@@ -82,7 +88,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.0 \
 3. 双架构附件、许可文件及校验清单齐全，归档内的文档链接可用。
 4. 安装、升级和恢复验收记录已填写，未覆盖的范围明确列出。
 
-草稿尚不能作为普通用户的公开下载入口。工作流不会覆盖已有 Release；若失败时已留下草稿，先检查附件再决定补传或重建。
+草稿尚不能作为普通用户的公开下载入口。工作流遇到已有 Release 会跳过创建，不自动覆盖附件；若失败时已留下草稿，先检查附件再决定补传或重建。
 
 ## 4. 公开发行并验证下载
 
@@ -90,7 +96,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.0 \
 
 发布后从未登录 GitHub 的环境检查：
 
-1. Release 页面与安装脚本可以下载。
+1. Release 页面与安装脚本可以下载，`releases/latest/download/install.sh` 指向预期的最新正式版。
 2. 两种架构附件与 `SHA256SUMS` 一致。
 3. Release 展示的真实 curl 安装命令能够完成安装。
 4. 管理员初始化、agent 接入、更新和分享资源访问符合该版本说明。

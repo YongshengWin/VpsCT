@@ -28,6 +28,9 @@ if any(a in ('caddy', 'caddy.service') for a in args):
     # The Caddy branch tests official package installation and config validation;
     # public ACME issuance and real systemd are checked on a deployment host.
     sys.exit(0)
+if any(a in ('ctlvps-maintenance', 'ctlvps-maintenance.service') for a in args):
+    # The dedicated maintenance integration suite uses real systemd for this unit.
+    sys.exit(0)
 if not any(a in ('ctlvpsd', 'ctlvpsd.service') for a in args):
     sys.exit('test double only supports ctlvpsd')
 if command == 'is-active':

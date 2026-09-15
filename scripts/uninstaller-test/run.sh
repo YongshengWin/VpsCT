@@ -1,0 +1,198 @@
+#!/usr/bin/env bash
+# Destructive fixtures: run ONLY in the disposable container created by the runner.
+set -euo pipefail
+[[ "$(cat /proc/1/comm)" == systemd && -f /.dockerenv ]] || exit 1
+cd /src
+units=(ctlvps-agent.service ctlvpsd.service ctlvps-singbox@21001.service ctlvps-snell@21002.service caddy.service)
+checks=0
+assert() { "$@" || { printf 'Assertion failed: %s\n' "$*" >&2; exit 1; }; }
+done_case() { checks=$((checks+1)); printf 'PASS %s\n' "$*"; }
+uninstall() { bash /src/uninstall.sh "$@" > /tmp/uninstall-test-output 2>&1 || { cat /tmp/uninstall-test-output; return 1; }; }
+reject() { if bash /src/uninstall.sh "$@" > /tmp/uninstall-test-output 2>&1; then cat /tmp/uninstall-test-output; exit 1; fi; }
+
+fixture() {
+  local unit executable
+  for unit in "${units[@]}"; do systemctl stop "$unit" >/dev/null 2>&1 || true; done
+  rm -rf /opt/ctlvps /etc/ctlvps /var/lib/ctlvps-agent /var/log/ctlvps /etc/caddy /var/lib/caddy /etc/systemd/system/ctlvps*.service /etc/systemd/system/caddy.service
+  rm -f /etc/systemd/system/multi-user.target.wants/ctlvps* /etc/systemd/system/multi-user.target.wants/caddy.service
+  mkdir -p /opt/ctlvps/releases/test/agents /opt/ctlvps/data/backups /opt/ctlvps/backups \
+    /opt/ctlvps/bin /etc/ctlvps/sing-box /etc/ctlvps/snell /var/lib/ctlvps-agent/certs /var/log/ctlvps /etc/caddy
+  for executable in /opt/ctlvps/releases/test/ctlvpsd /usr/local/bin/ctlvps-agent /opt/ctlvps/bin/sing-box /opt/ctlvps/bin/snell-server /usr/bin/caddy; do
+    printf '#!/bin/sh\nexec /bin/sleep infinity\n' > "$executable"
+    chmod 0755 "$executable"
+  done
+  cp /src/uninstall.sh /opt/ctlvps/releases/test/uninstall.sh
+  ln -s releases/test /opt/ctlvps/current
+  ln -s current/ctlvpsd /opt/ctlvps/ctlvpsd
+  ln -s current/agents /opt/ctlvps/agents
+  ln -s current/uninstall.sh /opt/ctlvps/uninstall.sh
+  touch /opt/ctlvps/REPOSITORY /opt/ctlvps/data/ctlvps.db /opt/ctlvps/data/backups/db \
+    /opt/ctlvps/backups/upgrade.tar.gz /var/lib/ctlvps-agent/state.json /var/lib/ctlvps-agent/certs/test.key \
+    /var/log/ctlvps/sing-box.log /etc/ctlvps/sing-box/21001.json /etc/ctlvps/snell/21002.conf
+  printf 'CTLVPS_DATA_DIR=/opt/ctlvps/data\n' > /etc/ctlvps/ctlvpsd.env
+  cat > /etc/caddy/Caddyfile <<'EOF'
+# Managed by VpsCT installer
+panel.example.test {
+    reverse_proxy 127.0.0.1:8080
+}
+EOF
+  mkdir -p /var/lib/caddy/.local/share/caddy/certificates/test-ca/{panel.example.test,other.example.test}
+  touch /var/lib/caddy/.local/share/caddy/certificates/test-ca/{panel.example.test,other.example.test}/certificate.key
+  python3 - <<'PY'
+from pathlib import Path
+commands = {
+ 'ctlvpsd': '/opt/ctlvps/ctlvpsd',
+ 'ctlvps-agent': '/usr/local/bin/ctlvps-agent run --state /var/lib/ctlvps-agent',
+ 'ctlvps-singbox@': '/opt/ctlvps/bin/sing-box run -c /etc/ctlvps/sing-box/%i.json',
+ 'ctlvps-snell@': '/opt/ctlvps/bin/snell-server -c /etc/ctlvps/snell/%i.conf',
+ 'caddy': '/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile',
+}
+for name,command in commands.items():
+ Path('/etc/systemd/system', name+'.service').write_text(
+  '[Unit]\nDescription=Disposable uninstall fixture\n[Service]\nExecStart='+command+
+  '\nRestart=always\n[Install]\nWantedBy=multi-user.target\n')
+PY
+  systemctl daemon-reload
+  systemctl reset-failed
+  systemctl enable --now "${units[@]}" >/dev/null 2>&1
+  nft delete table inet ctlvps 2>/dev/null || true
+  nft delete table inet keep_fixture 2>/dev/null || true
+  nft add table inet ctlvps
+  nft add table inet keep_fixture
+}
+
+fixture
+uninstall --all --purge --remove-caddy --dry-run
+for unit in "${units[@]}"; do assert systemctl is-active --quiet "$unit"; done
+assert test -f /opt/ctlvps/data/ctlvps.db
+assert test -f /var/lib/ctlvps-agent/state.json
+done_case 'dry run leaves services and data intact'
+
+reject --all --purge
+assert test -f /opt/ctlvps/data/ctlvps.db
+assert systemctl is-active --quiet ctlvps-agent
+done_case 'noninteractive run requires explicit confirmation'
+
+uninstall --controller --yes
+assert test -f /opt/ctlvps/data/ctlvps.db
+assert test -f /etc/ctlvps/ctlvpsd.env
+assert test ! -e /opt/ctlvps/current
+assert test ! -e /opt/ctlvps/uninstall.sh
+assert systemctl is-active --quiet ctlvps-agent
+assert systemctl is-active --quiet ctlvps-singbox@21001
+assert systemctl is-active --quiet caddy
+uninstall --controller --purge --yes
+assert test ! -e /opt/ctlvps/data
+assert test -f /var/lib/ctlvps-agent/state.json
+assert nft list table inet ctlvps
+done_case 'controller uninstall, later purge, and agent coexistence'
+
+fixture
+uninstall --agent --yes
+assert test -f /var/lib/ctlvps-agent/state.json
+assert test -f /etc/ctlvps/sing-box/21001.json
+assert test ! -e /usr/local/bin/ctlvps-agent
+assert test ! -e /opt/ctlvps/bin/sing-box
+assert systemctl is-active --quiet ctlvpsd
+if systemctl is-active --quiet ctlvps-singbox@21001; then exit 1; fi
+if nft list table inet ctlvps 2>/dev/null; then exit 1; fi
+assert nft list table inet keep_fixture
+uninstall --agent --purge --yes
+assert test ! -e /var/lib/ctlvps-agent
+assert test ! -e /etc/ctlvps/sing-box
+assert test -f /opt/ctlvps/data/ctlvps.db
+done_case 'agent stops both cores, preserves controller and unrelated nft table'
+
+fixture
+uninstall --all --purge --remove-caddy --yes
+assert test ! -e /opt/ctlvps
+assert test ! -e /etc/ctlvps
+assert test ! -e /var/lib/ctlvps-agent
+assert test ! -e /var/log/ctlvps
+assert test ! -e /etc/caddy/Caddyfile
+assert test ! -e /var/lib/caddy/.local/share/caddy/certificates/test-ca/panel.example.test
+assert test -f /var/lib/caddy/.local/share/caddy/certificates/test-ca/other.example.test/certificate.key
+assert nft list table inet keep_fixture
+uninstall --all --purge --remove-caddy --yes
+done_case 'all purge removes owned data and is repeatable'
+
+fixture
+sed -i 's/panel.example.test/PANEL.EXAMPLE.TEST/' /etc/caddy/Caddyfile
+uninstall --controller --purge --remove-caddy --yes
+assert test ! -e /var/lib/caddy/.local/share/caddy/certificates/test-ca/panel.example.test
+done_case 'certificate cleanup handles case-insensitive domain names'
+
+fixture
+printf '\nother.example.test {\n respond "keep"\n}\n' >> /etc/caddy/Caddyfile
+reject --all --purge --remove-caddy --yes
+assert systemctl is-active --quiet ctlvpsd
+assert test -f /opt/ctlvps/data/ctlvps.db
+done_case 'shared Caddy rejected before stopping services'
+
+fixture
+sed -i 's|--config /etc/caddy/Caddyfile|--config /important/caddy.json|' /etc/systemd/system/caddy.service
+systemctl daemon-reload
+reject --controller --purge --remove-caddy --yes
+assert systemctl is-active --quiet caddy
+assert systemctl is-active --quiet ctlvpsd
+done_case 'custom Caddy startup rejected before stopping services'
+
+fixture
+mkdir -p /important
+touch /important/keep
+mv /opt/ctlvps/data /important/data
+ln -s /important/data /opt/ctlvps/data
+uninstall --controller --purge --yes
+assert test -f /important/data/ctlvps.db
+done_case 'leaf symlink unlinked without deleting its destination'
+
+fixture
+mv /etc/ctlvps /etc/ctlvps-real
+ln -s /etc/ctlvps-real /etc/ctlvps
+reject --all --purge --yes
+assert systemctl is-active --quiet ctlvps-agent
+assert test -f /etc/ctlvps-real/sing-box/21001.json
+rm /etc/ctlvps
+mv /etc/ctlvps-real /etc/ctlvps
+done_case 'symlinked parent rejected before stopping services'
+
+fixture
+mkdir /opt/ctlvps/data/mounted
+mount --bind /important /opt/ctlvps/data/mounted
+reject --controller --purge --yes
+assert systemctl is-active --quiet ctlvpsd
+umount /opt/ctlvps/data/mounted
+done_case 'nested bind mount rejected before deletion'
+
+fixture
+sed -i 's|CTLVPS_DATA_DIR=.*|CTLVPS_DATA_DIR=/important/data|' /etc/ctlvps/ctlvpsd.env
+reject --controller --purge --yes
+assert systemctl is-active --quiet ctlvpsd
+done_case 'custom controller data path rejected'
+
+fixture
+mkdir -p /etc/systemd/system/ctlvps-agent.service.d
+printf '[Service]\nEnvironment=TEST=1\n' > /etc/systemd/system/ctlvps-agent.service.d/override.conf
+systemctl daemon-reload
+reject --agent --purge --yes
+assert systemctl is-active --quiet ctlvps-agent
+rm -r /etc/systemd/system/ctlvps-agent.service.d
+systemctl daemon-reload
+done_case 'systemd overrides rejected'
+
+fixture
+sed -i 's|--state /var/lib/ctlvps-agent|--state /important|' /etc/systemd/system/ctlvps-agent.service
+systemctl daemon-reload
+reject --agent --purge --yes
+assert test -f /var/lib/ctlvps-agent/state.json
+done_case 'custom agent state rejected'
+
+fixture
+sed -i '/Restart=always/a ExecStop=/bin/false' /etc/systemd/system/ctlvps-agent.service
+systemctl daemon-reload
+reject --all --purge --yes
+assert test -f /opt/ctlvps/data/ctlvps.db
+assert test -f /var/lib/ctlvps-agent/state.json
+done_case 'stop failure aborts before deleting files'
+
+printf 'Uninstaller integration: %s scenarios passed (real systemd and nftables)\n' "$checks"

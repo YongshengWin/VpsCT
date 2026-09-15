@@ -270,6 +270,9 @@ func (a *API) deleteServer(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.requireNoMaintenance(r, id); err != nil {
+		return err
+	}
 	s, err := a.Store.GetServer(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
@@ -292,6 +295,9 @@ func (a *API) enrollToken(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.requireNoMaintenance(r, id); err != nil {
+		return err
+	}
 	s, err := a.Store.GetServer(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
@@ -311,6 +317,9 @@ func (a *API) enrollToken(w http.ResponseWriter, r *http.Request) error {
 func (a *API) resetAgentToken(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathInt64(r, "id")
 	if err != nil {
+		return err
+	}
+	if err := a.requireNoMaintenance(r, id); err != nil {
 		return err
 	}
 	if err := a.Store.ResetAgentToken(r.Context(), id); err != nil {
@@ -423,7 +432,10 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) error {
 	info := a.serverView(r, s, false).AgentUpdate
 	a.audit(r, "agent.update", s.Name, info)
 	out := map[string]any{"agent_update": info}
-	if info != nil && info.Supported && info.Outdated {
+	if info != nil && info.Supported && info.Outdated && a.agentMaintenanceNeedsRetry(r.Context(), id, info.Latest) {
+		out["queued"] = false
+		out["message"] = "此版本已有同步记录，请在「agent 维护」查看结果，需要时点击「升级 agent」重试"
+	} else if info != nil && info.Supported && info.Outdated {
 		out["queued"] = true
 		out["message"] = "agent 与控制端提供的版本不同，联网后会随心跳自动更新并重启，无需再次操作"
 	} else if info != nil && info.Supported && info.Latest == "" {
@@ -446,10 +458,12 @@ func (a *API) updateAllAgents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	var queued, latest, manual, unavailable int
+	var queued, latest, manual, unavailable, retry int
 	for _, s := range servers {
 		info := a.serverView(r, s, false).AgentUpdate
-		if info != nil && info.Supported && info.Outdated {
+		if info != nil && info.Supported && info.Outdated && a.agentMaintenanceNeedsRetry(r.Context(), s.ID, info.Latest) {
+			retry++
+		} else if info != nil && info.Supported && info.Outdated {
 			queued++
 		} else if info != nil && info.Supported && info.Latest == "" {
 			unavailable++
@@ -462,7 +476,8 @@ func (a *API) updateAllAgents(w http.ResponseWriter, r *http.Request) error {
 	a.audit(r, "agent.update_all", "", map[string]any{"queued": queued, "latest": latest, "manual": manual, "unavailable": unavailable})
 	httpx.OK(w, map[string]any{
 		"queued": queued, "latest": latest, "manual": manual, "unavailable": unavailable,
-		"message": fmt.Sprintf("检查结果：%d 台等待随心跳自动同步，%d 台与控制端版本一致，%d 台需手动更新一次，%d 台缺少对应架构的分发文件", queued, latest, manual, unavailable),
+		"retry":   retry,
+		"message": fmt.Sprintf("检查结果：%d 台等待随心跳自动同步，%d 台与控制端版本一致，%d 台需手动更新一次，%d 台缺少分发文件，%d 台请到维护记录查看并按需重试", queued, latest, manual, unavailable, retry),
 	})
 	return nil
 }

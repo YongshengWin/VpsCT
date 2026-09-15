@@ -15,6 +15,7 @@ import (
 
 	"ctlvps/internal/agent"
 	"ctlvps/internal/buildinfo"
+	"ctlvps/internal/maintenance"
 )
 
 func usage() {
@@ -30,6 +31,13 @@ usage:
 }
 
 func main() {
+	if handled, err := maintenance.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 	}

@@ -14,21 +14,23 @@
 
 **自动配置 HTTPS**：准备一个已解析到控制端服务器的域名，并确保 80、443 端口空闲且可从公网访问。
 
-首个版本为 [v0.1.0](https://github.com/YongshengWin/VpsCT/releases/tag/v0.1.0)。在控制端服务器上执行：
+**开启 Cloudflare 橙云时**：面板域名应使用 **完全（严格） / Full (strict)** 加密模式；“灵活 / Flexible”会与 Caddy 的 HTTPS 跳转形成循环，导致“重定向次数过多”。同一主域下还有其他站点时，建议只为面板子域添加配置规则。使用“仅 DNS”（灰云）时无需此设置，具体步骤见 [Cloudflare 设置与访问排查](docs/operations.md#26-cloudflare-设置与访问排查)。
+
+在控制端服务器上执行，安装最新正式版：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/download/v0.1.0/install.sh \
+curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
   | sudo bash -s -- --domain panel.example.com
 ```
 
-将 `panel.example.com` 替换为你的面板域名。安装命令固定到 `v0.1.0`；其他版本的安装命令见 [Releases](https://github.com/YongshengWin/VpsCT/releases)。
+将 `panel.example.com` 替换为你的面板域名。此命令始终获取最新正式版，无需修改版本号；需要安装指定版本时，使用对应 [Release](https://github.com/YongshengWin/VpsCT/releases) 页面的命令。
 
-安装器会下载并校验程序、配置系统服务和 HTTPS。服务器无需安装 Go、Node 或源码编译环境。已有 HTTPS 入口等部署方式见 [安装文档](docs/operations.md)。
+安装器会下载并校验程序、配置系统服务和 HTTPS。服务器无需安装 Go、Node 或源码编译环境。安装完成后，还需通过面板域名确认 HTTPS 可访问；本机服务启动成功不代表公网入口已就绪。已有 HTTPS 入口等部署方式见 [安装文档](docs/operations.md)。
 
 **使用已有 HTTPS 入口或其他端口**：先将入口转发到本机 `127.0.0.1:8080`，再执行以下命令。这里以 `8443` 为例；使用标准 HTTPS 端口时去掉 `:8443`。这种方式无需为安装器腾出 80、443 端口。
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/download/v0.1.0/install.sh \
+curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
   | sudo bash -s -- --site-url https://panel.example.com:8443 --no-proxy
 ```
 
@@ -52,6 +54,8 @@ sudo cat /opt/ctlvps/data/setup-token
 4. 返回面板，确认服务器显示「在线」。
 
 agent 主动连接控制端，因此 VPS 无需额外开放管理端口。服务器上运行的服务仍需按其配置开放相应端口。
+
+**控制端也可以接入为被管理的服务器**，在同一台机器安装 agent 即可。「公网地址」用于访问这台服务器提供的服务，应填写直连公网 IP 或仅 DNS（灰云）域名；面板域名可以开启橙云，但不能因此把它当作所有服务的连接地址。端口与排查步骤见 [同机部署与服务连接](docs/operations.md#44-同机部署与服务连接)。
 
 ## 2. 日常管理
 
@@ -85,27 +89,47 @@ agent 主动连接控制端，因此 VPS 无需额外开放管理端口。服务
 
 ### 4.1 更新面板
 
-对于使用安装器部署的控制端，在**控制端服务器**执行目标版本的更新命令。更新到 `v0.1.0`：
+对于使用安装器部署的控制端，在**控制端服务器**执行以下命令，更新到最新正式版：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/download/v0.1.0/install.sh \
+curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
   | sudo bash -s -- --update
 ```
 
 更新前会停服备份，并保留账户、配置和分享记录。其他部署方式及失败恢复步骤见 [运维文档](docs/operations.md)。
 
+网页升级入口：**设置 → 系统 → 控制端维护**。2026-09-15 更新的 `v0.1.0` 附件已包含此能力；此前安装的用户需先执行一次上面的终端更新命令，之后即可从网页操作。网页升级会在启动失败时自动恢复旧程序和升级前数据。
+
 ### 4.2 同步 agent 与配置
 
-支持自动更新的 agent 会随心跳同步控制端提供的版本。服务器详情中的两个按钮分别处理版本检查和配置应用：
+支持自动更新的 agent 会随心跳同步控制端提供的版本。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
 
 | 操作 | 用途 |
 |---|---|
 | 检查 agent 更新 | 查看该 VPS 的 agent 是否已与控制端提供的版本一致 |
+| 升级 agent | 在服务器详情的维护区域立即发起同步或重试，查看执行结果 |
 | 重新下发配置 | 让该 VPS 重新应用当前服务配置 |
 
 ### 4.3 备份数据
 
 控制端定时备份主数据库，默认保留 7 份。完整迁移或恢复前，应停止控制端并备份整个数据目录。数据库、备份和访问链接包含敏感信息，请妥善保管。
+
+### 4.4 卸载
+
+发行附件提供独立的 [uninstall.sh](uninstall.sh)，支持分别卸载控制端、agent，或卸载本机两端。脚本也适用于早期 v0.1.0 的默认 systemd 安装，无需先升级程序。
+
+在目标 VPS 下载卸载脚本后，先查看范围，再选择要卸载的一端：
+
+```bash
+curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/uninstall.sh -o uninstall.sh
+sudo bash uninstall.sh --controller --dry-run
+sudo bash uninstall.sh --controller --yes
+# 卸载 agent 改用 --agent；卸载本机两端用 --all。
+```
+
+默认保留配置和数据；加 `--purge` 会永久删除所选端的数据与默认目录内备份。agent 卸载会停止其部署的服务，控制端卸载会保留同机 agent。HTTPS 站点处理及完整范围见 [卸载文档](docs/operations.md#7-卸载与清理)。
+
+支持网页维护的版本也可在 **设置 → 系统** 卸载控制端，或在 **服务器详情 → agent 维护** 卸载所选 agent。需要管理员密码、已启用的两步验证和目标名称确认。控制端卸载后网站将不可用，最后结果可从服务器终端查看。
 
 ## 5. 文档与贡献
 

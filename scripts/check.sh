@@ -22,7 +22,8 @@ for arch in amd64 arm64; do
 done
 
 echo "==> installer validation"
-bash -n install.sh
+bash -n install.sh uninstall.sh
 bash scripts/test-installer.sh
+bash scripts/test-uninstaller.sh
 
 echo "OK"

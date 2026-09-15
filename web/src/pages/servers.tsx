@@ -1,4 +1,5 @@
 import * as React from "react";
+import { MaintenancePanel } from "@/components/maintenance";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle } from "lucide-react";
@@ -236,7 +237,7 @@ export function ServerDetailPage() {
             {s.agent_status === "pending" && <Button size="sm" onClick={() => enrollM.mutate()} loading={enrollM.isPending}><KeyRound className="h-4 w-4" /> 生成安装命令</Button>}
             <Button size="sm" variant="outline" onClick={() => setDeploy(true)}><Plus className="h-4 w-4" /> 部署节点</Button>
             <Button size="sm" variant="outline" onClick={() => setEdit(true)}><Pencil className="h-4 w-4" /> 编辑</Button>
-            {s.agent && (
+            {s.agent && !s.diagnostics?.maintenance && (
               <Button size="sm" variant="outline" onClick={() => checkAgentUpdate.mutate()} loading={checkAgentUpdate.isPending} title={s.agent_update?.supported ? "检查与控制端提供的 agent 版本是否一致；有差异时会随心跳自动更新" : "复制命令，在该 VPS 上执行一次以启用自动更新"}>
                 {s.agent_update?.supported ? <RefreshCw className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {s.agent_update?.supported ? "检查 agent 更新" : "复制 agent 更新命令"}
               </Button>
@@ -246,6 +247,8 @@ export function ServerDetailPage() {
           </>
         }
       />
+
+      <MaintenancePanel server={{ id: s.id, name: s.name }} />
 
       {s.agent?.apply_error && (
         <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
@@ -257,7 +260,7 @@ export function ServerDetailPage() {
       )}
       {s.agent_update?.outdated && (
         <div className="mb-4 rounded-md border border-sky-500/40 bg-sky-500/5 p-3 text-sm">
-          agent 与控制端提供的版本不同，联网后会随心跳自动更新并重启（心跳间隔约 30 秒）。点击「检查 agent 更新」可查看同步状态。
+          agent 与控制端提供的版本不同。新版的同步进度见上方维护记录，失败后可点击「升级 agent」重试；旧版随心跳自动同步。
         </div>
       )}
 

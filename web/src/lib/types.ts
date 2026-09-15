@@ -53,6 +53,7 @@ export interface CoreStatus {
 }
 
 export interface Diagnostics {
+  maintenance?: number;
   cores: CoreStatus[] | null;
   certs?: { domain: string; mode: string; not_after: string; issuer: string }[];
   clock_skew_ms: number;

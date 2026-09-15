@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save, Send, Plus, Trash2, Sun, Moon, Monitor } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
+import { MaintenancePanel } from "@/components/maintenance";
 import type { AuditEvent, BanRule, AccessLog } from "@/lib/types";
 import { fmtBytes, fmtDate, fmtDuration, cn } from "@/lib/utils";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Confirm, Dialog, Field, Input, PageHeader, Select, Spinner, Switch, Table, Tabs, Td, Th, Tr, Code } from "@/components/ui";
@@ -26,7 +27,7 @@ export function SettingsPage() {
         {tab === "cores" && <CoresTab />}
         {tab === "security" && <SecurityTab />}
         {tab === "audit" && <AuditTab />}
-        {tab === "system" && <SystemTab />}
+        {tab === "system" && <><MaintenancePanel /><SystemTab /></>}
       </div>
     </div>
   );

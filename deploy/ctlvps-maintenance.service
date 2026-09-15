@@ -1,0 +1,18 @@
+[Unit]
+Description=VpsCT restricted maintenance service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=ctlvps
+ExecStart=/opt/ctlvps/ctlvpsd maintenance-serve
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=ctlvps-maintenance
+RuntimeDirectoryMode=0750
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

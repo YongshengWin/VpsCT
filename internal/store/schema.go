@@ -308,4 +308,20 @@ ALTER TABLE subscriptions ADD COLUMN reset_day INTEGER NOT NULL DEFAULT 0;
 UPDATE servers SET quota_billing='dual' WHERE quota_billing='sum';
 UPDATE shares SET billing_mode='dual' WHERE billing_mode='sum';
 `,
+	// v6: durable, scoped agent maintenance commands and results.
+	`
+CREATE TABLE maintenance_jobs (
+  id TEXT PRIMARY KEY,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  request TEXT NOT NULL,
+  status TEXT NOT NULL,
+  result TEXT NOT NULL,
+  report_token TEXT NOT NULL,
+  report_hash TEXT NOT NULL,
+  agent_sha TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_maintenance_active ON maintenance_jobs(server_id) WHERE status IN ('queued','running');
+`,
 }

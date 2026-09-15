@@ -27,12 +27,12 @@ jobs:
       - name: Clean build and tests
         run: bash scripts/check.sh
       - name: Concurrent initialization and authentication
-        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip
+        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip ./internal/maintenance ./internal/agent
       - name: Shell and workflow checks
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck install.sh scripts/*.sh scripts/installer-test/*.sh internal/assets/install-agent.sh
+          shellcheck install.sh uninstall.sh scripts/*.sh scripts/installer-test/*.sh scripts/uninstaller-test/*.sh internal/assets/install-agent.sh
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: Check dependency notices
         run: |
@@ -46,6 +46,10 @@ jobs:
         run: make release VERSION=v0.0.0-ci REPOSITORY="$RELEASE_REPOSITORY"
       - name: Installer integration (isolated container)
         run: bash scripts/test-install-container.sh release/v0.0.0-ci
+      - name: Uninstaller integration (isolated systemd container)
+        run: bash scripts/test-uninstall-container.sh
+      - name: Web maintenance integration (isolated systemd container)
+        run: bash scripts/test-maintenance-container.sh release/v0.0.0-ci
       - name: Docker build and first-run smoke test
         run: bash scripts/test-docker.sh
   security:

@@ -37,6 +37,12 @@ if ! command -v systemctl >/dev/null 2>&1; then
   echo "systemd is required" >&2
   exit 1
 fi
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required; install util-linux first" >&2
+  exit 1
+fi
+exec 9>/run/lock/ctlvps-install.lock
+flock -n 9 || { echo "another installation or maintenance task is running" >&2; exit 1; }
 
 ARCH="$(uname -m)"
 case "$ARCH" in

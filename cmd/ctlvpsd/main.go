@@ -24,6 +24,7 @@ import (
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/geoip"
+	"ctlvps/internal/maintenance"
 	"ctlvps/internal/notify"
 	"ctlvps/internal/scheduler"
 	"ctlvps/internal/share"
@@ -34,6 +35,13 @@ import (
 )
 
 func main() {
+	if handled, err := maintenance.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		fmt.Println("ctlvpsd", buildinfo.String())
 		return
