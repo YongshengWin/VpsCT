@@ -1,0 +1,311 @@
+package store
+
+// migrations are applied in order; each entry is one schema version.
+var migrations = []string{
+	// v1: core schema
+	`
+CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
+
+CREATE TABLE users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'user',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+  id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  ip TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_sessions_user ON sessions(user_id);
+
+CREATE TABLE servers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  region TEXT NOT NULL DEFAULT '',
+  public_host TEXT NOT NULL DEFAULT '',
+  tags TEXT NOT NULL DEFAULT '[]',
+  notes TEXT NOT NULL DEFAULT '',
+  quota_bytes INTEGER NOT NULL DEFAULT 0,
+  quota_reset_day INTEGER NOT NULL DEFAULT 0,
+  quota_billing TEXT NOT NULL DEFAULT 'dual',
+  core_mode TEXT NOT NULL DEFAULT 'stable',
+  ipv4_only INTEGER NOT NULL DEFAULT 0,
+  cert_mode TEXT NOT NULL DEFAULT 'self_signed',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE agents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL UNIQUE REFERENCES servers(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL DEFAULT '',
+  enroll_token_hash TEXT NOT NULL DEFAULT '',
+  enroll_expires_at TEXT,
+  version TEXT NOT NULL DEFAULT '',
+  last_seen_at TEXT,
+  applied_revision INTEGER NOT NULL DEFAULT 0,
+  applied_hash TEXT NOT NULL DEFAULT '',
+  apply_error TEXT NOT NULL DEFAULT '',
+  public_ipv4 TEXT NOT NULL DEFAULT '',
+  public_ipv6 TEXT NOT NULL DEFAULT '',
+  metrics TEXT NOT NULL DEFAULT '{}',
+  diagnostics TEXT NOT NULL DEFAULT '{}',
+  connlog_seq INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE external_subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT '',
+  sync_interval_min INTEGER NOT NULL DEFAULT 360,
+  last_sync_at TEXT,
+  last_error TEXT NOT NULL DEFAULT '',
+  upload INTEGER NOT NULL DEFAULT 0,
+  download INTEGER NOT NULL DEFAULT 0,
+  total INTEGER NOT NULL DEFAULT 0,
+  expire_at TEXT,
+  node_count INTEGER NOT NULL DEFAULT 0,
+  raw_content TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  owner_user_id INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  targets TEXT NOT NULL DEFAULT '[]',
+  extra_node_ids TEXT NOT NULL DEFAULT '[]',
+  quota_bytes INTEGER NOT NULL DEFAULT 0,
+  billing_mode TEXT NOT NULL DEFAULT 'dual',
+  reset_day INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  template_id INTEGER,
+  connlog_enabled INTEGER NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  subscription_id INTEGER,
+  period_start TEXT NOT NULL,
+  used_upload INTEGER NOT NULL DEFAULT 0,
+  used_download INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE nodes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  protocol TEXT NOT NULL,
+  server TEXT NOT NULL DEFAULT '',
+  port INTEGER NOT NULL DEFAULT 0,
+  params TEXT NOT NULL DEFAULT '{}',
+  server_params TEXT NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL DEFAULT 'manual',
+  server_id INTEGER REFERENCES servers(id) ON DELETE SET NULL,
+  listen_port INTEGER NOT NULL DEFAULT 0,
+  core TEXT NOT NULL DEFAULT '',
+  share_id INTEGER REFERENCES shares(id) ON DELETE SET NULL,
+  external_sub_id INTEGER REFERENCES external_subscriptions(id) ON DELETE CASCADE,
+  chain_front_node_id INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  owner_user_id INTEGER NOT NULL DEFAULT 0,
+  tags TEXT NOT NULL DEFAULT '[]',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_nodes_server ON nodes(server_id);
+CREATE INDEX idx_nodes_external ON nodes(external_sub_id);
+CREATE INDEX idx_nodes_share ON nodes(share_id);
+
+CREATE TABLE rule_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'mihomo',
+  description TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  variables TEXT NOT NULL DEFAULT '{}',
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE proxy_group_presets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  groups_json TEXT NOT NULL DEFAULT '[]',
+  rules_json TEXT NOT NULL DEFAULT '[]',
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE subscriptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  token TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL UNIQUE,
+  token_hint TEXT NOT NULL DEFAULT '',
+  short_code TEXT NOT NULL DEFAULT '',
+  template_id INTEGER REFERENCES rule_templates(id) ON DELETE SET NULL,
+  default_format TEXT NOT NULL DEFAULT 'mihomo',
+  proxy_groups TEXT NOT NULL DEFAULT '[]',
+  chains TEXT NOT NULL DEFAULT '[]',
+  rules TEXT NOT NULL DEFAULT '[]',
+  rule_providers TEXT NOT NULL DEFAULT '{}',
+  node_selection TEXT NOT NULL DEFAULT '{}',
+  uploaded_content TEXT NOT NULL DEFAULT '',
+  source_external_id INTEGER REFERENCES external_subscriptions(id) ON DELETE SET NULL,
+  expire_at TEXT,
+  traffic_limit_bytes INTEGER NOT NULL DEFAULT 0,
+  userinfo_header INTEGER NOT NULL DEFAULT 1,
+  show_info_nodes INTEGER NOT NULL DEFAULT 0,
+  owner_user_id INTEGER NOT NULL DEFAULT 0,
+  allowed_user_ids TEXT NOT NULL DEFAULT '[]',
+  share_id INTEGER REFERENCES shares(id) ON DELETE CASCADE,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  access_count INTEGER NOT NULL DEFAULT 0,
+  last_access_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX idx_subscriptions_short ON subscriptions(short_code) WHERE short_code <> '';
+
+CREATE TABLE traffic_samples (
+  server_id INTEGER NOT NULL,
+  node_id INTEGER,
+  ts TEXT NOT NULL,
+  rx_bytes INTEGER NOT NULL,
+  tx_bytes INTEGER NOT NULL
+);
+CREATE INDEX idx_samples_ts ON traffic_samples(ts);
+CREATE INDEX idx_samples_subject ON traffic_samples(server_id, node_id, ts);
+
+CREATE TABLE counter_state (
+  server_id INTEGER NOT NULL,
+  counter_key TEXT NOT NULL,
+  epoch TEXT NOT NULL DEFAULT '',
+  last_rx INTEGER NOT NULL DEFAULT 0,
+  last_tx INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (server_id, counter_key)
+);
+
+CREATE TABLE traffic_hourly (
+  bucket TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  up INTEGER NOT NULL DEFAULT 0,
+  down INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, subject, subject_id)
+);
+
+CREATE TABLE traffic_daily (
+  bucket TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  subject_id INTEGER NOT NULL,
+  up INTEGER NOT NULL DEFAULT 0,
+  down INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket, subject, subject_id)
+);
+
+CREATE TABLE desired_states (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  payload TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  applied_at TEXT,
+  UNIQUE (server_id, revision)
+);
+
+CREATE TABLE audit_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  user_id INTEGER,
+  username TEXT NOT NULL DEFAULT '',
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}',
+  ip TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_audit_ts ON audit_log(ts);
+
+CREATE TABLE access_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  subscription_id INTEGER NOT NULL,
+  ts TEXT NOT NULL,
+  ip TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  format TEXT NOT NULL DEFAULT '',
+  status INTEGER NOT NULL DEFAULT 200
+);
+CREATE INDEX idx_access_sub ON access_log(subscription_id, ts);
+CREATE INDEX idx_access_ts ON access_log(ts);
+
+CREATE TABLE ban_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  value TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE share_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  share_id INTEGER NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX idx_share_events ON share_events(share_id, ts);
+`,
+	// v2: user avatar, TOTP two-factor auth, last login
+	`
+ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN totp_secret TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN recovery_codes TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE users ADD COLUMN last_login_at TEXT;
+`,
+	// v3: display nickname (login still uses username)
+	`
+ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT '';
+`,
+	// v4: monthly traffic reset for generated/imported subscriptions
+	`
+ALTER TABLE subscriptions ADD COLUMN reset_day INTEGER NOT NULL DEFAULT 0;
+`,
+	// v5: default traffic accounting is two-way (inbound+outbound)
+	`
+UPDATE servers SET quota_billing='dual' WHERE quota_billing='sum';
+UPDATE shares SET billing_mode='dual' WHERE billing_mode='sum';
+`,
+}

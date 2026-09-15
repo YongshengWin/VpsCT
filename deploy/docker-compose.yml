@@ -1,0 +1,30 @@
+services:
+  ctlvpsd:
+    image: ctlvps:latest
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: ctlvpsd
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # put Caddy/Nginx/Cloudflare in front for TLS
+    environment:
+      CTLVPS_SITE_URL: "https://panel.example.com"   # used in subscription links
+      CTLVPS_TRUST_PROXY: "true"
+      CTLVPS_LOG_LEVEL: info
+      TZ: Asia/Shanghai
+    volumes:
+      - ctlvps-data:/data
+    # keep container logs bounded (json-file default is unbounded)
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  ctlvps-data:

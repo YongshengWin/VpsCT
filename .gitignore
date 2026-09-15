@@ -1,0 +1,32 @@
+# build outputs
+/bin/
+/dist/
+/web/dist/*
+!/web/dist/.gitkeep
+/web/node_modules/
+*.tsbuildinfo
+/release/
+
+# runtime data
+/data/
+/deploy/data/
+/backups/
+setup-token
+*.key
+*.pem
+*.db
+*.db-wal
+*.db-shm
+
+# local env / editor
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+.idea/
+.vscode/
+
+# Python build / validation cache
+__pycache__/
+*.pyc

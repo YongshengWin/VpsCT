@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f1218" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f4f5f7" media="(prefers-color-scheme: light)" />
+    <style>
+      /* pre-paint page background so there is no white flash before the bundle loads */
+      html { background: #f4f5f7; }
+      html.dark { background: #0f1218; }
+    </style>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>VpsCT</title>
+    <script>
+      (function () {
+        var t = localStorage.getItem("ctlvps-theme");
+        var dark = t === "dark" || (t !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        if (dark) document.documentElement.classList.add("dark");
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

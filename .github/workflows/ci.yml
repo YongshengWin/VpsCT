@@ -1,0 +1,71 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Clean build and tests
+        run: bash scripts/check.sh
+      - name: Concurrent initialization and authentication
+        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip
+      - name: Shell and workflow checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck install.sh scripts/*.sh scripts/installer-test/*.sh internal/assets/install-agent.sh
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Check dependency notices
+        run: |
+          go mod download all
+          python3 scripts/third-party.py
+          git diff --exit-code -- THIRD_PARTY_NOTICES.md third_party
+          test -z "$(git ls-files --others --exclude-standard third_party)"
+      - name: Build release fixture
+        env:
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: make release VERSION=v0.0.0-ci REPOSITORY="$RELEASE_REPOSITORY"
+      - name: Installer integration (isolated container)
+        run: bash scripts/test-install-container.sh release/v0.0.0-ci
+      - name: Docker build and first-run smoke test
+        run: bash scripts/test-docker.sh
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Secret scan (redacted)
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
+      - name: Go vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Frontend dependency audit
+        working-directory: web
+        run: npm audit --audit-level=high

@@ -1,0 +1,17 @@
+name: 功能建议
+description: 描述你希望解决的问题
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 使用场景与问题
+      description: 现在在哪一步受阻，影响什么操作？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望的行为
+      description: 可以描述一个具体例子，也可以补充已经尝试过的办法。
+    validations:
+      required: true

@@ -1,0 +1,30 @@
+[Unit]
+Description=ctlvps control plane (ctlvpsd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ctlvps
+Group=ctlvps
+WorkingDirectory=/opt/ctlvps
+EnvironmentFile=/etc/ctlvps/ctlvpsd.env
+ExecStart=/opt/ctlvps/ctlvpsd
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+MemoryMax=512M
+Environment=GOMEMLIMIT=400MiB
+
+# hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ctlvps/data
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,35 @@
+name: 问题报告
+description: 报告可以复现的功能问题
+body:
+  - type: markdown
+    attributes:
+      value: '请先脱敏。不要粘贴节点密码、订阅链接、令牌、Cookie、真实 IP 或个人域名。安全漏洞请使用 Security 页面的私密报告。'
+  - type: input
+    id: version
+    attributes:
+      label: 版本与安装方式
+      description: 控制端、agent 版本；安装脚本 / Docker / 手动构建
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: Linux 发行版、CPU 架构、浏览器或订阅客户端版本
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 使用虚构数据说明操作步骤
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 已脱敏的日志或截图

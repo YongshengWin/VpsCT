@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+  Design tokens. Light theme follows a "fintech portal" look: cool light-gray
+  page, pure white cards with soft shadows, a single warm orange accent and a
+  handful of pastel tints for hero / feature surfaces.
+*/
+@layer base {
+  :root {
+    --background: 220 14% 96%;
+    --foreground: 222 16% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 16% 12%;
+    --primary: 22 89% 54%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 12% 94%;
+    --secondary-foreground: 222 14% 22%;
+    --muted: 220 12% 95%;
+    --muted-foreground: 220 9% 50%;
+    --accent: 220 14% 93%;
+    --accent-foreground: 222 16% 12%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 22 89% 54%;
+
+    --tint-peach: 24 55% 90%;
+    --tint-lavender: 250 60% 94%;
+    --tint-rose: 345 65% 94%;
+    --tint-mint: 152 40% 91%;
+    --tint-sky: 208 75% 93%;
+    --tint-sand: 40 45% 92%;
+  }
+  .dark {
+    --background: 222 18% 7%;
+    --foreground: 210 20% 96%;
+    --card: 222 15% 11%;
+    --card-foreground: 210 20% 96%;
+    --primary: 22 92% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 12% 17%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 222 12% 15%;
+    --muted-foreground: 220 10% 62%;
+    --accent: 222 12% 18%;
+    --accent-foreground: 210 20% 96%;
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 222 12% 17%;
+    --input: 222 12% 20%;
+    --ring: 22 92% 58%;
+
+    --tint-peach: 24 28% 16%;
+    --tint-lavender: 250 24% 18%;
+    --tint-rose: 345 24% 17%;
+    --tint-mint: 152 20% 14%;
+    --tint-sky: 208 30% 16%;
+    --tint-sand: 40 22% 15%;
+  }
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+    font-feature-settings: "tnum";
+  }
+  h1, h2, h3 {
+    @apply tracking-tight;
+  }
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-muted-foreground/25;
+  }
+  /* recharts default focus ring looks out of place */
+  .recharts-wrapper:focus, .recharts-surface:focus {
+    outline: none;
+  }
+}
+
+@layer utilities {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}

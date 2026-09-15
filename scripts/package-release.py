@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Build self-contained release attachments from make release's binaries."""
+import argparse
+import hashlib
+import pathlib
+import re
+import shutil
+import tarfile
+import tempfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+ROOT_DOCUMENTS = (
+    'README.md', 'AGENTS.md', 'CHANGELOG.md', 'CONTRIBUTING.md',
+    'CODE_OF_CONDUCT.md', 'SECURITY.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+)
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--repository', required=True)
+    args = parser.parse_args()
+    if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', args.version):
+        parser.error('version must be vX.Y.Z, optionally with a prerelease suffix')
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
+        parser.error('repository must be OWNER/REPO')
+    required = [*ROOT_DOCUMENTS, 'third_party/manifest.json', 'docs/operations.md']
+    required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64', 'arm64')]
+    for name in required:
+        if not (ROOT / name).is_file():
+            parser.error(f'missing release input: {name}')
+    out = ROOT / 'release' / args.version
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    installer = (ROOT / 'install.sh').read_text().replace("REPOSITORY='__REPOSITORY__'", f"REPOSITORY='{args.repository}'").replace("VERSION='__VERSION__'", f"VERSION='{args.version}'")
+    (out / 'install.sh').write_text(installer)
+    (out / 'install.sh').chmod(0o755)
+    for arch in ('amd64', 'arm64'):
+        with tempfile.TemporaryDirectory() as tmp:
+            package = pathlib.Path(tmp)
+            shutil.copy2(ROOT / f'bin/ctlvpsd-linux-{arch}', package / 'ctlvpsd')
+            (package / 'agents').mkdir()
+            for agent_arch in ('amd64', 'arm64'):
+                name = f'ctlvps-agent-linux-{agent_arch}'
+                shutil.copy2(ROOT / 'bin' / name, package / 'agents' / name)
+            shutil.copy2(ROOT / 'deploy/ctlvpsd.service', package / 'ctlvpsd.service')
+            shutil.copy2(ROOT / 'deploy/ctlvpsd.env.example', package / 'ctlvpsd.env.example')
+            for name in ROOT_DOCUMENTS:
+                shutil.copy2(ROOT / name, package / name)
+            shutil.copytree(ROOT / 'third_party', package / 'third_party')
+            shutil.copytree(ROOT / 'docs', package / 'docs')
+            (package / 'VERSION').write_text(args.version + '\n')
+            (package / 'REPOSITORY').write_text(args.repository + '\n')
+            def metadata(info):
+                info.uid = info.gid = 0
+                info.uname = info.gname = 'root'
+                info.mtime = 0
+                info.mode = 0o755 if info.isdir() or info.name == 'ctlvpsd' or info.name.startswith('agents/') else 0o644
+                return info
+            with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
+                for path in sorted(package.iterdir()):
+                    archive.add(path, arcname=path.name, filter=metadata)
+    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+        shutil.copy2(ROOT / name, out / name)
+    with (out / 'SHA256SUMS').open('w') as sums:
+        for path in sorted(out.iterdir()):
+            if path.name != 'SHA256SUMS':
+                sums.write(f'{hashlib.file_digest(path.open("rb"), "sha256").hexdigest()}  {path.name}\n')
+    print(f'Release attachments: {out.relative_to(ROOT)}')
+
+if __name__ == '__main__':
+    main()

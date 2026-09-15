@@ -1,0 +1,1112 @@
+[
+  {
+    "ecosystem": "go-runtime",
+    "name": "Go standard library and runtime",
+    "version": "go1.26.8",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "third_party/go-runtime/go1.26.8/LICENSE",
+      "third_party/go-runtime/go1.26.8/PATENTS"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/dustin/go-humanize",
+    "version": "v1.0.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_dustin_go-humanize_v1.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/google/pprof",
+    "version": "v0.0.0-20260802141513-ef3492d7dac3",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_google_pprof_v0.0.0-20260802141513-ef3492d7dac3/LICENSE",
+      "third_party/go/github.com_google_pprof_v0.0.0-20260802141513-ef3492d7dac3/third_party/svgpan/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/google/uuid",
+    "version": "v1.6.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_google_uuid_v1.6.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/hashicorp/golang-lru/v2",
+    "version": "v2.0.7",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_hashicorp_golang-lru_v2_v2.0.7/LICENSE",
+      "third_party/go/github.com_hashicorp_golang-lru_v2_v2.0.7/simplelru/LICENSE_list"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/lionsoul2014/ip2region/binding/golang",
+    "version": "v0.0.0-20260901011515-c1a1fc7d5941",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_lionsoul2014_ip2region_binding_golang_v0.0.0-20260901011515-c1a1fc7d5941/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/mattn/go-isatty",
+    "version": "v0.0.24",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_mattn_go-isatty_v0.0.24/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/mitchellh/go-homedir",
+    "version": "v1.1.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_mitchellh_go-homedir_v1.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/ncruces/go-strftime",
+    "version": "v1.0.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_ncruces_go-strftime_v1.0.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "github.com/remyoudompheng/bigfft",
+    "version": "v0.0.0-20230129092748-24d4a6f8daec",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/github.com_remyoudompheng_bigfft_v0.0.0-20230129092748-24d4a6f8daec/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/crypto",
+    "version": "v0.57.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_crypto_v0.57.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/mod",
+    "version": "v0.41.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_mod_v0.41.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/net",
+    "version": "v0.58.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_net_v0.58.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/sync",
+    "version": "v0.23.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_sync_v0.23.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/sys",
+    "version": "v0.48.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_sys_v0.48.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/term",
+    "version": "v0.46.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_term_v0.46.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/text",
+    "version": "v0.42.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_text_v0.42.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "golang.org/x/tools",
+    "version": "v0.49.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/golang.org_x_tools_v0.49.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "gopkg.in/check.v1",
+    "version": "v0.0.0-20161208181325-20d25e280405",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/gopkg.in_check.v1_v0.0.0-20161208181325-20d25e280405/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "gopkg.in/yaml.v3",
+    "version": "v3.0.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/gopkg.in_yaml.v3_v3.0.1/LICENSE",
+      "third_party/go/gopkg.in_yaml.v3_v3.0.1/NOTICE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/cc/v4",
+    "version": "v4.29.2",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_cc_v4_v4.29.2/LICENSE",
+      "third_party/go/modernc.org_cc_v4_v4.29.2/testdata/jhjourdan/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/ccgo/v4",
+    "version": "v4.35.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_ccgo_v4_v4.35.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/fileutil",
+    "version": "v1.4.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_fileutil_v1.4.0/LICENSE",
+      "third_party/go/modernc.org_fileutil_v1.4.0/falloc/LICENSE",
+      "third_party/go/modernc.org_fileutil_v1.4.0/hdb/LICENSE",
+      "third_party/go/modernc.org_fileutil_v1.4.0/storage/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/gc/v2",
+    "version": "v2.6.5",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_gc_v2_v2.6.5/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/gc/v3",
+    "version": "v3.1.5",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_gc_v3_v3.1.5/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/goabi0",
+    "version": "v0.2.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_goabi0_v0.2.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/libc",
+    "version": "v1.75.6",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_libc_v1.75.6/LICENSE",
+      "third_party/go/modernc.org_libc_v1.75.6/LICENSE-3RD-PARTY.md",
+      "third_party/go/modernc.org_libc_v1.75.6/testdata/nsz.repo.hu/libc-test/COPYRIGHT",
+      "third_party/go/modernc.org_libc_v1.75.6/testdata/nsz.repo.hu/libc-test/src/math/crlibm/COPYING"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/mathutil",
+    "version": "v1.7.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_mathutil_v1.7.1/LICENSE",
+      "third_party/go/modernc.org_mathutil_v1.7.1/mersenne/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/memory",
+    "version": "v1.12.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_memory_v1.12.1/LICENSE",
+      "third_party/go/modernc.org_memory_v1.12.1/LICENSE-GO",
+      "third_party/go/modernc.org_memory_v1.12.1/LICENSE-LOGO",
+      "third_party/go/modernc.org_memory_v1.12.1/LICENSE-MMAP-GO"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/opt",
+    "version": "v0.2.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_opt_v0.2.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/sortutil",
+    "version": "v1.2.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_sortutil_v1.2.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/sqlite",
+    "version": "v1.58.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_sqlite_v1.58.0/LICENSE",
+      "third_party/go/modernc.org_sqlite_v1.58.0/LICENSE-SQLITE",
+      "third_party/go/modernc.org_sqlite_v1.58.0/LICENSE-SQLITE_VEC"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/strutil",
+    "version": "v1.2.1",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_strutil_v1.2.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "go",
+    "name": "modernc.org/token",
+    "version": "v1.1.0",
+    "license": "See license text",
+    "notices": [
+      "third_party/go/modernc.org_token_v1.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@babel/runtime",
+    "version": "7.29.7",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_babel_runtime_7.29.7/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@dnd-kit/accessibility",
+    "version": "3.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_dnd-kit_accessibility_3.1.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@dnd-kit/core",
+    "version": "6.3.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_dnd-kit_core_6.3.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@dnd-kit/sortable",
+    "version": "8.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_dnd-kit_sortable_8.0.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@dnd-kit/utilities",
+    "version": "3.2.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_dnd-kit_utilities_3.2.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@tanstack/query-core",
+    "version": "5.102.8",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_tanstack_query-core_5.102.8/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@tanstack/react-query",
+    "version": "5.102.8",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_tanstack_react-query_5.102.8/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-array",
+    "version": "3.2.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-array_3.2.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-color",
+    "version": "3.1.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-color_3.1.3/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-ease",
+    "version": "3.0.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-ease_3.0.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-interpolate",
+    "version": "3.0.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-interpolate_3.0.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-path",
+    "version": "3.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-path_3.1.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-scale",
+    "version": "4.0.9",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-scale_4.0.9/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-shape",
+    "version": "3.2.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-shape_3.2.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-time",
+    "version": "3.0.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-time_3.0.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "@types/d3-timer",
+    "version": "3.0.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/_types_d3-timer_3.0.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "ansi-regex",
+    "version": "5.0.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/ansi-regex_5.0.1/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "ansi-styles",
+    "version": "4.3.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/ansi-styles_4.3.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "camelcase",
+    "version": "5.3.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/camelcase_5.3.1/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "cliui",
+    "version": "6.0.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/cliui_6.0.0/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "clsx",
+    "version": "2.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/clsx_2.1.1/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "color-convert",
+    "version": "2.0.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/color-convert_2.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "color-name",
+    "version": "1.1.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/color-name_1.1.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "cookie",
+    "version": "1.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/cookie_1.1.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "csstype",
+    "version": "3.2.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/csstype_3.2.3/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-array",
+    "version": "3.2.4",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-array_3.2.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-color",
+    "version": "3.1.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-color_3.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-ease",
+    "version": "3.0.1",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "third_party/npm/d3-ease_3.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-format",
+    "version": "3.1.2",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-format_3.1.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-interpolate",
+    "version": "3.0.1",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-interpolate_3.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-path",
+    "version": "3.1.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-path_3.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-scale",
+    "version": "4.0.2",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-scale_4.0.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-shape",
+    "version": "3.2.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-shape_3.2.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-time",
+    "version": "3.1.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-time_3.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-time-format",
+    "version": "4.1.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-time-format_4.1.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "d3-timer",
+    "version": "3.0.1",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/d3-timer_3.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "decamelize",
+    "version": "1.2.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/decamelize_1.2.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "decimal.js-light",
+    "version": "2.5.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/decimal.js-light_2.5.1/LICENCE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "dijkstrajs",
+    "version": "1.0.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/dijkstrajs_1.0.3/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "dom-helpers",
+    "version": "5.2.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/dom-helpers_5.2.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "emoji-regex",
+    "version": "8.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/emoji-regex_8.0.0/LICENSE-MIT.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "eventemitter3",
+    "version": "4.0.7",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/eventemitter3_4.0.7/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "fast-equals",
+    "version": "5.4.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/fast-equals_5.4.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "find-up",
+    "version": "4.1.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/find-up_4.1.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "get-caller-file",
+    "version": "2.0.5",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/get-caller-file_2.0.5/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "internmap",
+    "version": "2.0.3",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/internmap_2.0.3/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "is-fullwidth-code-point",
+    "version": "3.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/is-fullwidth-code-point_3.0.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "js-tokens",
+    "version": "4.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/js-tokens_4.0.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "locate-path",
+    "version": "5.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/locate-path_5.0.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "lodash",
+    "version": "4.18.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/lodash_4.18.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "loose-envify",
+    "version": "1.4.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/loose-envify_1.4.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "lucide-react",
+    "version": "0.447.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/lucide-react_0.447.0/LICENSE",
+      "third_party/npm/lucide-react_0.447.0/dist/esm/icons/copyright.js.map"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "object-assign",
+    "version": "4.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/object-assign_4.1.1/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "p-limit",
+    "version": "2.3.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/p-limit_2.3.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "p-locate",
+    "version": "4.1.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/p-locate_4.1.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "p-try",
+    "version": "2.2.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/p-try_2.2.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "path-exists",
+    "version": "4.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/path-exists_4.0.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "pngjs",
+    "version": "5.0.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/pngjs_5.0.0/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "prop-types",
+    "version": "15.8.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/prop-types_15.8.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-is",
+    "version": "16.13.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-is_16.13.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "qrcode",
+    "version": "1.5.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/qrcode_1.5.4/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react",
+    "version": "18.3.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react_18.3.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-dom",
+    "version": "18.3.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-dom_18.3.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-is",
+    "version": "18.3.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-is_18.3.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-router",
+    "version": "7.18.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-router_7.18.3/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-router-dom",
+    "version": "7.18.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-router-dom_7.18.3/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-smooth",
+    "version": "4.0.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/react-smooth_4.0.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "react-transition-group",
+    "version": "4.4.5",
+    "license": "BSD-3-Clause",
+    "notices": [
+      "third_party/npm/react-transition-group_4.4.5/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "recharts",
+    "version": "2.15.4",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/recharts_2.15.4/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "recharts-scale",
+    "version": "0.4.5",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/recharts-scale_0.4.5/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "require-directory",
+    "version": "2.1.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/require-directory_2.1.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "require-main-filename",
+    "version": "2.0.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/require-main-filename_2.0.0/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "scheduler",
+    "version": "0.23.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/scheduler_0.23.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "set-blocking",
+    "version": "2.0.0",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/set-blocking_2.0.0/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "set-cookie-parser",
+    "version": "2.7.2",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/set-cookie-parser_2.7.2/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "string-width",
+    "version": "4.2.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/string-width_4.2.3/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "strip-ansi",
+    "version": "6.0.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/strip-ansi_6.0.1/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "tailwind-merge",
+    "version": "2.6.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/tailwind-merge_2.6.1/LICENSE.md"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "tiny-invariant",
+    "version": "1.3.3",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/tiny-invariant_1.3.3/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "tslib",
+    "version": "2.8.1",
+    "license": "0BSD",
+    "notices": [
+      "third_party/npm/tslib_2.8.1/LICENSE.txt"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "victory-vendor",
+    "version": "36.9.2",
+    "license": "MIT AND ISC",
+    "notices": [
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-array/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-color/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-ease/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-format/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-interpolate/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-path/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-scale/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-shape/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-time/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-time-format/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-timer/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-voronoi/LICENSE",
+      "third_party/npm/victory-vendor_36.9.2/lib-vendor/internmap/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "which-module",
+    "version": "2.0.1",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/which-module_2.0.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "wrap-ansi",
+    "version": "6.2.0",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/wrap-ansi_6.2.0/license"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "y18n",
+    "version": "4.0.3",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/y18n_4.0.3/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "yargs",
+    "version": "15.4.1",
+    "license": "MIT",
+    "notices": [
+      "third_party/npm/yargs_15.4.1/LICENSE"
+    ]
+  },
+  {
+    "ecosystem": "npm",
+    "name": "yargs-parser",
+    "version": "18.1.3",
+    "license": "ISC",
+    "notices": [
+      "third_party/npm/yargs-parser_18.1.3/LICENSE.txt"
+    ]
+  }
+]
