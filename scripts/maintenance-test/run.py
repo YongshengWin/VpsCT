@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import platform
+import re
 import shutil
 import socket
 import ssl
@@ -105,6 +106,14 @@ run('useradd', '--system', '--user-group', '--home-dir', '/opt/ctlvps', '--no-cr
 (root / 'releases/initial').mkdir(parents=True)
 with tarfile.open(asset) as archive:
     archive.extractall(root / 'releases/initial', filter='data')
+# Derive newer targets from the supplied release, including real release tags.
+initial_version = (root / 'releases/initial/VERSION').read_text().strip()
+match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9.-]+)?', initial_version)
+assert match, initial_version
+major, minor, patch = map(int, match.groups())
+update_version, broken_version, corrupt_version = (
+    f'v{major}.{minor}.{patch + offset}-maintenance-test' for offset in (1, 2, 3)
+)
 for name, target in [('current', 'releases/initial'), ('ctlvpsd', 'current/ctlvpsd'), ('agents', 'current/agents')]:
     (root / name).symlink_to(target)
 (root / 'REPOSITORY').write_text('example/VpsCT\n')
@@ -144,12 +153,12 @@ if urls:
 os.execv('/usr/bin/curl',['/usr/bin/curl']+args)
 ''')
 P('/usr/local/bin/curl').chmod(0o755)
-fixture_release('v0.0.1-maintenance-test')
-fixture_release('v0.0.2-maintenance-test', broken=True)
-fixture_release('v0.0.3-maintenance-test', corrupt=True)
+fixture_release(update_version)
+fixture_release(broken_version, broken=True)
+fixture_release(corrupt_version, corrupt=True)
 
 before = (root / 'current').resolve()
-job = controller_job('update', 'v0.0.1-maintenance-test')
+job = controller_job('update', update_version)
 root_status(job, 'succeeded')
 assert (root / 'current').resolve() != before
 assert request('/api/v1/auth/setup')['needs_setup'] is False
@@ -159,7 +168,7 @@ assert any(j['id'] == job and j['status'] == 'succeeded' for j in request('/api/
 print('PASS web update survives API/helper restart and retains administrator', flush=True)
 
 previous = (root / 'current').resolve()
-job = controller_job('update', 'v0.0.2-maintenance-test')
+job = controller_job('update', broken_version)
 root_status(job, 'rolled_back')
 assert (root / 'current').resolve() == previous
 assert not (root / 'data/failed-upgrade-marker').exists()
@@ -167,7 +176,7 @@ assert request('/api/v1/auth/setup')['needs_setup'] is False
 print('PASS failed startup restores previous binary AND previous data', flush=True)
 
 pid = run('systemctl', 'show', 'ctlvpsd', '-p', 'MainPID', '--value').stdout
-job = controller_job('update', 'v0.0.3-maintenance-test')
+job = controller_job('update', corrupt_version)
 root_status(job, 'failed')
 assert run('systemctl', 'show', 'ctlvpsd', '-p', 'MainPID', '--value').stdout == pid
 print('PASS checksum failure leaves running controller untouched', flush=True)
