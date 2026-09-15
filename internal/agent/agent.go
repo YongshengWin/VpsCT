@@ -51,8 +51,8 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 	sd := core.NewSystemd()
 	a := &Agent{
 		StateDir: stateDir, State: st, Logger: logger, Version: version,
-		Client:  NewClient(st.ServerURL, st.AgentToken, version),
-		Paths:   paths, Systemd: sd, NFT: nft.New(),
+		Client: NewClient(st.ServerURL, st.AgentToken, version),
+		Paths:  paths, Systemd: sd, NFT: nft.New(),
 		Metrics: NewMetricsCollector(),
 		bootID:  BootID(),
 	}
@@ -135,7 +135,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.connlogLoop(ctx)
 
 	// always apply once on start so a self-update can rewrite units
-	a.converge(ctx, true)
+	if a.maintenanceAction() != "uninstall" {
+		a.converge(ctx, true)
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	backoff := time.Second
@@ -243,6 +245,12 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		a.State.PollIntervalSec = resp.PollIntervalSec
 		_ = a.State.Save(a.StateDir)
 	}
+	if resp.Maintenance != nil {
+		return a.maintain(ctx, *resp.Maintenance)
+	}
+	if a.maintenanceAction() != "" {
+		return nil
+	}
 	if resp.AgentUpdate != nil && resp.AgentUpdate.SHA256 != "" && !strings.EqualFold(resp.AgentUpdate.SHA256, a.selfSHA) {
 		a.Logger.Info("self-update available", "sha", resp.AgentUpdate.SHA256[:min(12, len(resp.AgentUpdate.SHA256))])
 		if err := applySelfUpdate(ctx, a.State.ServerURL, *resp.AgentUpdate); err != nil {
@@ -277,6 +285,9 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		ClockSkewMs: skew, BBR: h.BBR, CongestionCtl: h.CongestionCtl, IPv6Reachable: h.IPv6Reachable, IPv4Reachable: h.IPv4Reachable,
 		OOMEvents: h.OOMEvents, Nftables: h.Nftables, Systemd: h.Systemd, TimeSync: h.TimeSync, Warnings: h.Warnings,
 		BinarySHA256: a.selfSHA,
+	}
+	if a.maintenanceSupported() {
+		d.Maintenance = 1
 	}
 	wanted := map[string]bool{}
 	if ds != nil {

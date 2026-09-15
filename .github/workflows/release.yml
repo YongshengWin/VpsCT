@@ -39,6 +39,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
+          if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo 'Release already exists; keeping its assets unchanged. Replacement requires an explicit maintainer operation.'
+            exit 0
+          fi
           gh release create "$RELEASE_VERSION" --verify-tag --draft \
             --title "VpsCT $RELEASE_VERSION" --notes-file release-notes.md \
             release/"$RELEASE_VERSION"/*

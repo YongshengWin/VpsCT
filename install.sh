@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Release packaging replaces these two markers with this repository and tag.
-# Source checkout usage: bash install.sh --repo OWNER/VpsCT --version v0.1.0 ...
+# Source checkout usage: bash install.sh --repo OWNER/VpsCT ... (latest by default).
+# Release assets default to their own tag; --version may override it.
 set -euo pipefail
 
 REPOSITORY='__REPOSITORY__'
@@ -10,7 +11,7 @@ ENV_FILE=/etc/ctlvps/ctlvpsd.env
 SERVICE_FILE=/etc/systemd/system/ctlvpsd.service
 DOMAIN='' SITE_URL='' ASSETS_DIR=''
 LISTEN=127.0.0.1:8080
-NO_PROXY=0 UPDATE=0
+NO_PROXY=0 UPDATE=0 AUTO_ROLLBACK=0
 WORK='' BACKUP='' PREVIOUS='' STOPPED=0 SWITCHED=0 COMPLETE=0
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
@@ -28,12 +29,13 @@ VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64 / arm64）
 
 选项：
   --repo OWNER/VpsCT      下载来源（OWNER 为用户或组织；Release 附件内已自动填写）
-  --version vX.Y.Z        指定版本；latest 在开始下载时解析一次
+  --version vX.Y.Z        可选，覆盖脚本默认版本；latest 在开始下载时解析一次
   --assets-dir DIRECTORY  使用本地发行附件（仍需 SHA256SUMS）
   --domain DOMAIN         自动安装并配置 Caddy；先设置 DNS 和 80/443 端口
   --site-url HTTPS_URL    已有反向代理提供的站点地址，需同时传 --no-proxy
   --no-proxy             保留用户现有的 HTTPS / 反向代理
   --update               升级安装器管理的现有安装
+  --auto-rollback        升级启动失败时恢复旧版本和停服备份（网页升级使用）
   --help                 显示帮助
 
 仅控制端在本机安装；agent 文件用于向后续接入的 VPS 分发。
@@ -75,12 +77,41 @@ cleanup() {
       systemctl start ctlvpsd || true
     else
       systemctl stop ctlvpsd || true
+      if [[ "$AUTO_ROLLBACK" == 1 && -n "$BACKUP" && -f "$BACKUP/data.tar.gz" ]] && restore_previous; then
+        printf '升级失败，已恢复旧版本和升级前数据，健康检查通过。\n' >&2
+        [[ -z "$WORK" ]] || rm -rf -- "$WORK"
+        exit 20
+      fi
       printf '安装未完成，控制端已停止。请查看 journalctl -u ctlvpsd。\n' >&2
       [[ -z "$BACKUP" ]] || printf '升级前备份：%s（恢复方法见 docs/operations.md）\n' "$BACKUP" >&2
     fi
   fi
   [[ -z "$WORK" ]] || rm -rf -- "$WORK"
   exit "$status"
+}
+
+restore_previous() {
+  [[ "$PREVIOUS" == "$INSTALL_DIR/releases/"* && -x "$PREVIOUS/ctlvpsd" ]] || return 1
+  [[ ! -L "$INSTALL_DIR/data" ]] || return 1
+  rm -rf --one-file-system -- "$INSTALL_DIR/data" || return 1
+  tar -xzf "$BACKUP/data.tar.gz" -C "$INSTALL_DIR" || return 1
+  cp -- "$BACKUP/ctlvpsd.env" "$ENV_FILE" || return 1
+  cp -- "$BACKUP/ctlvpsd.service" "$SERVICE_FILE" || return 1
+  ln -sfn "$PREVIOUS" "$INSTALL_DIR/current" || return 1
+  if [[ -f "$BACKUP/ctlvps-maintenance.service" ]]; then
+    cp -- "$BACKUP/ctlvps-maintenance.service" /etc/systemd/system/ctlvps-maintenance.service || return 1
+  fi
+  systemctl daemon-reload || return 1
+  systemctl start ctlvpsd || return 1
+  local attempt
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 2 "http://$LISTEN/healthz" > /dev/null; then
+      if [[ -f "$BACKUP/ctlvps-maintenance.service" ]]; then systemctl restart ctlvps-maintenance || return 1; fi
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 check_environment() {
@@ -106,6 +137,13 @@ check_environment() {
     [[ -z "$DOMAIN" && -z "$SITE_URL" && "$NO_PROXY" == 0 ]] || die '升级保留站点配置，请勿同时指定域名或代理选项'
     PREVIOUS=$(readlink -f "$INSTALL_DIR/current")
     [[ "$PREVIOUS" == "$INSTALL_DIR/releases/"* && -x "$PREVIOUS/ctlvpsd" ]] || die '现有版本目录无效'
+    if [[ "$AUTO_ROLLBACK" == 1 ]]; then
+      [[ "$(sed -n 's/^CTLVPS_DATA_DIR=//p' "$ENV_FILE")" == /opt/ctlvps/data && ! -L "$INSTALL_DIR/data" ]] || die '自动恢复只支持默认数据目录'
+      local mount
+      while IFS= read -r mount; do
+        [[ "$mount" != "$INSTALL_DIR/data" && "$mount" != "$INSTALL_DIR/data/"* ]] || die '数据目录内存在挂载点，不能自动恢复'
+      done < <(findmnt -rn -o TARGET)
+    fi
     SITE_URL=$(sed -n 's/^CTLVPS_SITE_URL=//p' "$ENV_FILE")
     valid_site_url "$SITE_URL" || die '现有站点 URL 无效，请检查环境文件'
     LISTEN=$(sed -n 's/^CTLVPS_LISTEN=//p' "$ENV_FILE")
@@ -170,12 +208,16 @@ main() {
         shift 2 ;;
       --no-proxy) NO_PROXY=1; shift ;;
       --update) UPDATE=1; shift ;;
+      --auto-rollback) AUTO_ROLLBACK=1; shift ;;
       *) die "未知参数：$1" ;;
     esac
   done
+  [[ "$AUTO_ROLLBACK" == 0 || "$UPDATE" == 1 ]] || die '--auto-rollback 仅用于 --update'
   check_environment
   umask 077
-  WORK=$(mktemp -d)
+  # The package's version check executes a binary. /tmp is frequently noexec;
+  # stage beside the installation filesystem instead of weakening that mount.
+  WORK=$(mktemp -d /opt/ctlvps-install.XXXXXXXX)
   trap cleanup EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
@@ -251,6 +293,7 @@ main() {
     BACKUP=$(mktemp -d "$INSTALL_DIR/backups/pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX")
     cp -- "$ENV_FILE" "$BACKUP/ctlvpsd.env"
     cp -- "$SERVICE_FILE" "$BACKUP/ctlvpsd.service"
+    if [[ -f /etc/systemd/system/ctlvps-maintenance.service ]]; then cp -- /etc/systemd/system/ctlvps-maintenance.service "$BACKUP/ctlvps-maintenance.service"; fi
     printf '%s\n' "$PREVIOUS" > "$BACKUP/previous-release"
     info '停止控制端并备份数据（包含 SQLite WAL 与连接日志）'
     systemctl stop ctlvpsd
@@ -269,12 +312,18 @@ EOF
     install -m 0600 "$WORK/ctlvpsd.env" "$ENV_FILE"
   fi
   install -m 0644 "$release_dir/ctlvpsd.service" "$SERVICE_FILE"
+  if [[ -f "$release_dir/ctlvps-maintenance.service" ]]; then
+    install -m 0644 "$release_dir/ctlvps-maintenance.service" /etc/systemd/system/ctlvps-maintenance.service
+  fi
   ln -s "$release_dir" "$release_dir/.activate"
   mv -Tf "$release_dir/.activate" "$INSTALL_DIR/current"
   SWITCHED=1 STOPPED=1
   if [[ "$UPDATE" == 0 ]]; then
     ln -s current/ctlvpsd "$INSTALL_DIR/ctlvpsd"
     ln -s current/agents "$INSTALL_DIR/agents"
+  fi
+  if [[ -f "$release_dir/uninstall.sh" ]]; then
+    ln -sfn current/uninstall.sh "$INSTALL_DIR/uninstall.sh"
   fi
   printf '%s\n' "$REPOSITORY" > "$INSTALL_DIR/REPOSITORY"
   chmod 0644 "$INSTALL_DIR/REPOSITORY"
@@ -289,9 +338,16 @@ EOF
     sleep 1
   done
   [[ "$ready" == 1 ]] || die '启动健康检查失败'
+  if [[ -f "$release_dir/ctlvps-maintenance.service" ]]; then
+    systemctl enable ctlvps-maintenance
+    systemctl restart ctlvps-maintenance
+  fi
   if [[ "$UPDATE" == 0 && "$NO_PROXY" == 0 ]]; then install_caddy; fi
   COMPLETE=1
   info "控制端 $VERSION 已启动：$SITE_URL"
+  if [[ -f "$INSTALL_DIR/uninstall.sh" ]]; then
+    info '卸载预览：sudo bash /opt/ctlvps/uninstall.sh --controller --dry-run'
+  fi
   if [[ -f "$INSTALL_DIR/data/setup-token" ]]; then
     info '首次创建管理员需要初始化令牌，请在服务器终端执行：'
     printf '  sudo cat /opt/ctlvps/data/setup-token\n'

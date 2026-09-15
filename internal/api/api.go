@@ -42,18 +42,19 @@ type Config struct {
 
 // Deps wires the API to the services.
 type Deps struct {
-	Store     *store.Store
-	Connlog   *connlog.Store
-	Geo       *geoip.Lookup
-	Subs      *subscription.Service
-	Desired   *desired.Builder
-	Shares    *share.Manager
-	Traffic   *traffic.Ingestor
-	Notify    *notify.Telegram
-	Scheduler *scheduler.Scheduler
-	Logger    *slog.Logger
-	Static    http.Handler
-	Config    Config
+	Maintenance MaintenanceClient
+	Store       *store.Store
+	Connlog     *connlog.Store
+	Geo         *geoip.Lookup
+	Subs        *subscription.Service
+	Desired     *desired.Builder
+	Shares      *share.Manager
+	Traffic     *traffic.Ingestor
+	Notify      *notify.Telegram
+	Scheduler   *scheduler.Scheduler
+	Logger      *slog.Logger
+	Static      http.Handler
+	Config      Config
 }
 
 // API is the HTTP surface.
@@ -282,6 +283,13 @@ func (a *API) routes() {
 	a.handle("GET /api/v1/servers/{id}/desired", true, a.serverDesired)
 	a.handle("POST /api/v1/servers/{id}/republish", true, a.serverRepublish)
 	a.handle("POST /api/v1/servers/{id}/update-agent", true, a.updateAgent)
+	a.handle("GET /api/v1/servers/{id}/maintenance", true, a.serverMaintenance)
+	a.handle("POST /api/v1/servers/{id}/maintenance", true, a.startAgentMaintenance)
+	a.handle("GET /api/v1/system/maintenance", true, a.controllerMaintenance)
+	a.handle("GET /api/v1/system/maintenance/latest", true, a.latestController)
+	a.handle("POST /api/v1/system/maintenance", true, a.startControllerMaintenance)
+	a.public("POST /api/maintenance/v1/jobs/{job}/claim", a.claimMaintenance)
+	a.public("POST /api/maintenance/v1/jobs/{job}/report", a.reportMaintenance)
 	a.handle("POST /api/v1/agents/update", true, a.updateAllAgents)
 	a.handle("POST /api/v1/servers/{id}/nodes", true, a.deployNode)
 

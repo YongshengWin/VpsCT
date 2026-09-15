@@ -23,7 +23,7 @@ def main():
         parser.error('version must be vX.Y.Z, optionally with a prerelease suffix')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
         parser.error('repository must be OWNER/REPO')
-    required = [*ROOT_DOCUMENTS, 'third_party/manifest.json', 'docs/operations.md']
+    required = [*ROOT_DOCUMENTS, 'third_party/manifest.json', 'docs/operations.md', 'uninstall.sh']
     required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64', 'arm64')]
     for name in required:
         if not (ROOT / name).is_file():
@@ -35,6 +35,8 @@ def main():
     installer = (ROOT / 'install.sh').read_text().replace("REPOSITORY='__REPOSITORY__'", f"REPOSITORY='{args.repository}'").replace("VERSION='__VERSION__'", f"VERSION='{args.version}'")
     (out / 'install.sh').write_text(installer)
     (out / 'install.sh').chmod(0o755)
+    shutil.copy2(ROOT / 'uninstall.sh', out / 'uninstall.sh')
+    (out / 'uninstall.sh').chmod(0o755)
     for arch in ('amd64', 'arm64'):
         with tempfile.TemporaryDirectory() as tmp:
             package = pathlib.Path(tmp)
@@ -44,7 +46,9 @@ def main():
                 name = f'ctlvps-agent-linux-{agent_arch}'
                 shutil.copy2(ROOT / 'bin' / name, package / 'agents' / name)
             shutil.copy2(ROOT / 'deploy/ctlvpsd.service', package / 'ctlvpsd.service')
+            shutil.copy2(ROOT / 'deploy/ctlvps-maintenance.service', package / 'ctlvps-maintenance.service')
             shutil.copy2(ROOT / 'deploy/ctlvpsd.env.example', package / 'ctlvpsd.env.example')
+            shutil.copy2(ROOT / 'uninstall.sh', package / 'uninstall.sh')
             for name in ROOT_DOCUMENTS:
                 shutil.copy2(ROOT / name, package / name)
             shutil.copytree(ROOT / 'third_party', package / 'third_party')

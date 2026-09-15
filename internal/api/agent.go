@@ -149,8 +149,15 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if spec := a.agentUpdateSpec(hb.Metrics.Arch); spec != nil {
 		current := agentReportedSHA(hb, hb.Diagnostics)
 		if current != "" && !strings.EqualFold(current, spec.SHA256) {
-			resp.AgentUpdate = spec
+			if hb.Diagnostics.Maintenance >= 1 {
+				a.queueAutomaticAgentUpdate(r.Context(), ac.Server.ID, spec.SHA256)
+			} else {
+				resp.AgentUpdate = spec
+			}
 		}
+	}
+	if hb.Diagnostics.Maintenance >= 1 {
+		resp.Maintenance = a.nextAgentMaintenance(r.Context(), ac.Server.ID)
 	}
 	a.Events.Publish("agent.heartbeat", map[string]any{"server_id": ac.Server.ID, "metrics": hb.Metrics, "applied_revision": hb.AppliedRevision, "desired_revision": resp.DesiredRevision})
 	httpx.OK(w, resp)

@@ -12,7 +12,11 @@
 
 细节见 `README.md`、`docs/operations.md` 和 `docs/releasing.md`。
 
+**卸载使用独立 `uninstall.sh`。** `--controller` / `--agent` / `--all` 三选一，默认保留数据；`--purge` 才删除数据。先用 `--dry-run` 看范围。`--remove-caddy` 需要控制端加 `--purge`，只接受安装器生成的独占配置。两端共用父目录，不可直接删整个 `/opt/ctlvps` 或 `/etc/ctlvps`。2026-09-15 更新的 v0.1.0 附件包含卸载器和网页维护；早期安装需先终端更新一次以启用网页维护。
+
 ## 2. 代码在哪
+
+网页维护由 `internal/maintenance` 的固定 Unix socket 服务和独立 systemd worker 执行。控制端仍不以 root 运行。维护任务要持久化、幂等、二次认证、按端隔离；不要让网页传入任意命令、路径或下载仓库。升级/卸载验证使用 `scripts/test-maintenance-container.sh` 的隔离环境，不直接操作真实 VPS。
 
 | 路径 | 干什么 |
 |---|---|

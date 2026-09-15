@@ -2,7 +2,10 @@
 // ctlvps-agent. All traffic is agent -> server (outbound only).
 package agentproto
 
-import "time"
+import (
+	"ctlvps/internal/maintenance"
+	"time"
+)
 
 // Header carrying the agent token.
 const AuthHeader = "Authorization"
@@ -36,36 +39,36 @@ type EnrollResponse struct {
 
 // Metrics is a system snapshot.
 type Metrics struct {
-	CPUPercent   float64 `json:"cpu_percent"`
-	Load1        float64 `json:"load1"`
-	Load5        float64 `json:"load5"`
-	MemTotal     int64   `json:"mem_total"`
-	MemUsed      int64   `json:"mem_used"`
-	SwapTotal    int64   `json:"swap_total"`
-	SwapUsed     int64   `json:"swap_used"`
-	DiskTotal    int64   `json:"disk_total"`
-	DiskUsed     int64   `json:"disk_used"`
-	UptimeSec    int64   `json:"uptime_sec"`
-	NetRx        int64   `json:"net_rx"` // cumulative bytes received on public NICs
-	NetTx        int64   `json:"net_tx"` // cumulative bytes sent
-	NetRxRate    int64   `json:"net_rx_rate"`
-	NetTxRate    int64   `json:"net_tx_rate"`
-	TCPConns     int     `json:"tcp_conns"`
-	UDPConns     int     `json:"udp_conns"`
-	Processes    int     `json:"processes"`
-	Hostname     string  `json:"hostname"`
-	Kernel       string  `json:"kernel"`
-	Arch         string  `json:"arch"`
-	Interface    string  `json:"interface"`
+	CPUPercent float64 `json:"cpu_percent"`
+	Load1      float64 `json:"load1"`
+	Load5      float64 `json:"load5"`
+	MemTotal   int64   `json:"mem_total"`
+	MemUsed    int64   `json:"mem_used"`
+	SwapTotal  int64   `json:"swap_total"`
+	SwapUsed   int64   `json:"swap_used"`
+	DiskTotal  int64   `json:"disk_total"`
+	DiskUsed   int64   `json:"disk_used"`
+	UptimeSec  int64   `json:"uptime_sec"`
+	NetRx      int64   `json:"net_rx"` // cumulative bytes received on public NICs
+	NetTx      int64   `json:"net_tx"` // cumulative bytes sent
+	NetRxRate  int64   `json:"net_rx_rate"`
+	NetTxRate  int64   `json:"net_tx_rate"`
+	TCPConns   int     `json:"tcp_conns"`
+	UDPConns   int     `json:"udp_conns"`
+	Processes  int     `json:"processes"`
+	Hostname   string  `json:"hostname"`
+	Kernel     string  `json:"kernel"`
+	Arch       string  `json:"arch"`
+	Interface  string  `json:"interface"`
 }
 
 // PortCounter is a cumulative nftables counter for one listening port.
 type PortCounter struct {
-	Port    int   `json:"port"`
-	Rx      int64 `json:"rx"` // VPS inbound for this inbound (client + origin)
-	Tx      int64 `json:"tx"` // VPS outbound for this inbound (client + origin)
-	RxPkts  int64 `json:"rx_pkts,omitempty"`
-	TxPkts  int64 `json:"tx_pkts,omitempty"`
+	Port   int   `json:"port"`
+	Rx     int64 `json:"rx"` // VPS inbound for this inbound (client + origin)
+	Tx     int64 `json:"tx"` // VPS outbound for this inbound (client + origin)
+	RxPkts int64 `json:"rx_pkts,omitempty"`
+	TxPkts int64 `json:"tx_pkts,omitempty"`
 }
 
 // CoreStatus describes one proxy core process.
@@ -93,6 +96,7 @@ type CertStatus struct {
 
 // Diagnostics is the health section of a heartbeat.
 type Diagnostics struct {
+	Maintenance   int          `json:"maintenance,omitempty"`
 	Cores         []CoreStatus `json:"cores"`
 	Certs         []CertStatus `json:"certs,omitempty"`
 	ClockSkewMs   int64        `json:"clock_skew_ms"`
@@ -129,13 +133,20 @@ type Heartbeat struct {
 
 // HeartbeatResponse tells the agent what to do next.
 type HeartbeatResponse struct {
-	ServerTime      time.Time `json:"server_time"`
-	DesiredRevision int64     `json:"desired_revision"`
-	DesiredHash     string    `json:"desired_hash"`
-	PollIntervalSec int       `json:"poll_interval_sec"`
-	ConnlogEnabled  bool             `json:"connlog_enabled"`
-	CounterReset    bool             `json:"counter_reset"` // server lost baseline; agent may reset
-	AgentUpdate     *AgentUpdateSpec `json:"agent_update,omitempty"`
+	Maintenance     *MaintenanceCommand `json:"maintenance,omitempty"`
+	ServerTime      time.Time           `json:"server_time"`
+	DesiredRevision int64               `json:"desired_revision"`
+	DesiredHash     string              `json:"desired_hash"`
+	PollIntervalSec int                 `json:"poll_interval_sec"`
+	ConnlogEnabled  bool                `json:"connlog_enabled"`
+	CounterReset    bool                `json:"counter_reset"` // server lost baseline; agent may reset
+	AgentUpdate     *AgentUpdateSpec    `json:"agent_update,omitempty"`
+}
+
+type MaintenanceCommand struct {
+	Request     maintenance.Request `json:"request"`
+	ReportToken string              `json:"report_token"`
+	SHA256      string              `json:"sha256,omitempty"`
 }
 
 // AgentUpdateSpec tells an agent to replace its own binary.
@@ -171,50 +182,50 @@ type NodeSpec struct {
 // CoreVersion pins a downloadable core binary.
 type CoreVersion struct {
 	Version string            `json:"version"`
-	URL     string            `json:"url"`               // template with {version} {arch}
-	SHA256  map[string]string `json:"sha256,omitempty"`  // arch -> hex
+	URL     string            `json:"url"`              // template with {version} {arch}
+	SHA256  map[string]string `json:"sha256,omitempty"` // arch -> hex
 }
 
 // DesiredState is the full declarative state for one server.
 type DesiredState struct {
-	Revision   int64                  `json:"revision"`
-	Hash       string                 `json:"hash"`
-	ServerID   int64                  `json:"server_id"`
-	ServerName string                 `json:"server_name"`
-	PublicHost string                 `json:"public_host"`
-	CoreMode   string                 `json:"core_mode"`
-	IPv4Only   bool                   `json:"ipv4_only"`
-	Nodes      []NodeSpec             `json:"nodes"`
-	Versions   map[string]CoreVersion `json:"versions"`
-	Connlog    ConnlogSpec            `json:"connlog"`
-	Tuning     Tuning                 `json:"tuning"`
-	GeneratedAt time.Time             `json:"generated_at"`
+	Revision    int64                  `json:"revision"`
+	Hash        string                 `json:"hash"`
+	ServerID    int64                  `json:"server_id"`
+	ServerName  string                 `json:"server_name"`
+	PublicHost  string                 `json:"public_host"`
+	CoreMode    string                 `json:"core_mode"`
+	IPv4Only    bool                   `json:"ipv4_only"`
+	Nodes       []NodeSpec             `json:"nodes"`
+	Versions    map[string]CoreVersion `json:"versions"`
+	Connlog     ConnlogSpec            `json:"connlog"`
+	Tuning      Tuning                 `json:"tuning"`
+	GeneratedAt time.Time              `json:"generated_at"`
 }
 
 // ConnlogSpec controls connection log collection.
 type ConnlogSpec struct {
-	Enabled       bool `json:"enabled"`
-	BatchSize     int  `json:"batch_size"`
-	FlushSec      int  `json:"flush_sec"`
-	MaxBufferMB   int  `json:"max_buffer_mb"`
+	Enabled     bool `json:"enabled"`
+	BatchSize   int  `json:"batch_size"`
+	FlushSec    int  `json:"flush_sec"`
+	MaxBufferMB int  `json:"max_buffer_mb"`
 }
 
 // Tuning are host-level knobs applied idempotently.
 type Tuning struct {
-	EnableBBR       bool  `json:"enable_bbr"`
-	MemoryMaxMB     int   `json:"memory_max_mb"`     // per core process
-	LimitNOFILE     int   `json:"limit_nofile"`
-	Chrony          bool  `json:"chrony"`
-	RestartSec      int   `json:"restart_sec"`
-	GoMemLimitMB    int   `json:"gomemlimit_mb"`
+	EnableBBR    bool `json:"enable_bbr"`
+	MemoryMaxMB  int  `json:"memory_max_mb"` // per core process
+	LimitNOFILE  int  `json:"limit_nofile"`
+	Chrony       bool `json:"chrony"`
+	RestartSec   int  `json:"restart_sec"`
+	GoMemLimitMB int  `json:"gomemlimit_mb"`
 }
 
 // ApplyReport is sent after the agent reconciles a revision.
 type ApplyReport struct {
-	Revision int64  `json:"revision"`
-	Hash     string `json:"hash"`
-	Status   string `json:"status"` // applied|failed
-	Error    string `json:"error,omitempty"`
+	Revision int64    `json:"revision"`
+	Hash     string   `json:"hash"`
+	Status   string   `json:"status"` // applied|failed
+	Error    string   `json:"error,omitempty"`
 	Details  []string `json:"details,omitempty"`
 }
 
