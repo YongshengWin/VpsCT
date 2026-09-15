@@ -25,7 +25,8 @@ updates:
     allow:
       - dependency-type: all
         update-types:
-          - version-update:semver-minor
+          # 0.x minor releases can exceed the current caret range.
+          # Review frontend minor upgrades explicitly as well as majors.
           - version-update:semver-patch
     groups:
       # Runtime and type packages must move together, across dependency types.

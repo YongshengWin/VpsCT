@@ -244,13 +244,13 @@
   {
     "ecosystem": "go",
     "name": "modernc.org/libc",
-    "version": "v1.75.6",
+    "version": "v1.75.7",
     "license": "See license text",
     "notices": [
-      "third_party/go/modernc.org_libc_v1.75.6/LICENSE",
-      "third_party/go/modernc.org_libc_v1.75.6/LICENSE-3RD-PARTY.md",
-      "third_party/go/modernc.org_libc_v1.75.6/testdata/nsz.repo.hu/libc-test/COPYRIGHT",
-      "third_party/go/modernc.org_libc_v1.75.6/testdata/nsz.repo.hu/libc-test/src/math/crlibm/COPYING"
+      "third_party/go/modernc.org_libc_v1.75.7/LICENSE",
+      "third_party/go/modernc.org_libc_v1.75.7/LICENSE-3RD-PARTY.md",
+      "third_party/go/modernc.org_libc_v1.75.7/testdata/nsz.repo.hu/libc-test/COPYRIGHT",
+      "third_party/go/modernc.org_libc_v1.75.7/testdata/nsz.repo.hu/libc-test/src/math/crlibm/COPYING"
     ]
   },
   {
