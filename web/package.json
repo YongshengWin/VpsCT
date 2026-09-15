@@ -20,7 +20,7 @@
     "lucide-react": "^0.447.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
+    "react-dom": "^19.3.0",
     "react-router-dom": "^7.18.3",
     "recharts": "^2.12.7",
     "tailwind-merge": "^2.5.2"
@@ -29,7 +29,7 @@
     "@types/node": "^26.5.1",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.11",
-    "@types/react-dom": "^18.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
