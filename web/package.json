@@ -22,7 +22,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.3",
-    "recharts": "^2.12.7",
+    "recharts": "^3.10.1",
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
