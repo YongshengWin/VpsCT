@@ -4,16 +4,53 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    # Keep routine updates within the current major version. Security updates
+    # are not restricted by allow.update-types.
+    allow:
+      - dependency-type: all
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+    groups:
+      go-compatible:
+        patterns: ['*']
+      go-security:
+        applies-to: security-updates
+        patterns: ['*']
+    open-pull-requests-limit: 1
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    allow:
+      - dependency-type: all
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
     groups:
-      development:
+      # Runtime and type packages must move together, across dependency types.
+      react-compatible:
+        patterns: ['react', 'react-dom', '@types/react', '@types/react-dom']
+      styles-compatible:
+        patterns: ['tailwindcss', 'tailwind-merge', 'postcss', 'autoprefixer']
+      tooling-compatible:
         dependency-type: development
-    open-pull-requests-limit: 5
+      frontend-compatible:
+        dependency-type: production
+      frontend-security:
+        applies-to: security-updates
+        patterns: ['*']
+    open-pull-requests-limit: 4
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    allow:
+      - dependency-type: all
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
+    groups:
+      actions-compatible:
+        patterns: ['*']
+    open-pull-requests-limit: 1

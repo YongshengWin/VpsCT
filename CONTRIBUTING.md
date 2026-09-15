@@ -49,7 +49,16 @@ bash scripts/test-install-container.sh release/v0.0.0-ci
 - 依赖更新后重新生成第三方声明：`go mod download all`，`cd web && npm ci`，再在根目录运行 `python3 scripts/third-party.py`。
 - 测试使用 `example.com`、保留测试域名和虚构数据。不要提交生产域名、节点密码、订阅令牌、SSH 地址或个人浏览记录。
 
-## 4. 报告问题
+## 4. 依赖更新
+
+1. 常规 Dependabot 更新按周检查，只自动提出当前大版本内的小版本与补丁更新；安全更新不受这个版本级别限制，仍需通过 CI 后由维护者合并。
+2. React、React DOM 及对应类型包必须一起验证；Tailwind、tailwind-merge 与样式构建工具单独成组。跨大版本升级使用专门的迁移 PR，包含代码适配和浏览器验收。
+3. 更新锁文件后，重新生成 `THIRD_PARTY_NOTICES.md` 与 `third_party/`，把生成结果提交到同一个 PR。CI 的许可校验失败时，应补齐文件，不跳过检查；当前生成器覆盖运行依赖和 Go 模块图。
+4. 先确认 `npm ci`、前端测试、类型检查与构建通过；有图表或样式变化时在浏览器检查交互。再通过完整 CI，包括依赖审计、Go 测试和安装器验证。
+
+首批依赖 PR 的核验结果、暂缓升级原因和后续迁移范围见 [依赖维护记录](docs/dependency-maintenance.md)。
+
+## 5. 报告问题
 
 普通问题使用 Issue 模板。安全漏洞使用 [SECURITY.md](SECURITY.md) 的私密渠道。分享日志前删掉请求 URL 中的订阅令牌、Cookie、Authorization、节点凭据和真实 IP。
 
