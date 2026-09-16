@@ -164,7 +164,7 @@ plan_agent() {
   if command -v nft >/dev/null; then
     listed=$(nft list tables) || die '无法检查 nftables，尚未停服或删除文件'
     while read -r kind family table extra; do
-      [[ "$kind" == table && "$family" == inet ]] || continue
+      [[ "$kind" == table && "$family" == inet && -z "$extra" ]] || continue
       [[ "$table" != ctlvps ]] || NFT_PRESENT=1
       [[ "$table" != ctlvps_nodes ]] || NFT_NODES_PRESENT=1
     done <<< "$listed"
