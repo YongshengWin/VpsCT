@@ -163,6 +163,18 @@ type Recovery struct {
 
 func PrepareRecovery(dir string, p Policy, component, arch, digest, source string) (Recovery, error) {
 	r := Recovery{component, arch, strings.ToLower(digest), source, 0, time.Now().Add(30 * time.Minute)}
+	if p.ChecksumOnly {
+		r.Sequence = 1
+		if component == "controller" {
+			if e := CheckRollback(dir, p, component, arch, r.Digest); e != nil {
+				return Recovery{}, e
+			}
+		}
+		if e := r.checkBytes(dir); e != nil {
+			return Recovery{}, e
+		}
+		return r, nil
+	}
 	if e := CheckRollback(dir, p, component, arch, r.Digest); e != nil {
 		return Recovery{}, e
 	}
@@ -208,6 +220,9 @@ func (r Recovery) checkBytes(dir string) error {
 func (r Recovery) Check(dir string, p Policy) error {
 	if !r.Deadline.After(time.Now()) || r.Deadline.After(time.Now().Add(30*time.Minute)) || r.Sequence < 1 {
 		return errors.New("恢复事务授权已过期或无效")
+	}
+	if p.ChecksumOnly {
+		return r.checkBytes(dir)
 	}
 	rp, e := readReleasePolicy(dir)
 	if e != nil {

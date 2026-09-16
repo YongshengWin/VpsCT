@@ -17,6 +17,7 @@ WORK='' BACKUP='' PREVIOUS='' STOPPED=0 SWITCHED=0 COMPLETE=0 RESERVATION='' NEW
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
+
 usage() {
   cat <<'EOF'
 VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64 / arm64）
@@ -32,7 +33,7 @@ VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64 / arm64）
   --repo OWNER/VpsCT      下载来源（OWNER 为用户或组织；Release 附件内已自动填写）
   --version vX.Y.Z        可选，覆盖脚本默认版本；latest 在开始下载时解析一次
   --assets-dir DIRECTORY  使用本地发行附件（仍需 SHA256SUMS）
-  --verifier PATH         首次安装使用的本机可信验证器（必须独立预置）
+  --verifier PATH         恢复工具安装路径（默认 /usr/local/libexec/ctlvps-verify）
   --domain DOMAIN         自动安装并配置 Caddy；先设置 DNS 和 80/443 端口
   --site-url HTTPS_URL    已有反向代理提供的站点地址，需同时传 --no-proxy
   --no-proxy             保留用户现有的 HTTPS / 反向代理
@@ -294,13 +295,36 @@ main() {
   printf '%s  %s\n' "$expected" "$asset" > "$WORK/selected.sha256"
   (cd "$WORK" && sha256sum --check --status selected.sha256) || die 'SHA256 校验失败，未更换现有程序'
   mkdir "$WORK/package"
-  if [[ "$UPDATE" == 1 ]]; then cp -L "$INSTALL_DIR/ctlvpsd" "$WORK/backup-tool"; else cp "$VERIFIER" "$WORK/backup-tool"; fi
-  chmod 0700 "$WORK/backup-tool"
-  if [[ "$UPDATE" == 1 ]]; then
-    "$INSTALL_DIR/ctlvpsd" verify-release controller "$VERSION" "$WORK/$asset" || die '独立发布签名验证失败，未执行下载内容；旧版请先按安全迁移文档安装验证器'
+  local helper="ctlvps-verify-linux-$ARCH" helper_digest
+  if [[ -n "$ASSETS_DIR" ]]; then
+    cp -- "$ASSETS_DIR/$helper" "$WORK/backup-tool"
   else
-    [[ "$VERIFIER" == /* && -f "$VERIFIER" && ! -L "$VERIFIER" && -x "$VERIFIER" && "$(stat -c %u "$VERIFIER")" == 0 ]] || die "请先独立安装本机可信验证器"
-    "$VERIFIER" verify-release controller "$VERSION" "$WORK/$asset" || die "首次安装签名验证失败"
+    download "https://github.com/$REPOSITORY/releases/download/$VERSION/$helper" "$WORK/backup-tool"
+  fi
+  helper_digest=$(awk -v name="$helper" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
+  [[ "$helper_digest" =~ ^[a-fA-F0-9]{64}$ ]] || die '恢复工具校验清单无效'
+  [[ "$(sha256sum "$WORK/backup-tool" | cut -d ' ' -f 1)" == "$helper_digest" ]] || die '恢复工具 SHA256 校验失败'
+  chmod 0700 "$WORK/backup-tool"
+  "$WORK/backup-tool" accept-checksum controller "$VERSION" "$expected" "$WORK/$asset" || die '发行包验证失败，原服务保持运行'
+  if [[ "$UPDATE" == 1 && ! -e "$PREVIOUS/VERIFIED-SHA256" ]]; then
+    # Establish a recovery receipt from the publisher's original old archive,
+    # never from the installed directory's self-reported contents.
+    local old_asset old_version old_digest
+    old_version=$(cat "$PREVIOUS/VERSION")
+    valid_version "$old_version" || die '旧版版本信息无效'
+    old_asset="ctlvps-$old_version-linux-$ARCH.tar.gz"
+    if [[ -n "$ASSETS_DIR" && -f "$ASSETS_DIR/$old_asset" ]]; then
+      cp -- "$ASSETS_DIR/$old_asset" "$WORK/$old_asset"
+      cp -- "$ASSETS_DIR/SHA256SUMS" "$WORK/old-SHA256SUMS"
+    else
+      download "https://github.com/$REPOSITORY/releases/download/$old_version/$old_asset" "$WORK/$old_asset"
+      download "https://github.com/$REPOSITORY/releases/download/$old_version/SHA256SUMS" "$WORK/old-SHA256SUMS"
+    fi
+    old_digest=$(awk -v name="$old_asset" '$2 == name { print $1 }' "$WORK/old-SHA256SUMS")
+    [[ "$old_digest" =~ ^[a-fA-F0-9]{64}$ ]] || die '旧版恢复包校验清单无效'
+    "$WORK/backup-tool" accept-checksum controller "$old_version" "$old_digest" "$WORK/$old_asset" || die '旧版恢复包校验失败，原服务保持运行'
+    "$WORK/backup-tool" prepare-recovery controller "$old_digest" "$PREVIOUS" "$WORK/legacy-recovery.json" || die '现有旧版文件与官方恢复包不一致，原服务保持运行'
+    printf '%s\n' "$old_digest" > "$PREVIOUS/VERIFIED-SHA256"
   fi
   tar -tzf "$WORK/$asset" > "$WORK/members"
   if grep -Eq '(^/|(^|/)\.\.(/|$))' "$WORK/members"; then die '发行包包含非法路径'; fi
@@ -418,6 +442,18 @@ EOF
   if [[ -f "$INSTALL_DIR/data/ctlvps.db.key" && ! -L "$INSTALL_DIR/data/ctlvps.db.key" ]] && cmp -s "$INSTALL_DIR/data/ctlvps.db.key" /etc/ctlvps/secrets.key; then
     rm -f -- "$INSTALL_DIR/data/ctlvps.db.key"
   fi
+  if [[ -f "$release_dir/ctlvps-verify" ]]; then
+    install -d -m 0755 /usr/local/libexec
+    local verifier_stage
+    verifier_stage=$(mktemp "$(dirname "$VERIFIER")/.ctlvps-verify.XXXXXXXX")
+    install -m 0755 "$release_dir/ctlvps-verify" "$verifier_stage"
+    mv -Tf -- "$verifier_stage" "$VERIFIER"
+  fi
+  for file in install.sh install-agent.sh; do
+    if [[ -f "$release_dir/$file" ]]; then
+      install -m 0755 "$release_dir/$file" "/usr/local/libexec/ctlvps-$file"
+    fi
+  done
   COMPLETE=1
   info "控制端 $VERSION 已启动：$SITE_URL"
   if [[ -f "$INSTALL_DIR/uninstall.sh" ]]; then

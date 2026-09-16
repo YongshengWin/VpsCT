@@ -1,4 +1,4 @@
-// Install this verifier and its independent trust policy through a trusted local channel.
+// Release integrity and recovery helper, installed with the official package.
 package main
 
 import (

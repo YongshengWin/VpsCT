@@ -120,15 +120,37 @@ func installBinary(ctx context.Context, binDir, name string, v agentproto.CoreVe
 		return e
 	}
 	url := ExpandURL(v.URL, v.Version)
+	policy, e := secureupdate.LoadPolicy()
+	if e != nil {
+		return e
+	}
+	if policy.ChecksumOnly {
+		var official string
+		switch name {
+		case "sing-box":
+			official = fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", v.Version, v.Version, archFor("arch"))
+		case "snell-server":
+			official = fmt.Sprintf("https://dl.nssurge.com/snell/snell-server-v%s-linux-%s.zip", v.Version, archFor("snellarch"))
+		default:
+			return errors.New("unknown core")
+		}
+		if strings.ContainsAny(v.Version, "/\\?#%") || url != official {
+			return errors.New("core URL must match the fixed upstream release")
+		}
+	}
 	data, err := download(ctx, url)
 	if err != nil {
 		return err
 	}
-	if err := verify(data, v); err != nil {
-		return err
+	if !policy.ChecksumOnly || v.SHA256[runtime.GOARCH] != "" {
+		if err := verify(data, v); err != nil {
+			return err
+		}
 	}
-	if err := secureupdate.Verify(ctx, name, v.Version, data); err != nil {
-		return err
+	if !policy.ChecksumOnly {
+		if err := secureupdate.Verify(ctx, name, v.Version, data); err != nil {
+			return err
+		}
 	}
 	bin, err := extractBinary(data, name)
 	if err != nil {

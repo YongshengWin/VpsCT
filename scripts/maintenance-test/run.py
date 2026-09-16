@@ -99,7 +99,9 @@ def fixture_release(version, broken=False, corrupt=False):
     with tarfile.open(tar, 'w:gz') as archive:
         for path in package.iterdir():
             archive.add(path, arcname=path.name)
-    (out / 'SHA256SUMS').write_text(hashlib.sha256(tar.read_bytes()).hexdigest() + '  ' + tar.name + '\n')
+    helper=out/f'ctlvps-verify-linux-{arch}'
+    shutil.copyfile(f'/src/bin/ctlvps-verify-linux-{arch}',helper)
+    (out / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in (tar,helper)))
     run('python3','/src/scripts/security-fixture.py','sign','controller',version,str(tar))
     if corrupt:
         with tar.open('ab') as stream:

@@ -2,7 +2,6 @@
 """Build self-contained release attachments from make release's binaries."""
 import argparse
 import hashlib
-import json
 import pathlib
 import re
 import shutil
@@ -40,10 +39,15 @@ def main():
     (out / 'install.sh').chmod(0o755)
     shutil.copy2(ROOT / 'uninstall.sh', out / 'uninstall.sh')
     (out / 'uninstall.sh').chmod(0o755)
+    agent_installer = (ROOT / 'internal/assets/install-agent.sh').read_text().replace("RELEASE_VERSION='__VERSION__'", f"RELEASE_VERSION='{args.version}'")
+    (out / 'install-agent.sh').write_text(agent_installer)
     for arch in ('amd64', 'arm64'):
         with tempfile.TemporaryDirectory() as tmp:
             package = pathlib.Path(tmp)
             shutil.copy2(ROOT / f'bin/ctlvpsd-linux-{arch}', package / 'ctlvpsd')
+            shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', package / 'ctlvps-verify')
+            shutil.copy2(out / 'install.sh', package / 'install.sh')
+            shutil.copy2(out / 'install-agent.sh', package / 'install-agent.sh')
             (package / 'agents').mkdir()
             for agent_arch in ('amd64', 'arm64'):
                 name = f'ctlvps-agent-linux-{agent_arch}'
@@ -67,16 +71,9 @@ def main():
             with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
                 for path in sorted(package.iterdir()):
                     archive.add(path, arcname=path.name, filter=metadata)
-    manifest = []
     for arch in ('amd64','arm64'):
         shutil.copy2(ROOT / f'bin/ctlvps-agent-linux-{arch}', out / f'ctlvps-agent-linux-{arch}')
         shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
-        for component, name in [('controller',f'ctlvps-{args.version}-linux-{arch}.tar.gz'),('agent',f'ctlvps-agent-linux-{arch}'),('verifier',f'ctlvps-verify-linux-{arch}')]:
-            manifest.append({'path':str((out/name).relative_to(ROOT)),'identity':{'product':'VpsCT','component':component,'version':args.version,'arch':arch,'epoch':args.security_epoch}})
-    shutil.copy2(ROOT / 'internal/assets/install-agent.sh', out / 'install-agent.sh')
-    for name in ('install.sh','install-agent.sh','uninstall.sh'):
-        manifest.append({'path':str((out/name).relative_to(ROOT)),'identity':{'product':'VpsCT','component':'installer','version':args.version,'arch':'all','epoch':args.security_epoch}})
-    (out/'signing-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT / name, out / name)
     with (out / 'SHA256SUMS').open('w') as sums:

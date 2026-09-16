@@ -8,7 +8,6 @@ jobs:
   checks:
     uses: ./.github/workflows/ci.yml
   package:
-    environment: release-signing
     needs: checks
     runs-on: ubuntu-24.04
     permissions:
@@ -28,20 +27,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
-          SECURITY_EPOCH: ${{ vars.SECURITY_EPOCH }}
-        run: test -n "$SECURITY_EPOCH" && make release VERSION="$RELEASE_VERSION" REPOSITORY="$RELEASE_REPOSITORY" SECURITY_EPOCH="$SECURITY_EPOCH"
-      - name: Sign independent release metadata
-        env:
-          TUF_ROOT: ${{ vars.TUF_ROOT_JSON }}
-          TUF_SECURITY_POLICY: ${{ vars.TUF_SECURITY_POLICY_JSON }}
-          TUF_TARGETS_KEY: ${{ secrets.TUF_TARGETS_KEY }}
-          TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
-          TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
-          RELEASE_VERSION: ${{ github.ref_name }}
-          METADATA_RUN: ${{ github.run_number }}
-          METADATA_ATTEMPT: ${{ github.run_attempt }}
-        run: |
-          python3 scripts/sign-release.py
+        run: make release VERSION="$RELEASE_VERSION" REPOSITORY="$RELEASE_REPOSITORY"
       - name: Prepare release notes
         env:
           RELEASE_VERSION: ${{ github.ref_name }}

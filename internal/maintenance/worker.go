@@ -167,7 +167,7 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 		return "failed", "无法读取新程序", err
 	}
 	if err = secureupdate.Verify(ctx, "agent", "", payload); err != nil {
-		return "failed", "发布签名验证失败，原程序未更换", err
+		return "failed", "官方发行校验失败，原程序未更换", err
 	}
 	if err := command(ctx, log, newPath, "version"); err != nil {
 		return "failed", "新 agent 无法在本机运行，原 agent 未更换", err

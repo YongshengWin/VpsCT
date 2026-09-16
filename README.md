@@ -22,7 +22,7 @@
 sudo bash /usr/local/libexec/ctlvps-install.sh --domain panel.example.com
 ```
 
-将 `panel.example.com` 替换为你的面板域名。本地安装器和信任根必须来自独立可信渠道；下载后的程序执行前通过 TUF 验证。具体版本以安装器参数为准。
+将 `panel.example.com` 替换为你的面板域名。安装器从 GitHub 官方仓库通过 HTTPS 下载发行包，并检查 SHA256；不需要配置发布签名密钥或签名服务。具体版本以安装器参数为准。
 
 安装器会下载并校验程序、配置系统服务和 HTTPS。服务器无需安装 Go、Node 或源码编译环境。安装完成后，还需通过面板域名确认 HTTPS 可访问；本机服务启动成功不代表公网入口已就绪。已有 HTTPS 入口等部署方式见 [安装文档](docs/operations.md)。
 
@@ -102,7 +102,7 @@ sudo bash /usr/local/libexec/ctlvps-install.sh --update
 
 ### 4.2 同步 agent 与配置
 
-完成本机信任配置的新版 agent 才会随心跳同步受信签名版本。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
+新版 agent 随心跳同步更新，并对照官方发行校验清单检查下载内容。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
 
 | 操作 | 用途 |
 |---|---|

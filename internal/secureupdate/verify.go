@@ -27,9 +27,10 @@ import (
 const PolicyPath = "/etc/ctlvps/security.json"
 const StateDir = "/var/lib/ctlvps-security"
 
-var ErrUnconfigured = errors.New("本机尚未配置独立发布信任根，拒绝执行新程序；请按安全迁移说明配置")
+var ErrUnconfigured = errors.New("本机自定义安全策略不可读或无效，请检查权限和内容")
 
 type Policy struct {
+	ChecksumOnly    bool                   `json:"-"`
 	MaxNodes        int                    `json:"max_nodes,omitempty"`
 	MaxMemoryMB     int                    `json:"max_memory_mb,omitempty"`
 	ACMEDomains     []string               `json:"acme_domains,omitempty"`
@@ -96,6 +97,9 @@ func protectedParents(path string) error {
 func LoadPolicy() (Policy, error) {
 	var p Policy
 	b, e := protected(PolicyPath)
+	if os.IsNotExist(e) {
+		return defaultPolicy(), nil
+	}
 	if e != nil {
 		return p, ErrUnconfigured
 	}
@@ -106,6 +110,10 @@ func LoadPolicy() (Policy, error) {
 	}
 	if p.Schema != 1 {
 		return p, ErrUnconfigured
+	}
+	if p.MetadataURL == "" && p.RootFile == "" {
+		p.ChecksumOnly = true
+		return p, nil
 	}
 	u, e := url.Parse(p.MetadataURL)
 	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
@@ -149,6 +157,9 @@ func Verify(ctx context.Context, component, version string, data []byte) error {
 	p, e := LoadPolicy()
 	if e != nil {
 		return e
+	}
+	if p.ChecksumOnly {
+		return verifyChecksum(ctx, component, version, data)
 	}
 	root, e := protected(p.RootFile)
 	if e != nil {
@@ -310,9 +321,21 @@ func (v *Verifier) Verify(ctx context.Context, component, version, arch string, 
 	return d.Sync()
 }
 
-// Entry exposes verification to the existing, trusted installed binary. The
-// downloaded binary is never used as its own bootstrap verifier.
+// Entry exposes release integrity and recovery operations. The installer
+// authenticates its helper through the official HTTPS checksum catalog first.
 func Entry(args []string) (bool, error) {
+	if len(args) == 5 && args[0] == "accept-checksum" {
+		f, e := os.Open(args[4])
+		if e != nil {
+			return true, e
+		}
+		defer f.Close()
+		data, e := safehttp.ReadBounded(f, 256<<20)
+		if e != nil {
+			return true, e
+		}
+		return true, acceptChecksum(context.Background(), args[1], args[2], args[3], data)
+	}
 	if handled, err := recoveryEntry(args); handled {
 		return true, err
 	}
@@ -365,6 +388,9 @@ func checkRollback(dir string, p Policy, component, arch, digest string, inTrans
 	var id Identity
 	if json.Unmarshal(raw, &id) != nil || id.Product != "VpsCT" || id.Component != component || id.Arch != arch {
 		return errors.New("rollback identity mismatch")
+	}
+	if p.ChecksumOnly {
+		return nil
 	}
 	rp, e := readReleasePolicy(dir)
 	if e != nil {

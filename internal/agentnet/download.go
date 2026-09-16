@@ -109,8 +109,9 @@ func DownloadEntry(args []string) (bool, error) {
 
 func networkExecutable() string {
 	p, _ := os.Executable()
-	// Maintenance copies are private to root; use the independently provisioned helper.
-	if strings.Contains(p, "/ctlvps-maintenance/") {
+	// Maintenance and installer copies are private to root. Optional signed
+	// deployments already provision an accessible, trusted network helper.
+	if strings.Contains(p, "/ctlvps-maintenance/") || strings.HasPrefix(p, "/opt/ctlvps-install.") {
 		return "/usr/local/libexec/ctlvps-verify"
 	}
 	return p

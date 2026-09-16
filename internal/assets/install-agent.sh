@@ -9,7 +9,6 @@ BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/ctlvps"
 STATE_DIR="/var/lib/ctlvps-agent"
 UPDATE=0
-VERIFIER=/usr/local/libexec/ctlvps-verify
 umask 077
 
 while [[ $# -gt 0 ]]; do
@@ -17,7 +16,6 @@ while [[ $# -gt 0 ]]; do
     --server) SERVER="$2"; shift 2 ;;
     --token) TOKEN="$2"; shift 2 ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
-    --verifier) VERIFIER="$2"; shift 2 ;;
     --update) UPDATE=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -58,15 +56,32 @@ case "$ARCH" in
   *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
 esac
 
+# Download a complete release from the fixed publisher. The controller supplies
+# enrollment/configuration only; it cannot choose executable bytes or checksums.
+RELEASE_VERSION='__VERSION__'
+if [[ "$RELEASE_VERSION" == '__VERSION__' ]]; then
+  RELEASE_VERSION=$(curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 https://api.github.com/repos/YongshengWin/VpsCT/releases/latest | sed -n 's/.*"tag_name": *"\([^" ]*\)".*/\1/p')
+fi
+[[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || { echo 'invalid release version' >&2; exit 1; }
+WORK=$(mktemp -d)
+trap 'rm -rf -- "$WORK"' EXIT
+RELEASE_BASE="https://github.com/YongshengWin/VpsCT/releases/download/$RELEASE_VERSION"
+download_agent() {
+  local asset="ctlvps-agent-linux-$ARCH" expected
+  TMP="$WORK/$asset"
+  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$asset" -o "$TMP"
+  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 --max-filesize 1048576 "$RELEASE_BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
+  expected=$(awk -v name="$asset" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
+  [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$TMP" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'agent SHA256 mismatch' >&2; exit 1; }
+}
+
 if [[ "$UPDATE" -eq 1 ]]; then
   if [[ ! -f "$STATE_DIR/state.json" ]]; then
     echo "no existing agent state in $STATE_DIR; use a full enroll instead" >&2
     exit 1
   fi
   echo "==> updating ctlvps-agent (linux-$ARCH)"
-  TMP="$(mktemp)"
-  curl --fail --silent --show-error --proto "=https" --max-time 300 --max-filesize 134217728 "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
-  "$BIN_DIR/ctlvps-agent" verify-release agent "" "$TMP"
+  download_agent
   install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
   rm -f "$TMP"
   systemctl restart ctlvps-agent
@@ -92,10 +107,7 @@ systemctl enable --now nftables >/dev/null 2>&1 || true
 systemctl enable --now chrony >/dev/null 2>&1 || systemctl enable --now chronyd >/dev/null 2>&1 || true
 
 echo "==> downloading ctlvps-agent (linux-$ARCH)"
-TMP="$(mktemp)"
-curl --fail --silent --show-error --proto "=https" --max-time 300 --max-filesize 134217728 "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
-[[ "$VERIFIER" == /* && -f "$VERIFIER" && ! -L "$VERIFIER" && -x "$VERIFIER" && "$(stat -c %u "$VERIFIER")" == 0 ]] || { echo "independently provision a trusted verifier first" >&2; exit 1; }
-"$VERIFIER" verify-release agent "" "$TMP"
+download_agent
 install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
 rm -f "$TMP"
 

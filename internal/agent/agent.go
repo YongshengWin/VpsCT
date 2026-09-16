@@ -460,8 +460,10 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		BinarySHA256: a.selfSHA,
 	}
 	d.SecurityVersion = 1
-	d.Warnings = append(append([]string(nil), d.Warnings...), secureupdate.TrustWarnings(secureupdate.StateDir, time.Now())...)
 	if policy, e := secureupdate.LoadPolicy(); e == nil {
+		if !policy.ChecksumOnly {
+			d.Warnings = append(append([]string(nil), d.Warnings...), secureupdate.TrustWarnings(secureupdate.StateDir, time.Now())...)
+		}
 		d.SecurityPolicy = true
 		d.SecurityPaused = policy.PauseConfig
 	}
@@ -547,7 +549,7 @@ func (a *Agent) converge(ctx context.Context, force bool) {
 		}
 		c := ds.Nodes[i].Cert
 		if c != nil && c.Mode == "acme" {
-			allowed := false
+			allowed := policy.ChecksumOnly && len(policy.ACMEDomains) == 0
 			for _, domain := range policy.ACMEDomains {
 				if domain == c.Domain {
 					allowed = true

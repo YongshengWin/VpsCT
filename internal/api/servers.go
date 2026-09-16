@@ -93,7 +93,7 @@ func (a *API) serverView(r *http.Request, s domain.Server, withDetail bool) Serv
 
 func (a *API) agentUpdateInfo(r *http.Request, m *agentproto.Metrics, d *agentproto.Diagnostics) *AgentUpdateInfo {
 	base := a.baseURL(r)
-	info := &AgentUpdateInfo{Command: fmt.Sprintf("sudo bash /usr/local/libexec/ctlvps-install-agent.sh --update --server %s", base)}
+	info := &AgentUpdateInfo{Command: officialAgentCommand(base, "", true)}
 	if m != nil {
 		info.Arch = normalizeAgentArch(m.Arch)
 	}
@@ -308,7 +308,7 @@ func (a *API) enrollToken(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	base := a.baseURL(r)
-	cmd := fmt.Sprintf("sudo bash /usr/local/libexec/ctlvps-install-agent.sh --server %q --token %q", base, token)
+	cmd := officialAgentCommand(base, token, false)
 	a.audit(r, "server.enroll_token", s.Name, nil)
 	httpx.OK(w, map[string]any{"token": token, "expires_at": exp, "install_command": cmd, "server_url": base})
 	return nil
@@ -574,4 +574,17 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	a.audit(r, "node.deploy", node.Name, map[string]any{"server": s.Name, "protocol": node.Protocol, "port": node.ListenPort})
 	httpx.JSON(w, http.StatusCreated, node)
 	return nil
+}
+
+// Fetch bootstrap code only from the fixed publisher, never from the panel.
+// Write the complete script before invoking it so a partial transfer cannot run.
+func officialAgentCommand(server, token string, update bool) string {
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	args := " --server " + quote(server)
+	if update {
+		args += " --update"
+	} else {
+		args += " --token " + quote(token)
+	}
+	return `( vpsct_installer=$(mktemp) || exit; trap 'rm -f -- "$vpsct_installer"' EXIT; curl -fLsS --proto '=https' --proto-redir '=https' --max-time 120 https://github.com/YongshengWin/VpsCT/releases/latest/download/install-agent.sh -o "$vpsct_installer" && sudo bash "$vpsct_installer"` + args + ` )`
 }

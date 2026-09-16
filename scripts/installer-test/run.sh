@@ -75,7 +75,7 @@ grep -q '不支持直接降级' /tmp/downgrade.log
 # A verified package whose daemon fails after installation must leave the
 # service stopped and preserve a restorable data/config/version snapshot.
 python3 - <<'PY'
-import hashlib, pathlib, tarfile, tempfile
+import hashlib, pathlib, tarfile, tempfile, shutil
 source=next(pathlib.Path('/assets').glob('*-linux-*.tar.gz'))
 out=pathlib.Path('/broken-assets');out.mkdir()
 with tempfile.TemporaryDirectory() as directory:
@@ -91,8 +91,9 @@ with tempfile.TemporaryDirectory() as directory:
         target=out/f'ctlvps-{broken_version}-linux-{arch}.tar.gz'
         with tarfile.open(target,'w:gz') as t:
             for path in sorted(directory.iterdir()): t.add(path,arcname=path.name)
+for helper in pathlib.Path('/assets').glob('ctlvps-verify-linux-*'): shutil.copyfile(helper,out/helper.name)
 with (out/'SHA256SUMS').open('w') as f:
-    for path in sorted(out.glob('*.tar.gz')): f.write(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n')
+    for path in sorted(p for p in out.iterdir() if p.name != 'SHA256SUMS'): f.write(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n')
 PY
 broken_version=$(cat /broken-assets/VERSION)
 arch=$(uname -m); [[ "$arch" != aarch64 ]] || arch=arm64; [[ "$arch" != x86_64 ]] || arch=amd64
