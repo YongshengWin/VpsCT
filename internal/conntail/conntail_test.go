@@ -1,8 +1,10 @@
 package conntail
 
 import (
+	"ctlvps/internal/agentproto"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,5 +155,27 @@ func TestToBeforeFromSameID(t *testing.T) {
 	evs := tl.Take(10)
 	if len(evs) != 1 || evs[0].SrcHost != "203.0.113.1" || evs[0].DestHost != "b.example" {
 		t.Fatalf("late from: %+v", evs)
+	}
+}
+
+func TestBufferByteBudgetIncludesRequeue(t *testing.T) {
+	tail := New("")
+	tail.MaxBufferBytes = 1024
+	batch := []agentproto.ConnEvent{}
+	for j := 0; j < 100; j++ {
+		batch = append(batch, agentproto.ConnEvent{DestHost: strings.Repeat("x", 256)})
+	}
+	tail.Requeue(batch)
+	if tail.bufferedBytes > 1024 || len(tail.buf) > 2 {
+		t.Fatal("buffer exceeded byte budget")
+	}
+	taken := tail.Take(1)
+	tail.Requeue(taken)
+	if tail.bufferedBytes > 1024 {
+		t.Fatal("retry exceeded byte budget")
+	}
+	tail.Take(100)
+	if tail.bufferedBytes != 0 {
+		t.Fatal("draining left phantom bytes")
 	}
 }

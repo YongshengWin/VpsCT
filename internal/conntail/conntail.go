@@ -81,10 +81,12 @@ func Parse(line string, now time.Time) (agentproto.ConnEvent, bool) {
 
 // Tailer follows a file and buffers parsed events.
 type Tailer struct {
-	Path        string
-	MaxLogBytes int64 // truncate the log once it grows beyond this (sing-box opens with O_APPEND)
-	MaxEvents   int   // ring buffer size
-	Enabled     func() bool
+	Path           string
+	MaxLogBytes    int64 // truncate the log once it grows beyond this (sing-box opens with O_APPEND)
+	MaxEvents      int   // ring buffer size
+	MaxBufferBytes int64
+	bufferedBytes  int64
+	Enabled        func() bool
 	// Only node ids present here are recorded (nil = all).
 	Allowed func(nodeID int64) bool
 
@@ -111,7 +113,7 @@ type half struct {
 
 // New builds a tailer.
 func New(path string) *Tailer {
-	return &Tailer{Path: path, MaxLogBytes: 64 << 20, MaxEvents: 200000, Enabled: func() bool { return true }, byID: map[string]half{}, lastSrc: map[int64]fromHint{}}
+	return &Tailer{Path: path, MaxLogBytes: 64 << 20, MaxEvents: 20000, MaxBufferBytes: 8 << 20, Enabled: func() bool { return true }, byID: map[string]half{}, lastSrc: map[int64]fromHint{}}
 }
 
 // Run follows the file until ctx is done.
@@ -273,13 +275,25 @@ func (t *Tailer) gcLocked(now time.Time) {
 	}
 }
 
-func (t *Tailer) pushLocked(ev agentproto.ConnEvent) {
-	if len(t.buf) >= t.MaxEvents {
-		drop := len(t.buf) / 10
-		t.buf = t.buf[drop:]
-		t.dropped += int64(drop)
+func eventBytes(ev agentproto.ConnEvent) int64 {
+	return int64(128 + len(ev.SrcHost) + len(ev.DestHost))
+}
+func (t *Tailer) trimLocked() {
+	limit := t.MaxEvents
+	if limit < 1 {
+		limit = 1
 	}
+	for len(t.buf) > 0 && (len(t.buf) > limit || (t.MaxBufferBytes > 0 && t.bufferedBytes > t.MaxBufferBytes)) {
+		t.bufferedBytes -= eventBytes(t.buf[0])
+		t.buf[0] = agentproto.ConnEvent{}
+		t.buf = t.buf[1:]
+		t.dropped++
+	}
+}
+func (t *Tailer) pushLocked(ev agentproto.ConnEvent) {
 	t.buf = append(t.buf, ev)
+	t.bufferedBytes += eventBytes(ev)
+	t.trimLocked()
 }
 
 // Take removes up to n events from the buffer.
@@ -291,6 +305,9 @@ func (t *Tailer) Take(n int) []agentproto.ConnEvent {
 	}
 	out := make([]agentproto.ConnEvent, n)
 	copy(out, t.buf[:n])
+	for _, ev := range out {
+		t.bufferedBytes -= eventBytes(ev)
+	}
 	t.buf = append([]agentproto.ConnEvent(nil), t.buf[n:]...)
 	return out
 }
@@ -300,10 +317,10 @@ func (t *Tailer) Requeue(evs []agentproto.ConnEvent) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.buf = append(append([]agentproto.ConnEvent(nil), evs...), t.buf...)
-	if len(t.buf) > t.MaxEvents {
-		t.dropped += int64(len(t.buf) - t.MaxEvents)
-		t.buf = t.buf[:t.MaxEvents]
+	for _, ev := range evs {
+		t.bufferedBytes += eventBytes(ev)
 	}
+	t.trimLocked()
 }
 
 // Pending returns the buffered count and the number of dropped events.

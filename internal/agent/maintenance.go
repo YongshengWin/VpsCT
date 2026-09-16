@@ -15,7 +15,7 @@ import (
 
 func (a *Agent) maintenanceSupported() bool {
 	u, err := url.Parse(a.State.ServerURL)
-	return maintenance.Supported() && a.StateDir == "/var/lib/ctlvps-agent" && executablePath() == "/usr/local/bin/ctlvps-agent" && err == nil && u.Scheme == "https" && u.User == nil
+	return !a.HoldUpdates && maintenance.Supported() && a.StateDir == "/var/lib/ctlvps-agent" && executablePath() == "/usr/local/bin/ctlvps-agent" && err == nil && u.Scheme == "https" && u.User == nil
 }
 
 func (a *Agent) maintain(ctx context.Context, c agentproto.MaintenanceCommand) error {

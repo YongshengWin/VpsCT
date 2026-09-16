@@ -354,7 +354,7 @@ sudo bash uninstall.sh --controller --yes
 sudo bash uninstall.sh --agent --yes
 ```
 
-脚本先停止并禁用相应服务，再删除程序与服务定义。agent 卸载还会停止其部署的全部服务实例，并清理专用 nftables 表 `inet ctlvps`。服务停止失败时会中止文件删除。
+脚本先停止并禁用相应服务，再删除程序与服务定义。agent 卸载还会停止其部署的全部服务实例，并清理专用 nftables 表 `inet ctlvps`、`inet ctlvps_nodes` 以及生成的代理资源与计量 slice。服务停止失败时会中止文件删除。
 
 ### 7.2 同时清空配置与数据
 
@@ -374,7 +374,7 @@ sudo bash uninstall.sh --all --purge --yes
 | 角色 | 默认卸载删除 | 加 `--purge` 额外删除 |
 |---|---|---|
 | 控制端 | `ctlvpsd.service`、发行目录、控制端程序与分发软链接、卸载入口、仓库标识 | `/opt/ctlvps/data/`、`/opt/ctlvps/backups/`、`/etc/ctlvps/ctlvpsd.env` |
-| agent | `ctlvps-agent.service`、本项目的服务实例与模板、agent 和服务程序、专用 nftables 计量表 | `/var/lib/ctlvps-agent/`、`/var/log/ctlvps/`、`/etc/ctlvps/sing-box/`、旧版 `sing-box.json`、`/etc/ctlvps/snell/` |
+| agent | `ctlvps-agent.service`、本项目的服务实例与模板、agent 和服务程序、专用 nftables 计量表 | `/var/lib/ctlvps-agent/`、`/var/log/ctlvps/`、`/etc/ctlvps/sing-box/`、共享进程的 `sing-box.json`、`/etc/ctlvps/snell/` |
 
 两端共用 `/opt/ctlvps` 和 `/etc/ctlvps` 的部分父目录。卸载器按角色清理文件，只会移除已经为空的共享父目录。
 

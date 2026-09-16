@@ -65,6 +65,7 @@ func main() {
 		fs := flag.NewFlagSet("run", flag.ExitOnError)
 		state := fs.String("state", defaultState(), "state directory")
 		level := fs.String("log-level", "info", "debug|info|warn|error")
+		hold := fs.Bool("hold-updates", false, "pin local canary binary; pause auto-update and web maintenance")
 		_ = fs.Parse(os.Args[2:])
 		logger := newLogger(*level)
 		st, err := agent.LoadState(*state)
@@ -73,6 +74,7 @@ func main() {
 			os.Exit(1)
 		}
 		a := agent.New(*state, st, logger, buildinfo.Version)
+		a.HoldUpdates = *hold
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		logger.Info("ctlvps-agent starting", "version", buildinfo.String(), "server", st.ServerURL, "server_id", st.ServerID)

@@ -520,3 +520,18 @@ func (m *Manager) UsageOf(sh domain.Share) Usage {
 	}
 	return u
 }
+
+// EvaluateDeltas enforces quotas for usage already committed atomically by ingestion.
+func (m *Manager) EvaluateDeltas(ctx context.Context, deltas []traffic.ShareDelta) error {
+	for _, d := range deltas {
+		if d.PeriodReset {
+			if err := m.republishShareServers(ctx, d.ShareID); err != nil {
+				return err
+			}
+		}
+		if err := m.evaluate(ctx, d.ShareID); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -1,0 +1,188 @@
+package nft
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+	"sort"
+	"strconv"
+	"strings"
+
+	"ctlvps/internal/agentproto"
+)
+
+// NodeTable is separate from legacy listen-port counters. Marks are reserved
+// for VpsCT and never restored to packet marks (which could affect routing).
+const NodeTable = "ctlvps_nodes"
+const MarkMask uint32 = 0xff000000
+const MarkPrefix uint32 = 0x43000000
+
+func NodeMark(id int64) (uint32, error) {
+	if id <= 0 || id > 0xffffff {
+		return 0, fmt.Errorf("node ID outside accounting mark range: %d", id)
+	}
+	return MarkPrefix | uint32(id), nil
+}
+
+// NodeRules is one atomic nft transaction. Named counters survive every rule
+// update and retired counters remain readable for final settlement.
+func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
+	nodes = append([]agentproto.NodeSpec(nil), nodes...)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	var b strings.Builder
+	fmt.Fprintf(&b, "add table inet %s\n", NodeTable)
+	fmt.Fprintf(&b, "add chain inet %s input { type filter hook input priority -140; policy accept; }\n", NodeTable)
+	fmt.Fprintf(&b, "add chain inet %s output { type filter hook output priority -140; policy accept; }\n", NodeTable)
+	fmt.Fprintf(&b, "flush chain inet %s input\nflush chain inet %s output\n", NodeTable, NodeTable)
+	// Client connections acquire a node identity on input; origin connections
+	// acquire it from SO_MARK on output. Conntrack carries it in both directions.
+	ports, ids := map[int]bool{}, map[int64]bool{}
+	for _, n := range nodes {
+		if n.Core != "singbox" {
+			continue
+		}
+		mark, err := NodeMark(n.NodeID)
+		if err != nil {
+			return "", err
+		}
+		if (!n.Retired && (n.ListenPort < 1 || n.ListenPort > 65535 || ports[n.ListenPort])) || ids[n.NodeID] {
+			return "", fmt.Errorf("duplicate/invalid accounting identity")
+		}
+		ids[n.NodeID] = true
+		if !n.Retired {
+			ports[n.ListenPort] = true
+		}
+		fmt.Fprintf(&b, "add counter inet %s n%d_rx\nadd counter inet %s n%d_tx\n", NodeTable, n.NodeID, NodeTable, n.NodeID)
+		if n.Retired {
+			continue
+		}
+		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct direction original meta l4proto { tcp, udp } th dport %d ct mark & 0x%08x != 0x%08x ct mark set 0x%08x\n", NodeTable, n.ListenPort, MarkMask, MarkPrefix, mark)
+	}
+	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, MarkPrefix)
+	for _, n := range nodes {
+		if n.Core != "singbox" {
+			continue
+		}
+		mark, _ := NodeMark(n.NodeID)
+		action := ""
+		if n.Blocked {
+			action = " drop"
+		}
+		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct mark 0x%08x counter name n%d_rx%s\n", NodeTable, mark, n.NodeID, action)
+		if n.Blocked {
+			fmt.Fprintf(&b, "add rule inet %s output ct mark 0x%08x drop\n", NodeTable, mark)
+		}
+		fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark 0x%08x counter name n%d_tx\n", NodeTable, mark, n.NodeID)
+	}
+	return b.String(), nil
+}
+
+func (m *Manager) EnsureNodes(ctx context.Context, nodes []agentproto.NodeSpec) error {
+	if err := checkMarkRoutes(ctx); err != nil {
+		return err
+	}
+	rules, err := NodeRules(nodes)
+	if err != nil {
+		return err
+	}
+	if _, err = m.run(ctx, rules, "--check", "-f", "-"); err != nil {
+		return err
+	}
+	_, err = m.run(ctx, rules, "-f", "-")
+	return err
+}
+
+func (m *Manager) ReadNodes(ctx context.Context) ([]agentproto.PortCounter, error) {
+	out, err := m.run(ctx, "", "-j", "list", "counters", "table", "inet", NodeTable)
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Nftables []struct {
+			Counter *struct {
+				Name    string
+				Bytes   int64
+				Packets int64
+			}
+		}
+	}
+	if err = json.Unmarshal(out, &doc); err != nil {
+		return nil, err
+	}
+	counters := map[int64]*agentproto.PortCounter{}
+	seen := map[int64]int{}
+	for _, entry := range doc.Nftables {
+		if entry.Counter == nil {
+			continue
+		}
+		c := entry.Counter
+		var id int64
+		var dir string
+		if _, err := fmt.Sscanf(c.Name, "n%d_%s", &id, &dir); err != nil || id <= 0 || (dir != "rx" && dir != "tx") {
+			continue
+		}
+		p := counters[id]
+		if p == nil {
+			p = &agentproto.PortCounter{NodeID: id, Source: "nft-node-v1", FromZero: true}
+			counters[id] = p
+		}
+		if dir == "rx" {
+			p.Rx, p.RxPkts = c.Bytes, c.Packets
+			seen[id] |= 1
+		} else {
+			p.Tx, p.TxPkts = c.Bytes, c.Packets
+			seen[id] |= 2
+		}
+	}
+	outCounters := make([]agentproto.PortCounter, 0, len(counters))
+	for id, c := range counters {
+		if seen[id] != 3 {
+			return nil, fmt.Errorf("incomplete node counter %d", id)
+		}
+		outCounters = append(outCounters, *c)
+	}
+	sort.Slice(outCounters, func(i, j int) bool { return outCounters[i].NodeID < outCounters[j].NodeID })
+	return outCounters, nil
+}
+
+func (m *Manager) NodesExist(ctx context.Context) bool {
+	_, err := m.run(ctx, "", "list", "table", "inet", NodeTable)
+	return err == nil
+}
+
+// A packet mark must not accidentally select an existing policy-routing table.
+func checkMarkRoutes(ctx context.Context) error {
+	for _, family := range []string{"-4", "-6"} {
+		raw, err := exec.CommandContext(ctx, "ip", family, "-j", "rule", "show").Output()
+		if err != nil {
+			return fmt.Errorf("inspect routing marks: %w", err)
+		}
+		var rules []map[string]any
+		if err = json.Unmarshal(raw, &rules); err != nil {
+			return err
+		}
+		number := func(v any) (uint32, error) { n, e := strconv.ParseUint(fmt.Sprint(v), 0, 32); return uint32(n), e }
+		for _, r := range rules {
+			v, ok := r["fwmark"]
+			if !ok {
+				continue
+			}
+			mark, e := number(v)
+			if e != nil {
+				return fmt.Errorf("unrecognized policy routing mark")
+			}
+			mask := uint32(0xffffffff)
+			if v, ok := r["fwmask"]; ok {
+				mask, e = number(v)
+				if e != nil {
+					return e
+				}
+			}
+			if (mark^MarkPrefix)&mask&MarkMask == 0 {
+				return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+			}
+		}
+	}
+	return nil
+}

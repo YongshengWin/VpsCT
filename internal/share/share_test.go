@@ -226,6 +226,7 @@ func TestTrafficIngestDeltas(t *testing.T) {
 	if !res.Reset || len(res.Shares) != 0 {
 		t.Fatalf("first heartbeat must only set baseline: %+v", res)
 	}
+	hb.TS = hb.TS.Add(time.Second)
 	hb.Metrics.NetRx, hb.Metrics.NetTx = 1500, 2600
 	hb.Ports[0].Rx, hb.Ports[0].Tx = 150, 260
 	res, err = ing.Ingest(ctx, srv, hb)
@@ -237,6 +238,7 @@ func TestTrafficIngestDeltas(t *testing.T) {
 	}
 	// epoch change with still-climbing NIC counters (agent restart): rebase only
 	hb.Epoch = "e1.5"
+	hb.TS = hb.TS.Add(time.Second)
 	hb.Metrics.NetRx, hb.Metrics.NetTx = 1600, 2700
 	hb.Ports[0].Rx, hb.Ports[0].Tx = 160, 270
 	res, _ = ing.Ingest(ctx, srv, hb)
@@ -245,6 +247,7 @@ func TestTrafficIngestDeltas(t *testing.T) {
 	}
 	// epoch change after a real reset (reboot): count the new readings
 	hb.Epoch = "e2"
+	hb.TS = hb.TS.Add(time.Second)
 	hb.Metrics.NetRx, hb.Metrics.NetTx = 10, 20
 	hb.Ports[0].Rx, hb.Ports[0].Tx = 1, 2
 	res, _ = ing.Ingest(ctx, srv, hb)
@@ -255,11 +258,11 @@ func TestTrafficIngestDeltas(t *testing.T) {
 	if up != 51 || down != 62 {
 		t.Fatalf("node totals: %d %d", up, down)
 	}
-	if err := m.ApplyDeltas(ctx, res.Shares); err != nil {
+	if err := m.EvaluateDeltas(ctx, res.Shares); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := st.GetShare(ctx, sh.ID)
-	if got.UsedUpload != 1 || got.UsedDownload != 2 {
+	if got.UsedUpload != 51 || got.UsedDownload != 62 {
 		t.Fatalf("share usage: %+v", got)
 	}
 	series, err := ing.Daily(ctx, store.SubjectServer, srv.ID, 30)

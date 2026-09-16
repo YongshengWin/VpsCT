@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"ctlvps/internal/agentproto"
 	"encoding/json"
 	"errors"
 	"os"
@@ -11,7 +12,18 @@ import (
 )
 
 // State is persisted in <stateDir>/state.json.
+type MeterIdentity struct {
+	NodeID int64  `json:"node_id"`
+	Port   int    `json:"port"`
+	Core   string `json:"core"`
+}
+
 type State struct {
+	LegacySettled     bool                  `json:"legacy_settled,omitempty"`
+	PendingSettlement *agentproto.Heartbeat `json:"pending_settlement,omitempty"`
+	MeterNodes        []MeterIdentity       `json:"meter_nodes,omitempty"`
+
+	MeteringV1      bool      `json:"metering_v1,omitempty"`
 	ServerURL       string    `json:"server_url"`
 	AgentToken      string    `json:"agent_token"`
 	ServerID        int64     `json:"server_id"`
@@ -54,8 +66,27 @@ func (s *State) Save(dir string) error {
 		return err
 	}
 	tmp := StatePath(dir) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, StatePath(dir))
+	if _, err = f.Write(b); err == nil {
+		err = f.Sync()
+	}
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = os.Rename(tmp, StatePath(dir)); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

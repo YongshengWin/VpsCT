@@ -4,15 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/nft"
 )
 
 // SingBox drives a single sing-box service hosting all sing-box nodes.
@@ -23,7 +27,8 @@ type SingBox struct {
 	// It is injected so config generation is testable without disk access.
 	CertResolver func(spec *agentproto.CertSpec) (CertFiles, error)
 	// Email used for ACME registrations (optional).
-	ACMEEmail string
+	ACMEEmail     string
+	binaryChanged bool
 }
 
 // NewSingBox builds the driver with default resolvers.
@@ -39,7 +44,7 @@ func NewSingBox(p Paths, sd *Systemd) *SingBox {
 }
 
 const (
-	singboxUnit         = "ctlvps-singbox.service" // legacy monolith, stopped on apply
+	singboxUnit         = "ctlvps-singbox.service" // shared process
 	singboxTemplateUnit = "ctlvps-singbox@.service"
 )
 
@@ -80,6 +85,7 @@ func (d *SingBox) EnsureInstalled(ctx context.Context, v agentproto.CoreVersion)
 	if err := installBinary(ctx, d.Paths.BinDir, "sing-box", v); err != nil {
 		return false, fmt.Errorf("install sing-box %s: %w", v.Version, err)
 	}
+	d.binaryChanged = true
 	return true, nil
 }
 
@@ -141,10 +147,17 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 	sorted := append([]agentproto.NodeSpec(nil), nodes...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].NodeID < sorted[j].NodeID })
 	logLevel := "warn"
+	outbounds := []any{}
+	rules := []any{map[string]any{"ip_is_private": true, "action": "reject"}}
 	for _, n := range sorted {
-		if n.Blocked {
-			continue // no inbound = connection refused, nothing to meter
+		// Access is enforced by nftables, independently of process lifetime.
+		mark, err := nft.NodeMark(n.NodeID)
+		if err != nil {
+			return nil, err
 		}
+		outTag := fmt.Sprintf("node-%d-direct", n.NodeID)
+		outbounds = append(outbounds, map[string]any{"type": "direct", "tag": outTag, "routing_mark": mark})
+		rules = append(rules, map[string]any{"inbound": []string{InboundTag(n.NodeID)}, "action": "route", "outbound": outTag})
 		if n.ConnlogEnabled {
 			logLevel = "info"
 		}
@@ -163,7 +176,7 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 				"server_name": str(p, "handshake_server"),
 				"reality": map[string]any{
 					"enabled":     true,
-					"handshake":   map[string]any{"server": str(p, "handshake_server"), "server_port": hsPort},
+					"handshake":   map[string]any{"server": str(p, "handshake_server"), "server_port": hsPort, "routing_mark": mark},
 					"private_key": str(p, "reality_private_key"),
 					"short_id":    []string{str(p, "reality_short_id")},
 				},
@@ -182,7 +195,8 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 			if op := str(p, "obfs_password"); op != "" {
 				in["obfs"] = map[string]any{"type": "salamander", "password": op}
 			}
-			in["masquerade"] = "https://www.bing.com"
+			// A local decoy avoids unassigned outbound traffic on failed auth.
+			in["masquerade"] = map[string]any{"type": "string", "status_code": 404, "content": "Not Found"}
 			in["ignore_client_bandwidth"] = false
 			tls, err := d.tlsBlock(n, ds, []string{"h3"})
 			if err != nil {
@@ -220,39 +234,35 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 		strategy = "ipv4_only"
 	}
 	cfg := map[string]any{
-		"log": map[string]any{"level": logLevel, "timestamp": true, "output": d.Paths.LogPath()},
-		"dns": map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}},
+		"log":       map[string]any{"level": logLevel, "timestamp": true, "output": d.Paths.LogPath()},
+		"dns":       map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}},
 		"inbounds":  inbounds,
-		"outbounds": []any{map[string]any{"type": "direct", "tag": "direct"}},
+		"outbounds": outbounds,
 		"route": map[string]any{
 			"default_domain_resolver": map[string]any{"server": "local", "strategy": strategy},
-			"rules":                   []any{map[string]any{"ip_is_private": true, "action": "reject"}},
-			"final":                   "direct",
+			"rules":                   rules,
 		},
 	}
 	return cfg, nil
 }
 
-func (d *SingBox) stopLegacy(ctx context.Context) bool {
-	if !d.Systemd.IsActive(ctx, singboxUnit) {
-		return false
+func (d *SingBox) stopAllInstances(ctx context.Context) (bool, error) {
+	units := d.Systemd.ListUnits(ctx, "ctlvps-singbox@*.service")
+	if _, err := os.Stat(filepath.Join(d.Systemd.UnitDir, singboxUnit)); err == nil || d.Systemd.IsActive(ctx, singboxUnit) {
+		units = append(units, singboxUnit)
 	}
-	_ = d.Systemd.StopDisable(ctx, singboxUnit)
-	return true
+	var errs []error
+	for _, u := range units {
+		if err := d.Systemd.StopDisable(ctx, u); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return len(units) > 0, errors.Join(errs...)
 }
 
-func (d *SingBox) stopAllInstances(ctx context.Context) bool {
-	changed := d.stopLegacy(ctx)
-	for _, u := range d.Systemd.ListUnits(ctx, "ctlvps-singbox@*.service") {
-		_ = d.Systemd.StopDisable(ctx, u)
-		changed = true
-	}
-	return changed
-}
-
-// Apply implements Driver.
-func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec) (bool, error) {
-	changed := d.stopLegacy(ctx)
+// Apply validates a complete candidate before touching a running service.
+// The agent installs node accounting/firewall rules before invoking this method.
+func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec) (applied bool, applyErr error) {
 	live := 0
 	for _, n := range nodes {
 		if !n.Blocked {
@@ -260,123 +270,125 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 		}
 	}
 	if live == 0 {
-		return d.stopAllInstances(ctx) || changed, nil
+		return d.stopAllInstances(ctx)
 	}
-	if err := os.MkdirAll(d.Paths.LogDir, 0o755); err != nil {
-		return changed, err
+	if err := os.MkdirAll(d.Paths.LogDir, 0755); err != nil {
+		return false, err
 	}
-	env := fmt.Sprintf("Environment=GOMEMLIMIT=%dMiB", max(ds.Tuning.GoMemLimitMB, 64))
-	unit := ServiceUnit("ctlvps sing-box (%i)", fmt.Sprintf("%s run -c %s/%%i.json", d.bin(), d.confDir()), ds.Tuning, env, "IPAccounting=yes", "ExecReload=/bin/kill -HUP $MAINPID")
-	unitChanged, err := d.Systemd.WriteUnit(singboxTemplateUnit, unit)
+	cfg, err := d.BuildConfig(ds, nodes)
 	if err != nil {
-		return changed, err
+		return false, err
 	}
-	if unitChanged {
-		changed = true
-		if err := d.Systemd.DaemonReload(ctx); err != nil {
-			return changed, err
-		}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return false, err
 	}
-	want := map[int]bool{}
-	sorted := append([]agentproto.NodeSpec(nil), nodes...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ListenPort < sorted[j].ListenPort })
-	for _, n := range sorted {
-		if n.Blocked || n.ListenPort <= 0 {
-			continue
-		}
-		want[n.ListenPort] = true
-		cfg, err := d.BuildConfig(ds, []agentproto.NodeSpec{n})
-		if err != nil {
-			return changed, err
-		}
-		data, _ := json.MarshalIndent(cfg, "", "  ")
-		c, err := WriteIfChanged(d.instanceConfig(n.ListenPort), data, 0o600)
-		if err != nil {
-			return changed, err
-		}
-		u := SingBoxUnit(n.ListenPort)
-		if c || unitChanged || !d.Systemd.IsActive(ctx, u) {
-			if out, err := exec.CommandContext(ctx, d.bin(), "check", "-c", d.instanceConfig(n.ListenPort)).CombinedOutput(); err != nil {
-				return changed, fmt.Errorf("sing-box check :%d: %s", n.ListenPort, strings.TrimSpace(string(out)))
-			}
-			if err := d.Systemd.EnableRestart(ctx, u); err != nil {
-				return changed, err
-			}
-			changed = true
+	candidate := d.configPath() + ".candidate"
+	if _, err = WriteIfChanged(candidate, data, 0600); err != nil {
+		return false, err
+	}
+	defer os.Remove(candidate)
+	if out, e := exec.CommandContext(ctx, d.bin(), "check", "-c", candidate).CombinedOutput(); e != nil {
+		return false, fmt.Errorf("sing-box candidate rejected: %v: %s", e, strings.TrimSpace(string(out)))
+	}
+	old, readErr := os.ReadFile(d.configPath())
+	unitPath := filepath.Join(d.Systemd.UnitDir, singboxUnit)
+	oldUnit, _ := os.ReadFile(unitPath)
+	env := fmt.Sprintf("Environment=GOMEMLIMIT=%dMiB", max(ds.Tuning.GoMemLimitMB, 64))
+	unit := ServiceUnit("ctlvps sing-box", fmt.Sprintf("%s run -c %s", d.bin(), d.configPath()), ds.Tuning, env, "IPAccounting=yes")
+	changed := d.binaryChanged || !bytes.Equal(old, data) || string(oldUnit) != unit || !d.Systemd.IsActive(ctx, singboxUnit)
+	if !changed {
+		return false, nil
+	}
+
+	// Capture running services before any destructive step, and restore on
+	// every error path, including filesystem/daemon-reload failures.
+	legacy := d.Systemd.ListUnits(ctx, "ctlvps-singbox@*.service")
+	activeLegacy := []string{}
+	for _, u := range legacy {
+		if d.Systemd.IsActive(ctx, u) {
+			activeLegacy = append(activeLegacy, u)
 		}
 	}
-	for _, u := range d.Systemd.ListUnits(ctx, "ctlvps-singbox@*.service") {
-		portStr := strings.TrimSuffix(strings.TrimPrefix(u, "ctlvps-singbox@"), ".service")
-		port, err := strconv.Atoi(portStr)
-		if err != nil || want[port] {
-			continue
+	wasActive := d.Systemd.IsActive(ctx, singboxUnit)
+	defer func() {
+		if applyErr == nil {
+			return
 		}
-		_ = d.Systemd.StopDisable(ctx, u)
-		_ = os.Remove(d.instanceConfig(port))
-		changed = true
-	}
-	if entries, err := os.ReadDir(d.confDir()); err == nil {
-		for _, e := range entries {
-			p, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
-			if err == nil && !want[p] {
-				_ = os.Remove(filepath.Join(d.confDir(), e.Name()))
-			}
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		failures := []error{applyErr}
+		if e := d.Systemd.StopUnits(c, []string{singboxUnit}); e != nil {
+			failures = append(failures, e)
+		}
+		if readErr == nil {
+			_, e := WriteIfChanged(d.configPath(), old, 0600)
+			failures = append(failures, e)
+		} else {
+			_ = os.Remove(d.configPath())
+		}
+		if len(oldUnit) > 0 {
+			_, e := WriteIfChanged(unitPath, oldUnit, 0644)
+			failures = append(failures, e)
+		} else {
+			_ = os.Remove(unitPath)
+		}
+		failures = append(failures, d.Systemd.DaemonReload(c))
+		if wasActive {
+			failures = append(failures, d.Systemd.EnableRestart(c, singboxUnit))
+		}
+		for _, u := range activeLegacy {
+			failures = append(failures, d.Systemd.EnableRestart(c, u))
+		}
+		applyErr = errors.Join(failures...)
+	}()
+
+	for _, u := range legacy {
+		if err = d.Systemd.StopDisable(ctx, u); err != nil {
+			return false, err
 		}
 	}
-	_ = os.Remove(d.configPath())
-	return changed, nil
+	if _, err = WriteIfChanged(d.configPath(), data, 0600); err != nil {
+		return false, err
+	}
+	if _, err = d.Systemd.WriteUnit(singboxUnit, unit); err != nil {
+		return false, err
+	}
+	if err = d.Systemd.DaemonReload(ctx); err == nil {
+		err = d.Systemd.EnableRestart(ctx, singboxUnit)
+	}
+	if err == nil {
+		timer := time.NewTimer(300 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if err == nil && !d.Systemd.IsActive(ctx, singboxUnit) {
+		err = fmt.Errorf("shared sing-box did not become active")
+	}
+	if err != nil {
+		return false, fmt.Errorf("shared sing-box activation failed: %w", err)
+	}
+	d.binaryChanged = false
+
+	return true, nil
 }
 
-// Status implements Driver (aggregated over instances).
 func (d *SingBox) Status(ctx context.Context) agentproto.CoreStatus {
-	st := agentproto.CoreStatus{Name: "sing-box", Version: recordedVersion(d.bin())}
+	st := d.Systemd.Show(ctx, singboxUnit)
+	st.Name, st.Version = "sing-box", recordedVersion(d.bin())
 	_, err := os.Stat(d.bin())
 	st.Installed = err == nil
-	if st.Installed && st.Version == "" {
-		st.Version = strings.TrimSpace(strings.TrimPrefix(installedVersion(ctx, d.bin(), "version"), "sing-box version "))
-		if i := strings.IndexByte(st.Version, '\n'); i > 0 {
-			st.Version = st.Version[:i]
-		}
-	}
-	units := d.Systemd.ListUnits(ctx, "ctlvps-singbox@*.service")
-	if len(units) == 0 && d.Systemd.IsActive(ctx, singboxUnit) {
-		one := d.Systemd.Show(ctx, singboxUnit)
-		one.Name, one.Version, one.Installed = st.Name, st.Version, st.Installed
-		return one
-	}
-	st.Instances = len(units)
-	active := 0
-	for _, u := range units {
-		s := d.Systemd.Show(ctx, u)
-		if s.Active {
-			active++
-		}
-		st.RSSBytes += s.RSSBytes
-		st.NRestarts += s.NRestarts
-		if s.LastError != "" && st.LastError == "" {
-			st.LastError = u + ": " + s.LastError
-		}
-		if st.Since.IsZero() || (!s.Since.IsZero() && s.Since.Before(st.Since)) {
-			st.Since = s.Since
-		}
-	}
-	st.Active = len(units) > 0 && active == len(units)
-	if len(units) > 0 && active < len(units) && st.LastError == "" {
-		st.LastError = fmt.Sprintf("%d/%d instances active", active, len(units))
-	}
-	if !st.Active && st.Installed && st.LastError == "" {
-		if lines := d.Systemd.JournalTail(ctx, singboxTemplateUnit, 3); len(lines) > 0 {
-			st.LastError = lines[len(lines)-1]
-		}
+	if st.Active {
+		st.Instances = 1
 	}
 	return st
 }
 
-// Stop implements Driver.
-func (d *SingBox) Stop(ctx context.Context) error {
-	d.stopAllInstances(ctx)
-	return nil
-}
+func (d *SingBox) Stop(ctx context.Context) error { _, err := d.stopAllInstances(ctx); return err }
 
 // Certs reports certificate expiry for self-signed/external nodes.
 func (d *SingBox) Certs(nodes []agentproto.NodeSpec) []agentproto.CertStatus {
@@ -400,12 +412,17 @@ func (d *SingBox) Certs(nodes []agentproto.NodeSpec) []agentproto.CertStatus {
 
 // RecentErrors returns the newest warning+ lines of the sing-box log.
 func (d *SingBox) RecentErrors(n int) []string {
-	data, err := os.ReadFile(d.Paths.LogPath())
+	f, err := os.Open(d.Paths.LogPath())
 	if err != nil {
 		return nil
 	}
-	if len(data) > 256<<10 {
-		data = data[len(data)-256<<10:]
+	defer f.Close()
+	if st, e := f.Stat(); e == nil && st.Size() > 256<<10 {
+		_, _ = f.Seek(-(256 << 10), 2)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 256<<10))
+	if err != nil {
+		return nil
 	}
 	var out []string
 	for _, line := range bytes.Split(data, []byte("\n")) {
