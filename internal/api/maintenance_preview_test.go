@@ -55,7 +55,7 @@ func TestMaintenanceBrowserPreview(t *testing.T) {
 	tok := c.do("POST", "/api/v1/servers/1/enroll-token", nil, 200)
 	en := c.do("POST", "/api/agent/v1/enroll", agentproto.EnrollRequest{EnrollToken: tok["token"].(string), Version: "v0.1.0", Arch: "amd64"}, 200)
 	c.agent = en["agent_token"].(string)
-	c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "v0.1.0", Epoch: "preview", TS: time.Now(), Diagnostics: agentproto.Diagnostics{Maintenance: 1}}, 200)
+	c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "v0.1.0", Epoch: "preview", TS: time.Now(), Diagnostics: agentproto.Diagnostics{SecurityVersion: 1, SecurityPolicy: true, Maintenance: 1}}, 200)
 	t.Log("Inert browser preview:", c.srv.URL)
 	time.Sleep(10 * time.Minute)
 }

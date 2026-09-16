@@ -498,7 +498,27 @@ func (s *Service) Render(ctx context.Context, sub domain.Subscription, format st
 }
 
 // RenderBundle dispatches on format.
-func RenderBundle(b *Bundle, format string) (*Rendered, error) {
+func RenderBundle(b *Bundle, format string) (result *Rendered, err error) {
+	if len(b.Proxies)+len(b.Chains) > 10000 {
+		return nil, fmt.Errorf("订阅节点过多")
+	}
+	for _, p := range b.Proxies {
+		if e := proxynode.Validate(p); e != nil {
+			return nil, e
+		}
+	}
+	for _, c := range b.Chains {
+		if e := proxynode.Validate(c.Proxy); e != nil {
+			return nil, e
+		}
+	}
+	defer func() {
+		if result != nil && len(result.Body) > 16<<20 {
+			result = nil
+			err = fmt.Errorf("生成订阅超过大小限制")
+		}
+	}()
+
 	switch NormalizeFormat(format) {
 	case FormatRaw:
 		return RenderRaw(b, false)

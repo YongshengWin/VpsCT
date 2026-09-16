@@ -55,3 +55,30 @@ func TestKernelNodeAccounting(t *testing.T) {
 	}
 	t.Log(string(out))
 }
+
+func TestKernelEgressBoundary(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getenv("CTLVPS_KERNEL_TEST") != "1" {
+		t.Skip("isolated Linux test")
+	}
+	dir := t.TempDir()
+	nodes := []agentproto.NodeSpec{{NodeID: 1, Core: "singbox"}}
+	group := "/ctlvps-egress-fixture"
+	if e := os.Mkdir("/sys/fs/cgroup"+group, 0755); e != nil {
+		t.Fatal(e)
+	}
+	defer os.Remove("/sys/fs/cgroup" + group)
+	rules, e := EgressRules(nodes, map[int64]string{1: group}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	p := filepath.Join(dir, "egress.nft")
+	if e = os.WriteFile(p, []byte(rules), 0600); e != nil {
+		t.Fatal(e)
+	}
+	cmd := exec.Command("python3", "/work/scripts/meter-test/egress.py", p, group)
+	out, e := cmd.CombinedOutput()
+	if e != nil {
+		t.Fatalf("%v\n%s", e, out)
+	}
+	t.Log(string(out))
+}

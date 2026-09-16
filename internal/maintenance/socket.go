@@ -14,7 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"ctlvps/internal/agentnet"
 	"ctlvps/internal/buildinfo"
+	"ctlvps/internal/secureupdate"
+	"runtime"
 )
 
 func repository() (string, error) {
@@ -67,6 +70,10 @@ func Serve() error {
 		info := Info{Available: err == nil, Version: buildinfo.Version, Repository: repo, Jobs: m.List()}
 		if err != nil {
 			info.Reason = "未检测到安装器管理的控制端，请先从终端升级安装"
+		}
+		if _, e := secureupdate.LoadPolicy(); e != nil {
+			info.Available = false
+			info.Reason = "本机独立发布信任根未配置，维护操作已关闭"
 		}
 		// Agent jobs share admission control, but are displayed on server details.
 		jobs := []Job{}
@@ -136,6 +143,9 @@ func Latest(ctx context.Context, repo string) (Release, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "VpsCT-maintenance")
 	c := &http.Client{Timeout: 20 * time.Second}
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		c.Transport = agentnet.Transport{Public: true}
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return Release{}, err

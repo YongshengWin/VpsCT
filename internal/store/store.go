@@ -3,6 +3,8 @@ package store
 
 import (
 	"context"
+	"crypto/cipher"
+	"ctlvps/internal/backup"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,19 +22,33 @@ var ErrNotFound = errors.New("not found")
 
 // Store wraps the main SQLite database.
 type Store struct {
-	db  *sql.DB
-	Now func() time.Time
+	secret          cipher.AEAD
+	migratedSecrets bool
+	db              *sql.DB
+	Now             func() time.Time
 }
 
 // Open opens (creating if needed) the database at path and applies migrations.
 // Use ":memory:" for tests.
 func Open(path string) (*Store, error) {
+	keyPath := path + ".key"
+	if path == ":memory:" {
+		keyPath = ""
+	}
+	return OpenWithKey(path, keyPath)
+}
+
+func OpenWithKey(path, keyPath string) (*Store, error) {
+	secret, err := loadSecretKey(keyPath)
+	if err != nil {
+		return nil, err
+	}
 	dsn := path
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return nil, err
 		}
-		dsn = "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)"
+		dsn = "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=secure_delete(1)&_pragma=max_page_count(262144)&_pragma=journal_size_limit(16777216)"
 	} else {
 		dsn = "file::memory:?cache=shared&_pragma=foreign_keys(1)"
 	}
@@ -45,10 +61,28 @@ func Open(path string) (*Store, error) {
 	} else {
 		db.SetMaxOpenConns(8)
 	}
-	s := &Store{db: db, Now: func() time.Time { return time.Now().UTC() }}
+	s := &Store{secret: secret, db: db, Now: func() time.Time { return time.Now().UTC() }}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := s.migrateSecrets(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if s.migratedSecrets && path != ":memory:" {
+		if _, err = s.db.Exec("VACUUM; PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+	if path != ":memory:" {
+		for _, p := range []string{path, path + "-wal", path + "-shm"} {
+			if err := os.Chmod(p, 0600); err != nil && !os.IsNotExist(err) {
+				db.Close()
+				return nil, err
+			}
+		}
 	}
 	if err := s.SplitInlineChains(context.Background()); err != nil {
 		db.Close()
@@ -103,9 +137,19 @@ func (s *Store) Backup(ctx context.Context, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
 		return err
 	}
-	_ = os.Remove(dst)
-	_, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, dst)
-	return err
+	dir, err := os.MkdirTemp(filepath.Dir(dst), ".snapshot-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	snapshot := filepath.Join(dir, "data.db")
+	if _, err = s.db.ExecContext(ctx, `VACUUM INTO ?`, snapshot); err != nil {
+		return err
+	}
+	if err = os.Chmod(snapshot, 0600); err != nil {
+		return err
+	}
+	return backup.File(snapshot, dst, s.secret, false)
 }
 
 // ---- helpers ----

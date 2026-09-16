@@ -21,14 +21,14 @@ type MaintenanceJob struct {
 func (s *Store) CreateMaintenance(ctx context.Context, j MaintenanceJob) error {
 	r, _ := json.Marshal(j.Request)
 	result, _ := json.Marshal(j.Job)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO maintenance_jobs(id,server_id,request,status,result,report_token,report_hash,agent_sha,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, j.ID, j.ServerID, string(r), j.Status, string(result), j.ReportToken, auth.HashToken(j.ReportToken), j.AgentSHA, fmtTime(j.CreatedAt), fmtTime(j.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO maintenance_jobs(id,server_id,request,status,result,report_token,report_hash,agent_sha,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, j.ID, j.ServerID, string(r), j.Status, string(result), s.seal("maintenance_jobs.report_token", j.ReportToken), auth.HashToken(j.ReportToken), j.AgentSHA, fmtTime(j.CreatedAt), fmtTime(j.UpdatedAt))
 	return err
 }
 
-func scanMaintenance(row interface{ Scan(...any) error }) (MaintenanceJob, error) {
+func (s *Store) scanMaintenance(row interface{ Scan(...any) error }) (MaintenanceJob, error) {
 	var j MaintenanceJob
 	var result, status string
-	err := row.Scan(&j.ServerID, &result, &status, &j.ReportToken, &j.ReportHash, &j.AgentSHA)
+	err := row.Scan(&j.ServerID, &result, &status, s.scanSecret("maintenance_jobs.report_token", &j.ReportToken), &j.ReportHash, &j.AgentSHA)
 	if isNoRows(err) {
 		return j, ErrNotFound
 	}
@@ -41,7 +41,7 @@ func scanMaintenance(row interface{ Scan(...any) error }) (MaintenanceJob, error
 }
 
 func (s *Store) GetMaintenance(ctx context.Context, id string) (MaintenanceJob, error) {
-	return scanMaintenance(s.db.QueryRowContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha FROM maintenance_jobs WHERE id=?`, id))
+	return s.scanMaintenance(s.db.QueryRowContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha FROM maintenance_jobs WHERE id=?`, id))
 }
 
 func (s *Store) ListMaintenance(ctx context.Context, serverID int64) ([]MaintenanceJob, error) {
@@ -52,7 +52,7 @@ func (s *Store) ListMaintenance(ctx context.Context, serverID int64) ([]Maintena
 	defer rows.Close()
 	out := []MaintenanceJob{}
 	for rows.Next() {
-		j, err := scanMaintenance(rows)
+		j, err := s.scanMaintenance(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func (s *Store) SaveMaintenance(ctx context.Context, j MaintenanceJob, previous 
 	if !j.Active() {
 		token = ""
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE maintenance_jobs SET status=?,result=?,report_token=?,updated_at=? WHERE id=? AND status=?`, j.Status, string(b), token, fmtTime(j.UpdatedAt), j.ID, previous)
+	r, err := s.db.ExecContext(ctx, `UPDATE maintenance_jobs SET status=?,result=?,report_token=?,updated_at=? WHERE id=? AND status=?`, j.Status, string(b), s.seal("maintenance_jobs.report_token", token), fmtTime(j.UpdatedAt), j.ID, previous)
 	if err != nil {
 		return err
 	}

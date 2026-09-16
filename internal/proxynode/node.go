@@ -16,11 +16,11 @@ import (
 // Proxy is an in-memory, Clash-shaped node: name/type/server/port plus a
 // free-form parameter map with Clash keys.
 type Proxy struct {
-	Name     string
-	Type     string
-	Server   string
-	Port     int
-	Params   map[string]any
+	Name   string
+	Type   string
+	Server string
+	Port   int
+	Params map[string]any
 }
 
 // FromDomain unpacks a domain.Node.
@@ -81,7 +81,12 @@ func FromClashMap(m map[string]any) (Proxy, error) {
 		case "name", "type", "server", "port":
 			continue
 		}
-		p.Params[k] = normalizeYAML(v)
+		if proxyFields[k] {
+			p.Params[k] = normalizeYAML(v)
+		}
+	}
+	if err := validateProxy(p); err != nil {
+		return p, err
 	}
 	return p, nil
 }

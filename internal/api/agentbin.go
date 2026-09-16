@@ -21,8 +21,8 @@ type agentBinMeta struct {
 }
 
 var agentBinCache struct {
-	mu   sync.Mutex
-	by   map[string]agentBinMeta
+	mu sync.Mutex
+	by map[string]agentBinMeta
 }
 
 func normalizeAgentArch(arch string) string {

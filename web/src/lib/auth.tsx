@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const meta = useQuery({ queryKey: ["meta"], queryFn: () => get<Meta>("/api/v1/meta"), enabled: !!me.data });
 
   React.useEffect(() => {
-    const onUnauthorized = () => qc.setQueryData(["auth", "me"], null);
+    const onUnauthorized = () => { qc.setQueryData(["auth", "me"], null); qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" }); };
     window.addEventListener("ctlvps:unauthorized", onUnauthorized);
     return () => window.removeEventListener("ctlvps:unauthorized", onUnauthorized);
   }, [qc]);

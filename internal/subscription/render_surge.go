@@ -10,10 +10,12 @@ import (
 )
 
 func surgeQuote(s string) string {
+	s = strings.NewReplacer("\n", " ", "\r", " ", "\x00", "").Replace(s)
 	return `"` + strings.ReplaceAll(s, `"`, `'`) + `"`
 }
 
 func surgeIdent(name string) string {
+	name = strings.NewReplacer("\n", " ", "\r", " ", "\x00", "").Replace(name)
 	if name == "" {
 		return name
 	}
@@ -28,6 +30,9 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 	var parts []string
 	add := func(k, v string) {
 		if v != "" {
+			if strings.ContainsAny(v, ",\"\r\n") {
+				v = surgeQuote(v)
+			}
 			parts = append(parts, k+"="+v)
 		}
 	}
@@ -109,7 +114,7 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		parts = append(parts, "anytls", host, port)
 		add("password", p.Str("password"))
 		if via != "" {
-			add("underlying-proxy", surgeQuote(via))
+			parts = append(parts, "underlying-proxy="+surgeQuote(via))
 		}
 		sni := p.Str("sni")
 		if sni == "" {
@@ -153,7 +158,7 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		return ""
 	}
 	if via != "" && p.Type != "anytls" {
-		add("underlying-proxy", surgeQuote(via))
+		parts = append(parts, "underlying-proxy="+surgeQuote(via))
 		add("test-timeout", "8")
 	}
 	if p.Type != "socks5" && p.Type != "http" {

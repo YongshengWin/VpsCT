@@ -342,4 +342,8 @@ CREATE TRIGGER node_meter_update AFTER UPDATE ON nodes WHEN NEW.server_id IS NOT
  INSERT OR REPLACE INTO node_meter_identities VALUES(NEW.id,NEW.server_id,NEW.listen_port,NEW.core,NEW.share_id);
 END;
 `,
+	`ALTER TABLE subscriptions ADD COLUMN short_code_hash TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_sub_short_hash ON subscriptions(short_code_hash);`,
+	`ALTER TABLE users ADD COLUMN security_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN security_version INTEGER NOT NULL DEFAULT 0;`,
 }

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,9 +21,10 @@ const (
 )
 
 type challenge struct {
-	userID   int64
-	expires  time.Time
-	attempts int
+	credentials string
+	userID      int64
+	expires     time.Time
+	attempts    int
 }
 
 // challengeStore keeps password-verified logins that still need a TOTP code.
@@ -37,7 +37,7 @@ type challengeStore struct {
 
 func newChallengeStore() *challengeStore { return &challengeStore{m: map[string]*challenge{}} }
 
-func (s *challengeStore) issue(userID int64) string {
+func (s *challengeStore) issue(userID int64, credentials string) string {
 	tok := auth.RandomToken(24)
 	now := time.Now()
 	s.mu.Lock()
@@ -47,32 +47,37 @@ func (s *challengeStore) issue(userID int64) string {
 			delete(s.m, k)
 		}
 	}
-	s.m[tok] = &challenge{userID: userID, expires: now.Add(challengeTTL)}
+	if len(s.m) >= 10000 {
+		return ""
+	}
+	s.m[tok] = &challenge{userID: userID, credentials: credentials, expires: now.Add(challengeTTL)}
 	return tok
 }
 
 // attempt returns the user for a live challenge and counts the attempt;
 // too many wrong codes burn the challenge.
-func (s *challengeStore) attempt(tok string) (int64, bool) {
+func (s *challengeStore) attempt(tok string) (challenge, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c, ok := s.m[tok]
 	if !ok || time.Now().After(c.expires) {
 		delete(s.m, tok)
-		return 0, false
+		return challenge{}, false
 	}
 	c.attempts++
 	if c.attempts > challengeAttempts {
 		delete(s.m, tok)
-		return 0, false
+		return challenge{}, false
 	}
-	return c.userID, true
+	return *c, true
 }
 
-func (s *challengeStore) drop(tok string) {
+func (s *challengeStore) drop(tok string) bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.m[tok]
 	delete(s.m, tok)
-	s.mu.Unlock()
+	return ok
 }
 
 // ---- two-factor management (self) ----
@@ -95,6 +100,7 @@ func (a *API) twoFASetup(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u := userFrom(r.Context())
+	before := *u
 	if !auth.VerifyPassword(u.PasswordHash, in.Password) {
 		return httpx.BadRequest("密码不正确")
 	}
@@ -103,7 +109,7 @@ func (a *API) twoFASetup(w http.ResponseWriter, r *http.Request) error {
 	}
 	u.TOTPSecret = auth.NewTOTPSecret()
 	u.TOTPLastStep = 0
-	if err := a.Store.UpdateUser(r.Context(), u); err != nil {
+	if err := a.Store.UpdateUserSecurity(r.Context(), before, *u); err != nil {
 		return err
 	}
 	httpx.OK(w, map[string]any{
@@ -121,6 +127,7 @@ func (a *API) twoFAEnable(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u := userFrom(r.Context())
+	before := *u
 	if u.TOTPEnabled {
 		return httpx.Conflict("两步验证已开启")
 	}
@@ -135,8 +142,15 @@ func (a *API) twoFAEnable(w http.ResponseWriter, r *http.Request) error {
 	u.TOTPEnabled = true
 	u.TOTPLastStep = step
 	u.RecoveryCodes = hashes
-	if err := a.Store.UpdateUser(r.Context(), u); err != nil {
+	if err := a.Store.UpdateUserSecurity(r.Context(), before, *u); err != nil {
 		return err
+	}
+	fresh, e := a.Store.GetUser(r.Context(), u.ID)
+	if e != nil {
+		return e
+	}
+	if e = a.startSession(w, r, &fresh); e != nil {
+		return e
 	}
 	a.audit(r, "2fa.enable", "self", nil)
 	httpx.OK(w, map[string]any{"recovery_codes": plain})
@@ -151,6 +165,7 @@ func (a *API) twoFADisable(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u := userFrom(r.Context())
+	before := *u
 	if !auth.VerifyPassword(u.PasswordHash, in.Password) {
 		return httpx.BadRequest("密码不正确")
 	}
@@ -160,8 +175,15 @@ func (a *API) twoFADisable(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	clearTOTP(u)
-	if err := a.Store.UpdateUser(r.Context(), u); err != nil {
+	if err := a.Store.UpdateUserSecurity(r.Context(), before, *u); err != nil {
 		return err
+	}
+	fresh, e := a.Store.GetUser(r.Context(), u.ID)
+	if e != nil {
+		return e
+	}
+	if e = a.startSession(w, r, &fresh); e != nil {
+		return e
 	}
 	a.audit(r, "2fa.disable", "self", nil)
 	httpx.NoContent(w)
@@ -175,6 +197,7 @@ func (a *API) twoFARecovery(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u := userFrom(r.Context())
+	before := *u
 	if !u.TOTPEnabled {
 		return httpx.BadRequest("两步验证未开启")
 	}
@@ -186,7 +209,7 @@ func (a *API) twoFARecovery(w http.ResponseWriter, r *http.Request) error {
 	}
 	plain, hashes := auth.NewRecoveryCodes(8)
 	u.RecoveryCodes = hashes
-	if err := a.Store.UpdateUser(r.Context(), u); err != nil {
+	if err := a.Store.UpdateUserSecurity(r.Context(), before, *u); err != nil {
 		return err
 	}
 	a.audit(r, "2fa.recovery_codes", "self", nil)
@@ -229,30 +252,11 @@ const (
 
 var (
 	presetRe  = regexp.MustCompile(`^preset:[a-z0-9-]{1,32}$`)
-	dataURLRe = regexp.MustCompile(`^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$`)
+	dataURLRe = regexp.MustCompile(`^data:(image/(?:png|jpeg|gif));base64,([A-Za-z0-9+/=]+)$`)
 )
 
 // validateAvatar accepts "", a preset id or a bounded base64 image data URL.
-func validateAvatar(v string) error {
-	switch {
-	case v == "", presetRe.MatchString(v):
-		return nil
-	case strings.HasPrefix(v, "data:"):
-		m := dataURLRe.FindStringSubmatch(v)
-		if m == nil {
-			return httpx.BadRequest("头像只支持 PNG / JPEG / WebP / GIF 图片")
-		}
-		if base64.StdEncoding.DecodedLen(len(m[2])) > avatarMaxBytes {
-			return httpx.BadRequest("头像图片过大（上限 256 KiB）")
-		}
-		if _, err := base64.StdEncoding.DecodeString(m[2]); err != nil {
-			return httpx.BadRequest("头像数据无效")
-		}
-		return nil
-	default:
-		return httpx.BadRequest("头像格式无效")
-	}
-}
+func validateAvatar(v string) error { _, err := normalizeAvatar(v); return err }
 
 // setMyAvatar updates the caller's avatar.
 func (a *API) setMyAvatar(w http.ResponseWriter, r *http.Request) error {
@@ -262,11 +266,12 @@ func (a *API) setMyAvatar(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
 	}
-	if err := validateAvatar(in.Avatar); err != nil {
+	normalized, err := normalizeAvatar(in.Avatar)
+	if err != nil {
 		return err
 	}
 	u := userFrom(r.Context())
-	u.Avatar = in.Avatar
+	u.Avatar = normalized
 	if err := a.Store.UpdateUser(r.Context(), u); err != nil {
 		return err
 	}
@@ -285,7 +290,11 @@ func (a *API) userAvatar(w http.ResponseWriter, r *http.Request) error {
 	if err != nil || !u.AvatarUploaded() {
 		return httpx.ErrNotFound
 	}
-	m := dataURLRe.FindStringSubmatch(u.Avatar)
+	normalized, err := normalizeAvatar(u.Avatar)
+	if err != nil {
+		return httpx.ErrNotFound
+	}
+	m := dataURLRe.FindStringSubmatch(normalized)
 	if m == nil {
 		return httpx.ErrNotFound
 	}

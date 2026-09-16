@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"ctlvps/internal/agentnet"
 	"ctlvps/internal/api"
 	"ctlvps/internal/auth"
 	"ctlvps/internal/buildinfo"
@@ -26,7 +27,9 @@ import (
 	"ctlvps/internal/geoip"
 	"ctlvps/internal/maintenance"
 	"ctlvps/internal/notify"
+	"ctlvps/internal/safehttp"
 	"ctlvps/internal/scheduler"
+	"ctlvps/internal/secureupdate"
 	"ctlvps/internal/share"
 	"ctlvps/internal/store"
 	"ctlvps/internal/subscription"
@@ -35,6 +38,27 @@ import (
 )
 
 func main() {
+	if ok, e := agentnet.Entry(os.Args[1:]); ok {
+		if e != nil {
+			fmt.Fprintln(os.Stderr, e)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := store.BackupEntry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := secureupdate.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := maintenance.Entry(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -85,7 +109,11 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
 		return err
 	}
-	st, err := store.Open(filepath.Join(cfg.DataDir, "ctlvps.db"))
+	keyPath := cfg.SecretsKeyFile
+	if keyPath == "" {
+		keyPath = filepath.Join(cfg.DataDir, "ctlvps.db.key")
+	}
+	st, err := store.OpenWithKey(filepath.Join(cfg.DataDir, "ctlvps.db"), keyPath)
 	if err != nil {
 		return fmt.Errorf("open store: %w", err)
 	}
@@ -116,6 +144,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	}
 
 	subs := subscription.NewService(st)
+	subs.Fetcher.Client = safehttp.New(safehttp.Options{HTTPOrigins: cfg.SubscriptionHTTPOrigins, PrivateOrigins: cfg.SubscriptionPrivateOrigins})
 	if err := subs.Seed(ctx); err != nil {
 		return fmt.Errorf("seed templates: %w", err)
 	}
@@ -148,7 +177,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	a := api.New(api.Deps{
 		Store: st, Connlog: cl, Geo: geo, Subs: subs, Desired: des, Shares: shares, Traffic: ing, Notify: tg, Scheduler: sched, Logger: logger,
 		Static: web.Handler(cfg.DevProxy),
-		Config: api.Config{SiteURL: cfg.SiteURL, TrustProxy: cfg.TrustProxy, SecureCookies: secure, SessionTTL: cfg.SessionTTL, Version: buildinfo.String(), StartedAt: time.Now(), DataDir: cfg.DataDir, AgentBinDir: cfg.AgentBinDir, SetupToken: setupToken},
+		Config: api.Config{SiteURL: cfg.SiteURL, TrustProxy: false, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs, SecureCookies: secure, SessionTTL: cfg.SessionTTL, Version: buildinfo.String(), StartedAt: time.Now(), DataDir: cfg.DataDir, AgentBinDir: cfg.AgentBinDir, SetupToken: setupToken},
 	})
 
 	registerJobs(sched, st, cl, subs, shares, des, tg, ing, cfg, logger)
@@ -159,7 +188,7 @@ func run(cfg config.Config, logger *slog.Logger) error {
 		Handler:           a.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    32 << 10,
 	}
 	go func() {
 		<-ctx.Done()
@@ -209,7 +238,7 @@ func registerJobs(s *scheduler.Scheduler, st *store.Store, cl *connlog.Store, su
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
-		target := filepath.Join(dir, "ctlvps-"+now.Format("20060102")+".db")
+		target := filepath.Join(dir, "ctlvps-"+now.Format("20060102")+".db.enc")
 		if _, err := os.Stat(target); err == nil {
 			return nil // already done today
 		}
@@ -219,7 +248,7 @@ func registerJobs(s *scheduler.Scheduler, st *store.Store, cl *connlog.Store, su
 		if err := st.Backup(ctx, target); err != nil {
 			return err
 		}
-		entries, _ := filepath.Glob(filepath.Join(dir, "ctlvps-*.db"))
+		entries, _ := filepath.Glob(filepath.Join(dir, "ctlvps-*.db.enc"))
 		sort.Strings(entries)
 		for len(entries) > cfg.BackupKeep {
 			_ = os.Remove(entries[0])

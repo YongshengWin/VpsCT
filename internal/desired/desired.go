@@ -118,8 +118,8 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 			}
 			spec.Cert = &agentproto.CertSpec{Mode: mode, Domain: dom}
 			if mode == "external" {
-				spec.Cert.CertPath = fmt.Sprint(spec.Params["cert_path"])
-				spec.Cert.KeyPath = fmt.Sprint(spec.Params["key_path"])
+				spec.Cert.ID = fmt.Sprint(spec.Params["cert_id"])
+
 			}
 		}
 		ds.Nodes = append(ds.Nodes, spec)

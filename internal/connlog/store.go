@@ -27,6 +27,7 @@ type Store struct {
 }
 
 const schema = `
+CREATE TABLE IF NOT EXISTS conn_batches(server_id INTEGER PRIMARY KEY, seq INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS conn_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   server_id INTEGER NOT NULL,
@@ -56,11 +57,12 @@ CREATE TABLE IF NOT EXISTS conn_daily_domains (
 
 // Open opens/creates connlog.db.
 func Open(path string) (*Store, error) {
+	original := path
 	if path != ":memory:" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return nil, err
 		}
-		path = "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)"
+		path = "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=max_page_count(131072)&_pragma=journal_size_limit(16777216)"
 	} else {
 		path = "file::memory:?cache=shared"
 	}
@@ -76,6 +78,14 @@ func Open(path string) (*Store, error) {
 	if err := migrateConnEvents(db); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if original != ":memory:" {
+		for _, p := range []string{original, original + "-wal", original + "-shm"} {
+			if e := os.Chmod(p, 0600); e != nil && !os.IsNotExist(e) {
+				db.Close()
+				return nil, e
+			}
+		}
 	}
 	return &Store{db: db, Now: func() time.Time { return time.Now().UTC() }}, nil
 }
@@ -107,6 +117,16 @@ func (s *Store) Ingest(ctx context.Context, serverID int64, batch agentproto.Con
 		return 0, err
 	}
 	defer tx.Rollback()
+	if batch.Seq > 0 {
+		var seq int64
+		e := tx.QueryRowContext(ctx, "SELECT seq FROM conn_batches WHERE server_id=?", serverID).Scan(&seq)
+		if e != nil && e != sql.ErrNoRows {
+			return 0, e
+		}
+		if batch.Seq <= seq {
+			return 0, nil
+		}
+	}
 	ins, err := tx.PrepareContext(ctx, `INSERT INTO conn_events(server_id,node_id,share_id,ts,network,dest_host,dest_port,src_host,agent_seq) VALUES (?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
@@ -149,6 +169,11 @@ func (s *Store) Ingest(ctx context.Context, serverID int64, batch agentproto.Con
 			return n, err
 		}
 		n++
+	}
+	if batch.Seq > 0 {
+		if _, e := tx.ExecContext(ctx, "INSERT INTO conn_batches(server_id,seq) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET seq=excluded.seq", serverID, batch.Seq); e != nil {
+			return n, e
+		}
 	}
 	return n, tx.Commit()
 }

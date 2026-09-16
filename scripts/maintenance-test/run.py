@@ -51,9 +51,11 @@ def active(unit):
 
 def request(path, payload=None, expected=200, bearer=None):
     global cookie
-    headers = {'Content-Type': 'application/json', 'Origin': base}
+    headers = {'Content-Type': 'application/json', 'Origin': 'https://127.0.0.1:9443', 'Host': '127.0.0.1:9443'}
     if cookie:
         headers['Cookie'] = cookie
+        if payload is not None and path.startswith('/api/v1/'):
+            headers['X-CSRF-Token'] = request('/api/v1/auth/csrf')['token']
     if bearer:
         headers['Authorization'] = 'Bearer ' + bearer
     body = json.dumps(payload).encode() if payload is not None else None
@@ -86,6 +88,7 @@ def controller_job(action, version='', purge=False):
 def fixture_release(version, broken=False, corrupt=False):
     package = P('/fixtures/package-' + version)
     shutil.copytree(root / 'current', package, symlinks=False)
+    (package / 'VERIFIED-SHA256').unlink(missing_ok=True)
     (package / 'VERSION').write_text(version + '\n')
     if broken:
         (package / 'ctlvpsd').write_text('#!/bin/sh\nif [ "${1:-}" = version ]; then echo fixture; exit 0; fi\necho dirty > /opt/ctlvps/data/failed-upgrade-marker\nexit 1\n')
@@ -96,11 +99,15 @@ def fixture_release(version, broken=False, corrupt=False):
     with tarfile.open(tar, 'w:gz') as archive:
         for path in package.iterdir():
             archive.add(path, arcname=path.name)
-    (out / 'SHA256SUMS').write_text(hashlib.sha256(tar.read_bytes()).hexdigest() + '  ' + tar.name + '\n')
+    helper=out/f'ctlvps-verify-linux-{arch}'
+    shutil.copyfile(f'/src/bin/ctlvps-verify-linux-{arch}',helper)
+    (out / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest()+'  '+p.name+'\n' for p in (tar,helper)))
+    run('python3','/src/scripts/security-fixture.py','sign','controller',version,str(tar))
     if corrupt:
         with tar.open('ab') as stream:
             stream.write(b'corrupt-fixture')
 
+run('python3','/src/scripts/security-fixture.py','init')
 # Install the real binaries/services using the default layout.
 run('useradd', '--system', '--user-group', '--home-dir', '/opt/ctlvps', '--no-create-home', '--shell', '/usr/sbin/nologin', 'ctlvps')
 (root / 'releases/initial').mkdir(parents=True)
@@ -108,6 +115,9 @@ with tarfile.open(asset) as archive:
     archive.extractall(root / 'releases/initial', filter='data')
 # Derive newer targets from the supplied release, including real release tags.
 initial_version = (root / 'releases/initial/VERSION').read_text().strip()
+run('python3','/src/scripts/security-fixture.py','sign','controller',initial_version,str(asset))
+run('/usr/local/libexec/ctlvps-verify','verify-release','controller',initial_version,str(asset))
+(root / 'releases/initial/VERIFIED-SHA256').write_text(hashlib.sha256(asset.read_bytes()).hexdigest()+'\n')
 match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9.-]+)?', initial_version)
 assert match, initial_version
 major, minor, patch = map(int, match.groups())
@@ -116,11 +126,10 @@ update_version, broken_version, corrupt_version = (
 )
 for name, target in [('current', 'releases/initial'), ('ctlvpsd', 'current/ctlvpsd'), ('agents', 'current/agents')]:
     (root / name).symlink_to(target)
-(root / 'REPOSITORY').write_text('example/VpsCT\n')
-(root / 'current/REPOSITORY').write_text('example/VpsCT\n')
+(root / 'REPOSITORY').write_bytes((root / 'current/REPOSITORY').read_bytes())
 (root / 'data').mkdir()
 run('chown', 'ctlvps:ctlvps', str(root / 'data'))
-P('/etc/ctlvps').mkdir()
+P('/etc/ctlvps').mkdir(exist_ok=True)
 P('/etc/ctlvps/ctlvpsd.env').write_text('CTLVPS_SITE_URL=https://127.0.0.1:9443\nCTLVPS_LISTEN=127.0.0.1:8080\nCTLVPS_DATA_DIR=/opt/ctlvps/data\nCTLVPS_AGENT_BIN_DIR=/opt/ctlvps/agents\n')
 for name in ['ctlvpsd', 'ctlvps-maintenance']:
     shutil.copyfile('/src/deploy/' + name + '.service', '/etc/systemd/system/' + name + '.service')
@@ -136,6 +145,17 @@ run('useradd', '--system', 'outsider')
 denied = run('runuser', '-u', 'outsider', '--', 'curl', '--unix-socket', '/run/ctlvps-maintenance/control.sock', 'http://maintenance/status', check=False)
 assert denied.returncode != 0
 print('PASS Unix socket denies unrelated users', flush=True)
+# The authorized application UID can reach the socket, but cannot grant itself
+# a destructive capability that local root policy did not allow.
+policy_path=P('/etc/ctlvps/security.json');policy_raw=policy_path.read_text()
+policy=json.loads(policy_raw);policy['actions']=[a for a in policy['actions'] if a!='controller.purge'];policy_path.write_text(json.dumps(policy))
+request_id=uuid.uuid4().hex
+try:
+    result=run('runuser','-u','ctlvps','--','curl','--silent','--unix-socket','/run/ctlvps-maintenance/control.sock','-o','/dev/null','-w','%{http_code}','-H','Content-Type: application/json','--data',json.dumps({'id':request_id,'role':'controller','action':'uninstall','purge':True}),'http://maintenance/jobs')
+    assert result.stdout=='409',result.stdout
+    assert active('ctlvpsd') and (root/'data/ctlvps.db').exists()
+finally:policy_path.write_text(policy_raw)
+print('PASS compromised application UID cannot bypass root purge policy',flush=True)
 
 # Synthetic release transport; health requests still use the real curl.
 P('/fixtures/releases').mkdir(parents=True)
@@ -144,9 +164,9 @@ P('/usr/local/bin/apt-get').chmod(0o755)
 P('/usr/local/bin/curl').write_text('''#!/usr/bin/python3
 import pathlib,shutil,sys,os
 args=sys.argv[1:]
-urls=[arg for arg in args if arg.startswith('https://github.com/example/VpsCT/releases/download/')]
+urls=[arg for arg in args if arg.startswith('https://github.com/') and '/releases/download/' in arg]
 if urls:
-    tail=urls[0].split('/download/',1)[1]
+    tail=urls[0].split('/releases/download/',1)[1]
     source=pathlib.Path('/fixtures/releases')/tail
     if source.is_file(): shutil.copyfile(source,args[args.index('-o')+1]);sys.exit(0)
     sys.exit(22)
@@ -158,11 +178,21 @@ fixture_release(broken_version, broken=True)
 fixture_release(corrupt_version, corrupt=True)
 
 before = (root / 'current').resolve()
+pid = run('systemctl', 'show', 'ctlvpsd', '-p', 'MainPID', '--value').stdout
+old_unit = root / 'current/ctlvpsd.service'
+original_unit = old_unit.read_bytes()
+old_unit.write_bytes(original_unit + b'\n# altered recovery file\n')
+job = controller_job('update', update_version)
+root_status(job, 'failed')
+assert run('systemctl', 'show', 'ctlvpsd', '-p', 'MainPID', '--value').stdout == pid
+assert (root / 'current').resolve() == before
+old_unit.write_bytes(original_unit)
+print('PASS changed recovery files reject update before service shutdown', flush=True)
 job = controller_job('update', update_version)
 root_status(job, 'succeeded')
 assert (root / 'current').resolve() != before
 assert request('/api/v1/auth/setup')['needs_setup'] is False
-assert list((root / 'backups').glob('*/data.tar.gz'))
+assert list((root / 'backups').glob('*/data.tar.gz.enc'))
 assert active('ctlvpsd') and active('ctlvps-maintenance')
 assert any(j['id'] == job and j['status'] == 'succeeded' for j in request('/api/v1/system/maintenance')['jobs'])
 print('PASS web update survives API/helper restart and retains administrator', flush=True)
@@ -213,11 +243,28 @@ threading.Thread(target=bridge.serve_forever, daemon=True).start()
 server = request('/api/v1/servers', {'name': 'maintenance-fixture'}, 201)
 sid = server['id']
 enrol = request(f'/api/v1/servers/{sid}/enroll-token', {})
+run('python3','/src/scripts/security-fixture.py','sign','agent',initial_version,str(root / f'agents/ctlvps-agent-linux-{arch}'))
 shutil.copyfile(root / f'agents/ctlvps-agent-linux-{arch}', '/usr/local/bin/ctlvps-agent')
 P('/usr/local/bin/ctlvps-agent').chmod(0o755)
 # Write enrolment state via API, keeping the real token exclusively in this
 # disposable machine and out of process command lines/log output.
 enrolled = request('/api/agent/v1/enroll', {'enroll_token': enrol['token'], 'version': 'fixture', 'arch': arch})
+# Exercise a 512 MiB controller's authentication budget while a valid device reports.
+from concurrent.futures import ThreadPoolExecutor
+flood_body=json.dumps({'username':'test-admin','password':'invalid-fixture-password'}).encode()
+def flood(_):
+    req=urllib.request.Request(base+'/api/v1/auth/login',data=flood_body,headers={'Content-Type':'application/json','Origin':'https://127.0.0.1:9443','Host':'127.0.0.1:9443'})
+    try:
+        with urllib.request.urlopen(req,timeout=10) as response:return response.status
+    except urllib.error.HTTPError as e:return e.code
+with ThreadPoolExecutor(max_workers=40) as executor:
+    futures=[executor.submit(flood,i) for i in range(40)]
+    began=time.monotonic();request('/api/agent/v1/heartbeat',{},bearer=enrolled['agent_token']);latency=time.monotonic()-began
+    rejected=sum(f.result()==429 for f in futures)
+pid=run('systemctl','show','ctlvpsd','-p','MainPID','--value').stdout.strip()
+peak=next(int(line.split()[1]) for line in P('/proc/'+pid+'/status').read_text().splitlines() if line.startswith('VmHWM:'))
+assert rejected>0 and latency<5 and peak<512*1024,(rejected,latency,peak)
+print(f'PASS auth load: 40 requests, {rejected} rejected, heartbeat {latency:.3f}s, controller peak RSS {peak//1024} MiB',flush=True)
 P('/var/lib/ctlvps-agent').mkdir(mode=0o700)
 state = {'server_url': 'https://127.0.0.1:9443', 'agent_token': enrolled['agent_token'], 'server_id': sid, 'poll_interval_sec': 1}
 P('/var/lib/ctlvps-agent/state.json').write_text(json.dumps(state))
@@ -238,6 +285,8 @@ def agent_job(action, purge=False):
 job = agent_job('update')
 root_status(job, 'succeeded')
 wait(lambda: any(j['id'] == job and j['status'] == 'succeeded' for j in request(f'/api/v1/servers/{sid}/maintenance')['jobs']))
+wait(lambda: not (P('/var/lib/ctlvps-maintenance') / job / 'request.json').exists())
+assert (P('/var/lib/ctlvps-maintenance') / job / 'agent.previous').is_file()
 assert active('ctlvps-agent') and active('ctlvpsd')
 print('PASS real agent claims, restarts, verifies binary and reports success', flush=True)
 
@@ -245,6 +294,7 @@ distribution = root / f'agents/ctlvps-agent-linux-{arch}'
 original_agent = distribution.read_bytes()
 run('systemctl', 'stop', 'ctlvps-agent')
 distribution.write_text('#!/bin/sh\nif [ "${1:-}" = version ]; then echo fixture; exit 0; fi\nexit 1\n')
+run('python3','/src/scripts/security-fixture.py','sign','agent',initial_version,str(distribution))
 job = agent_job('update')
 run('systemctl', 'start', 'ctlvps-agent')
 root_status(job, 'rolled_back')
@@ -270,4 +320,4 @@ assert not active('ctlvpsd') and not active('ctlvps-maintenance')
 assert not (root / 'data').exists() and not (root / 'releases').exists()
 wait(lambda: not (P('/var/lib/ctlvps-maintenance') / job / 'request.json').exists())
 print('PASS controller purge completes after API and root helper exit', flush=True)
-print('Maintenance integration: 9 scenarios passed', flush=True)
+print('Maintenance integration: 11 scenarios passed', flush=True)

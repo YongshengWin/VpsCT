@@ -20,12 +20,13 @@ const (
 // User is a login account. Normal users only see subscriptions and shares
 // that are bound to them.
 type User struct {
-	ID           int64  `json:"id"`
-	Username     string `json:"username"`
-	Nickname     string `json:"nickname"`
-	PasswordHash string `json:"-"`
-	Role         Role   `json:"role"`
-	Enabled      bool   `json:"enabled"`
+	SecurityVersion int64  `json:"-"`
+	ID              int64  `json:"id"`
+	Username        string `json:"username"`
+	Nickname        string `json:"nickname"`
+	PasswordHash    string `json:"-"`
+	Role            Role   `json:"role"`
+	Enabled         bool   `json:"enabled"`
 	// Avatar is "" (initials), "preset:<id>" (built-in SVG drawn by the web
 	// client) or an uploaded "data:image/...;base64,..." URL. Uploaded images
 	// are never inlined in JSON; MarshalJSON swaps them for the avatar endpoint.

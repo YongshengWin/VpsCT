@@ -179,11 +179,21 @@ func (s *Store) SetAgentEnrollToken(ctx context.Context, serverID int64, hash st
 }
 
 // CompleteEnrollment swaps the enrolment token for a permanent token.
-func (s *Store) CompleteEnrollment(ctx context.Context, agentID int64, tokenHash, version string) error {
+func (s *Store) CompleteEnrollment(ctx context.Context, agentID int64, enrollHash, tokenHash, version string) error {
 	now := fmtTime(s.Now())
-	_, err := s.db.ExecContext(ctx, `UPDATE agents SET token_hash=?, enroll_token_hash='', enroll_expires_at=NULL, version=?, last_seen_at=?, updated_at=? WHERE id=?`,
-		tokenHash, version, now, now, agentID)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET token_hash=?, enroll_token_hash='', enroll_expires_at=NULL, version=?, last_seen_at=?, updated_at=? WHERE id=? AND enroll_token_hash=? AND enroll_token_hash!='' AND enroll_expires_at>?`,
+		tokenHash, version, now, now, agentID, enrollHash, now)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ResetAgentToken revokes the current token (agent must re-enrol).

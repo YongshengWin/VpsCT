@@ -4,11 +4,16 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"ctlvps/internal/agentnet"
+	"ctlvps/internal/safehttp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -25,24 +30,38 @@ type Client struct {
 
 // NewClient builds a client.
 func NewClient(baseURL, token, version string) *Client {
-	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, Version: version, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	c := &Client{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, Version: version, HTTP: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		c.HTTP.Transport = agentnet.Transport{}
+	}
+	return c
 }
 
 // ErrUnauthorized is returned when the agent token was revoked.
 var ErrUnauthorized = errors.New("agent token rejected (401); re-enrol")
 
 func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bool) error {
+	u, e := url.Parse(c.BaseURL)
+	if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return errors.New("agent requires an HTTPS controller URL")
+	}
 	var body io.Reader
 	if in != nil {
 		b, err := json.Marshal(in)
 		if err != nil {
 			return err
 		}
+		if len(b) > 8<<20 {
+			return errors.New("agent request exceeds budget")
+		}
 		if gz {
 			var buf bytes.Buffer
 			zw := gzip.NewWriter(&buf)
 			_, _ = zw.Write(b)
 			_ = zw.Close()
+			if buf.Len() > 2<<20 {
+				return errors.New("compressed batch exceeds budget")
+			}
 			body = &buf
 		} else {
 			body = bytes.NewReader(b)
@@ -74,11 +93,14 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		return errNotModified
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("%s %s: HTTP %d: %s", method, path, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
 	}
 	if out != nil {
-		return json.NewDecoder(resp.Body).Decode(out)
+		b, e := safehttp.ReadBounded(resp.Body, 8<<20)
+		if e != nil {
+			return e
+		}
+		return json.Unmarshal(b, out)
 	}
 	return nil
 }

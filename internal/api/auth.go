@@ -69,6 +69,10 @@ func (a *API) setup(w http.ResponseWriter, r *http.Request) error {
 			a.Logger.Warn("remove spent setup token", "err", err)
 		}
 	}
+	current, err := a.Store.GetUser(r.Context(), u.ID)
+	if err != nil || !current.Enabled || current.PasswordHash != u.PasswordHash || current.TOTPEnabled != u.TOTPEnabled {
+		return httpx.ErrUnauthorized
+	}
 	if err := a.startSession(w, r, u); err != nil {
 		return err
 	}
@@ -82,7 +86,7 @@ func validateCredentials(c credentials) error {
 	if len(name) < 2 || len(name) > 64 {
 		return httpx.BadRequest("用户名长度需为 2-64 个字符")
 	}
-	if len(c.Password) < 8 {
+	if len(c.Password) < 8 || len(c.Password) > 512 {
 		return httpx.BadRequest("密码至少 8 位")
 	}
 	return nil
@@ -120,7 +124,7 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) error {
 	}
 	if u.TOTPEnabled {
 		// password accepted; hand out a short-lived challenge for the second step
-		httpx.OK(w, map[string]any{"requires_2fa": true, "challenge": a.challenges.issue(u.ID)})
+		httpx.OK(w, map[string]any{"requires_2fa": true, "challenge": a.challenges.issue(u.ID, auth.HashToken(u.PasswordHash+"|"+u.TOTPSecret))})
 		return nil
 	}
 	return a.finishLogin(w, r, &u, ip, "login")
@@ -128,6 +132,10 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) error {
 
 // finishLogin creates the session cookie after all factors are satisfied.
 func (a *API) finishLogin(w http.ResponseWriter, r *http.Request, u *domain.User, ip, action string) error {
+	current, err := a.Store.GetUser(r.Context(), u.ID)
+	if err != nil || !current.Enabled || current.PasswordHash != u.PasswordHash || current.TOTPEnabled != u.TOTPEnabled {
+		return httpx.ErrUnauthorized
+	}
 	if err := a.startSession(w, r, u); err != nil {
 		return err
 	}
@@ -153,22 +161,25 @@ func (a *API) login2FA(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
 	}
-	userID, ok := a.challenges.attempt(in.Challenge)
+	challenge, ok := a.challenges.attempt(in.Challenge)
 	if !ok {
 		return httpx.E(http.StatusUnauthorized, "challenge_expired", "验证已过期，请重新登录")
 	}
-	u, err := a.Store.GetUser(r.Context(), userID)
-	if err != nil || !u.Enabled || !u.TOTPEnabled {
+	u, err := a.Store.GetUser(r.Context(), challenge.userID)
+	if err != nil || !u.Enabled || !u.TOTPEnabled || challenge.credentials != auth.HashToken(u.PasswordHash+"|"+u.TOTPSecret) {
 		return httpx.E(http.StatusUnauthorized, "challenge_expired", "验证已过期，请重新登录")
 	}
+	before := u
 	used, ok := a.consumeSecondFactor(&u, in.Code)
 	if !ok {
 		return httpx.E(http.StatusUnauthorized, "invalid_code", "验证码不正确")
 	}
-	if err := a.Store.UpdateUser(r.Context(), &u); err != nil {
-		return err
+	if !a.challenges.drop(in.Challenge) {
+		return httpx.ErrUnauthorized
 	}
-	a.challenges.drop(in.Challenge)
+	if err := a.Store.UpdateUserSecurity(r.Context(), before, u); err != nil {
+		return httpx.E(401, "invalid_code", "验证码已使用或验证状态变化")
+	}
 	action := "login"
 	if used == "recovery" {
 		action = "login.recovery_code"
@@ -195,11 +206,11 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request, u *domain.Use
 	token := auth.RandomToken(32)
 	now := a.Store.Now()
 	sess := store.Session{ID: auth.HashToken(token), UserID: u.ID, CreatedAt: now, ExpiresAt: now.Add(a.Config.SessionTTL), UserAgent: r.UserAgent(), IP: httpx.ClientIP(r, a.Config.TrustProxy)}
-	if err := a.Store.CreateSession(r.Context(), sess); err != nil {
+	if err := a.Store.CreateAuthorizedSession(r.Context(), sess, *u); err != nil {
 		return err
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     a.sessionName(),
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
@@ -211,10 +222,13 @@ func (a *API) startSession(w http.ResponseWriter, r *http.Request, u *domain.Use
 }
 
 func (a *API) logout(w http.ResponseWriter, r *http.Request) error {
-	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" {
+	if _, err := r.Cookie(a.sessionName()); err == nil && !a.checkCSRF(r) {
+		return httpx.ErrForbidden
+	}
+	if c, err := r.Cookie(a.sessionName()); err == nil && c.Value != "" {
 		_ = a.Store.DeleteSession(r.Context(), auth.HashToken(c.Value))
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1, SameSite: http.SameSiteLaxMode, Secure: a.Config.SecureCookies})
+	http.SetCookie(w, &http.Cookie{Name: a.sessionName(), Value: "", Path: "/", HttpOnly: true, MaxAge: -1, SameSite: http.SameSiteLaxMode, Secure: a.Config.SecureCookies})
 	httpx.NoContent(w)
 	return nil
 }
@@ -258,7 +272,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) error {
 	if !auth.VerifyPassword(u.PasswordHash, in.Old) {
 		return httpx.BadRequest("旧密码不正确")
 	}
-	if len(in.New) < 8 {
+	if len(in.New) < 8 || len(in.New) > 512 {
 		return httpx.BadRequest("新密码至少 8 位")
 	}
 	hash, err := auth.HashPassword(in.New)
@@ -270,7 +284,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	// invalidate other sessions, keep this one
-	if c, err := r.Cookie(sessionCookie); err == nil {
+	if c, err := r.Cookie(a.sessionName()); err == nil {
 		_ = a.Store.DeleteUserSessions(r.Context(), u.ID)
 		_ = a.Store.CreateSession(r.Context(), store.Session{ID: auth.HashToken(c.Value), UserID: u.ID, CreatedAt: a.Store.Now(), ExpiresAt: a.Store.Now().Add(a.Config.SessionTTL)})
 	}
@@ -360,6 +374,9 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 		}
 		u.Nickname = n
 	}
+	if in.Role != "" && in.Role != domain.RoleAdmin && in.Role != domain.RoleUser {
+		return httpx.BadRequest("角色无效")
+	}
 	if in.Role != "" {
 		if u.ID == me.ID && in.Role != domain.RoleAdmin {
 			return httpx.BadRequest("不能降级自己的角色")
@@ -373,13 +390,14 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 		u.Enabled = *in.Enabled
 	}
 	if in.Avatar != nil {
-		if err := validateAvatar(*in.Avatar); err != nil {
+		normalized, err := normalizeAvatar(*in.Avatar)
+		if err != nil {
 			return err
 		}
-		u.Avatar = *in.Avatar
+		u.Avatar = normalized
 	}
 	if in.Password != "" {
-		if len(in.Password) < 8 {
+		if len(in.Password) < 8 || len(in.Password) > 512 {
 			return httpx.BadRequest("密码至少 8 位")
 		}
 		hash, err := auth.HashPassword(in.Password)
@@ -391,6 +409,9 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 	}
 	if err := a.Store.UpdateUser(r.Context(), &u); err != nil {
 		return err
+	}
+	if in.Role != "" || in.Enabled != nil {
+		_ = a.Store.DeleteUserSessions(r.Context(), u.ID)
 	}
 	a.audit(r, "user.update", u.Username, map[string]any{"role": u.Role, "enabled": u.Enabled, "password_changed": in.Password != ""})
 	httpx.OK(w, u)

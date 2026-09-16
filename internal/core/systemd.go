@@ -40,6 +40,9 @@ func (s *Systemd) ctl(ctx context.Context, args ...string) (string, error) {
 
 // WriteUnit writes a unit file; returns true when content changed.
 func (s *Systemd) WriteUnit(name, content string) (bool, error) {
+	if !strings.HasPrefix(name, "ctlvps-") || strings.Contains(name, "..") || strings.ContainsAny(name, "\\\r\n\x00") || filepath.IsAbs(name) {
+		return false, fmt.Errorf("invalid managed unit name")
+	}
 	return WriteIfChanged(filepath.Join(s.UnitDir, name), []byte(content), 0o644)
 }
 
@@ -51,9 +54,27 @@ func WriteIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return false, err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	if st, err := os.Lstat(path); err == nil && !st.Mode().IsRegular() {
+		return false, fmt.Errorf("target is not a regular file")
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".ctlvps-write-")
+	if err != nil {
 		return false, err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp)
+	if err = f.Chmod(perm); err == nil {
+		_, err = f.Write(data)
+	}
+	if err == nil {
+		err = f.Sync()
+	}
+	ce := f.Close()
+	if err != nil {
+		return false, err
+	}
+	if ce != nil {
+		return false, ce
 	}
 	return true, os.Rename(tmp, path)
 }
@@ -212,7 +233,7 @@ func ServiceUnit(desc, execStart string, t agentproto.Tuning, extra ...string) s
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s\nAfter=network-online.target nss-lookup.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n", desc)
-	fmt.Fprintf(&b, "[Service]\nType=simple\nUser=root\nSlice=ctlvps-proxy.slice\nExecStart=%s\nRestart=always\nRestartSec=%d\nLimitNOFILE=%d\nMemoryMax=%dM\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW CAP_SYS_PTRACE CAP_DAC_READ_SEARCH\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nNoNewPrivileges=true\nProtectSystem=full\nProtectHome=true\nPrivateTmp=true\n", execStart, restart, nofile, memMax)
+	fmt.Fprintf(&b, "[Service]\nType=simple\nUser=root\nSlice=ctlvps-proxy.slice\nExecStart=%s\nRestart=always\nRestartSec=%d\nLimitNOFILE=%d\nMemoryMax=%dM\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nNoNewPrivileges=true\nProtectSystem=strict\nReadWritePaths=-/var/log/ctlvps -/var/lib/ctlvps-agent\nProtectHome=true\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=100\n", execStart, restart, nofile, memMax)
 	for _, e := range extra {
 		b.WriteString(e + "\n")
 	}
@@ -319,4 +340,17 @@ func (s *Systemd) EnsureProxyBudget(ctx context.Context, t agentproto.Tuning) er
 func (s *Systemd) InSlice(ctx context.Context, unit, slice string) bool {
 	out, err := s.ctl(ctx, "show", unit, "--property=Slice", "--value")
 	return err == nil && strings.TrimSpace(out) == slice
+}
+
+// ControlGroup resolves an existing managed slice, never a panel-provided path.
+func (s *Systemd) ControlGroup(ctx context.Context, unit string) (string, error) {
+	out, e := s.ctl(ctx, "show", unit, "--property=ControlGroup", "--value")
+	if e != nil {
+		return "", e
+	}
+	g := strings.TrimSpace(out)
+	if !strings.HasPrefix(g, "/") || !strings.Contains(g, "ctlvps-proxy") {
+		return "", fmt.Errorf("managed cgroup unavailable")
+	}
+	return g, nil
 }

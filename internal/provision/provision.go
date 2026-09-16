@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
+	"regexp"
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
@@ -20,14 +21,15 @@ import (
 
 // Options tune node creation.
 type Options struct {
-	Name        string
-	Protocol    string
-	Port        int    // 0 = allocate
-	SNI         string // reality handshake target / TLS server name
-	Domain      string // TLS domain when cert mode is acme/external; empty = public host
-	Obfs        bool   // hysteria2 salamander
+	Name         string
+	Protocol     string
+	Port         int    // 0 = allocate
+	SNI          string // reality handshake target / TLS server name
+	Domain       string // TLS domain when cert mode is acme/external; empty = public host
+	Obfs         bool   // hysteria2 salamander
 	SnellVersion int
-	CertMode    string // inherit server when empty
+	CertID       string
+	CertMode     string // inherit server when empty
 }
 
 // Ports range used for automatic allocation.
@@ -128,6 +130,12 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 	}
 	client := map[string]any{}
 	srv := map[string]any{"cert_mode": certMode, "tls_domain": tlsDomain}
+	if certMode == "external" && (opts.Protocol == "anytls" || opts.Protocol == "hysteria2" || opts.Protocol == "tuic" || opts.Protocol == "trojan") {
+		if !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(opts.CertID) {
+			return domain.Node{}, errors.New("外部证书需要本机策略中登记的证书 ID")
+		}
+		srv["cert_id"] = opts.CertID
+	}
 	insecure := certMode == "self_signed"
 	switch opts.Protocol {
 	case domain.ProtocolVLESS:
@@ -257,6 +265,9 @@ func RegenerateCredentials(n *domain.Node, server domain.Server) error {
 	var oldSrv map[string]any
 	_ = json.Unmarshal(n.ServerParams, &oldSrv)
 	opts := Options{Name: n.Name, Protocol: n.Protocol, Port: n.ListenPort, CertMode: fmt.Sprint(oldSrv["cert_mode"])}
+	if id, ok := oldSrv["cert_id"].(string); ok {
+		opts.CertID = id
+	}
 	if opts.CertMode == "<nil>" {
 		opts.CertMode = ""
 	}

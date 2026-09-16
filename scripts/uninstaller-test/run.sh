@@ -221,4 +221,37 @@ if nft list table inet ctlvps_nodes 2>/dev/null; then exit 1; fi
 assert nft list table inet keep_fixture
 done_case 'shared process meters and generated Snell slice drop-in are removed safely'
 
+fixture
+mkdir -p /etc/ctlvps-proxy/public /etc/ctlvps-proxy/private /var/lib/ctlvps-proxy/public/acme
+printf 'synthetic' > /etc/ctlvps-proxy/public/config.json
+python3 - <<'PYTEST'
+from pathlib import Path
+for name,command in {
+ 'ctlvps-proxy-guard':'/usr/local/bin/ctlvps-agent proxy-guard',
+ 'ctlvps-singbox':'/usr/local/bin/ctlvps-agent proxy-exec singbox run public',
+ 'ctlvps-singbox-private':'/usr/local/bin/ctlvps-agent proxy-exec singbox run private',
+ 'ctlvps-snell@21002':'/usr/local/bin/ctlvps-agent proxy-exec snell run 21002',
+}.items():
+ Path('/etc/systemd/system/'+name+'.service').write_text('[Unit]\nDescription=Isolated proxy uninstall fixture\n[Service]\nExecStart='+command+'\n[Install]\nWantedBy=multi-user.target\n')
+for profile in ('public','private'):
+ Path('/etc/systemd/system/ctlvps-proxy-'+profile+'.slice').write_text('[Slice]\n')
+Path('/etc/systemd/system/ctlvps-proxy-guard.timer').write_text('[Timer]\nOnBootSec=1h\nUnit=ctlvps-proxy-guard.service\n[Install]\nWantedBy=timers.target\n')
+PYTEST
+systemctl daemon-reload
+systemctl enable --now ctlvps-singbox.service ctlvps-singbox-private.service >/dev/null 2>&1
+systemctl enable --now ctlvps-proxy-guard.timer >/dev/null 2>&1
+systemctl restart ctlvps-snell@21002.service
+uninstall --agent --yes
+assert test -f /etc/ctlvps-proxy/public/config.json
+assert test -d /var/lib/ctlvps-proxy/public/acme
+assert test ! -f /etc/systemd/system/ctlvps-singbox-private.service
+assert test ! -f /etc/systemd/system/ctlvps-proxy-public.slice
+assert test ! -f /etc/systemd/system/ctlvps-proxy-guard.service
+assert test ! -f /etc/systemd/system/ctlvps-proxy-guard.timer
+assert systemctl is-active --quiet ctlvpsd
+uninstall --agent --purge --yes
+assert test ! -d /etc/ctlvps-proxy
+assert test ! -d /var/lib/ctlvps-proxy
+done_case 'isolated proxy fixed launchers, slices, preserved state and explicit purge'
+
 printf 'Uninstaller integration: %s scenarios passed (real systemd and nftables)\n' "$checks"

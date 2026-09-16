@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"ctlvps/internal/secureupdate"
 	"golang.org/x/sys/unix"
 )
 
@@ -114,6 +115,16 @@ func (m *Manager) Start(s Spec) (Job, error) {
 	if err := s.Validate(); err != nil {
 		return Job{}, err
 	}
+	if m.Dir == Directory {
+		if err := secureupdate.Allow(s.Role + "." + s.Action); err != nil {
+			return Job{}, err
+		}
+		if s.Purge {
+			if err := secureupdate.Allow(s.Role + ".purge"); err != nil {
+				return Job{}, err
+			}
+		}
+	}
 	if err := os.MkdirAll(m.Dir, 0700); err != nil {
 		return Job{}, err
 	}
@@ -139,6 +150,9 @@ func (m *Manager) Start(s Spec) (Job, error) {
 		if j.Active() {
 			return Job{}, ErrBusy
 		}
+	}
+	if err := m.pruneDiagnostics(); err != nil {
+		return Job{}, err
 	}
 	dir := filepath.Join(m.Dir, s.ID)
 	if err := os.Mkdir(dir, 0700); err != nil {

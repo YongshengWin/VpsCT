@@ -18,7 +18,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', required=True)
     parser.add_argument('--repository', required=True)
+    parser.add_argument('--security-epoch', type=int, default=1)
     args = parser.parse_args()
+    if args.security_epoch < 1: parser.error('security epoch must be positive')
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', args.version):
         parser.error('version must be vX.Y.Z, optionally with a prerelease suffix')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
@@ -37,10 +39,15 @@ def main():
     (out / 'install.sh').chmod(0o755)
     shutil.copy2(ROOT / 'uninstall.sh', out / 'uninstall.sh')
     (out / 'uninstall.sh').chmod(0o755)
+    agent_installer = (ROOT / 'internal/assets/install-agent.sh').read_text().replace("RELEASE_VERSION='__VERSION__'", f"RELEASE_VERSION='{args.version}'")
+    (out / 'install-agent.sh').write_text(agent_installer)
     for arch in ('amd64', 'arm64'):
         with tempfile.TemporaryDirectory() as tmp:
             package = pathlib.Path(tmp)
             shutil.copy2(ROOT / f'bin/ctlvpsd-linux-{arch}', package / 'ctlvpsd')
+            shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', package / 'ctlvps-verify')
+            shutil.copy2(out / 'install.sh', package / 'install.sh')
+            shutil.copy2(out / 'install-agent.sh', package / 'install-agent.sh')
             (package / 'agents').mkdir()
             for agent_arch in ('amd64', 'arm64'):
                 name = f'ctlvps-agent-linux-{agent_arch}'
@@ -64,6 +71,9 @@ def main():
             with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
                 for path in sorted(package.iterdir()):
                     archive.add(path, arcname=path.name, filter=metadata)
+    for arch in ('amd64','arm64'):
+        shutil.copy2(ROOT / f'bin/ctlvps-agent-linux-{arch}', out / f'ctlvps-agent-linux-{arch}')
+        shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT / name, out / name)
     with (out / 'SHA256SUMS').open('w') as sums:

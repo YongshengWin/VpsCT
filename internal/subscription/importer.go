@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+
+	"ctlvps/internal/safehttp"
 	"net/http"
 	"strings"
-	"time"
 
 	"ctlvps/internal/proxynode"
 )
@@ -28,6 +28,8 @@ type FetchResult struct {
 }
 
 // Fetcher downloads and parses subscriptions.
+var fetchGate = safehttp.Gate{Limit: 4}
+
 type Fetcher struct {
 	Client *http.Client
 }
@@ -35,17 +37,21 @@ type Fetcher struct {
 // NewFetcher builds a fetcher with sane timeouts and no redirects to
 // non-http schemes.
 func NewFetcher() *Fetcher {
-	return &Fetcher{Client: &http.Client{Timeout: 45 * time.Second}}
+	return &Fetcher{Client: safehttp.New(safehttp.Options{})}
 }
 
 // Fetch downloads url with the given user agent and parses the body.
 func (f *Fetcher) Fetch(ctx context.Context, url, userAgent string) (*FetchResult, error) {
+	if !fetchGate.Acquire() {
+		return nil, errors.New("外部订阅同步繁忙，请稍后重试")
+	}
+	defer fetchGate.Release()
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return nil, errors.New("订阅地址必须以 http:// 或 https:// 开头")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("订阅地址无效")
 	}
 	if userAgent == "" {
 		userAgent = DefaultUserAgent
@@ -54,13 +60,13 @@ func (f *Fetcher) Fetch(ctx context.Context, url, userAgent string) (*FetchResul
 	req.Header.Set("Accept", "*/*")
 	resp, err := f.Client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("外部订阅请求失败或目标不符合访问策略")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("上游返回 HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	body, err := safehttp.ReadBounded(resp.Body, 16<<20)
 	if err != nil {
 		return nil, err
 	}

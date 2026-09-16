@@ -93,14 +93,14 @@ func (a *API) serverView(r *http.Request, s domain.Server, withDetail bool) Serv
 
 func (a *API) agentUpdateInfo(r *http.Request, m *agentproto.Metrics, d *agentproto.Diagnostics) *AgentUpdateInfo {
 	base := a.baseURL(r)
-	info := &AgentUpdateInfo{Command: fmt.Sprintf("curl -fsSL %s/install-agent.sh | sudo bash -s -- --update --server %s", base, base)}
+	info := &AgentUpdateInfo{Command: officialAgentCommand(base, "", true)}
 	if m != nil {
 		info.Arch = normalizeAgentArch(m.Arch)
 	}
 	if d != nil {
 		info.Current = d.BinarySHA256
 	}
-	info.Supported = info.Current != ""
+	info.Supported = info.Current != "" && d != nil && d.SecurityVersion >= 1 && d.SecurityPolicy
 	if meta, ok := a.agentBinaryMeta(info.Arch); ok {
 		info.Latest = meta.SHA256
 		info.Outdated = info.Supported && !strings.EqualFold(info.Current, meta.SHA256)
@@ -302,13 +302,13 @@ func (a *API) enrollToken(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	token := auth.RandomToken(24)
-	exp := a.Store.Now().Add(24 * time.Hour)
+	token := auth.RandomToken(32)
+	exp := a.Store.Now().Add(15 * time.Minute)
 	if err := a.Store.SetAgentEnrollToken(r.Context(), id, auth.HashToken(token), exp.Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	base := a.baseURL(r)
-	cmd := fmt.Sprintf("curl -fsSL %s/install-agent.sh | sudo bash -s -- --server %s --token %s", base, base, token)
+	cmd := officialAgentCommand(base, token, false)
 	a.audit(r, "server.enroll_token", s.Name, nil)
 	httpx.OK(w, map[string]any{"token": token, "expires_at": exp, "install_command": cmd, "server_url": base})
 	return nil
@@ -447,7 +447,7 @@ func (a *API) updateAgent(w http.ResponseWriter, r *http.Request) error {
 	} else {
 		out["queued"] = false
 		out["manual"] = true
-		out["message"] = "在该 VPS 上执行一次更新命令后，即可随心跳自动同步控制端提供的 agent 版本"
+		out["message"] = "需在该 VPS 独立配置可信安装器和签名根，再执行本地安装器迁移；详见安全迁移文档"
 	}
 	httpx.OK(w, out)
 	return nil
@@ -526,6 +526,7 @@ type deployInput struct {
 	Domain       string   `json:"domain"`
 	Obfs         bool     `json:"obfs"`
 	SnellVersion int      `json:"snell_version"`
+	CertID       string   `json:"cert_id"`
 	CertMode     string   `json:"cert_mode"`
 	Tags         []string `json:"tags"`
 }
@@ -556,7 +557,7 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	} else if used[port] {
 		return httpx.Conflict(fmt.Sprintf("端口 %d 已被占用", port))
 	}
-	node, err := provision.NewNode(s, "", provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, CertMode: in.CertMode})
+	node, err := provision.NewNode(s, "", provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, CertMode: in.CertMode, CertID: in.CertID})
 	if err != nil {
 		return httpx.BadRequest(err.Error())
 	}
@@ -573,4 +574,17 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	a.audit(r, "node.deploy", node.Name, map[string]any{"server": s.Name, "protocol": node.Protocol, "port": node.ListenPort})
 	httpx.JSON(w, http.StatusCreated, node)
 	return nil
+}
+
+// Fetch bootstrap code only from the fixed publisher, never from the panel.
+// Write the complete script before invoking it so a partial transfer cannot run.
+func officialAgentCommand(server, token string, update bool) string {
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	args := " --server " + quote(server)
+	if update {
+		args += " --update"
+	} else {
+		args += " --token " + quote(token)
+	}
+	return `( vpsct_installer=$(mktemp) || exit; trap 'rm -f -- "$vpsct_installer"' EXIT; curl -fLsS --proto '=https' --proto-redir '=https' --max-time 120 https://github.com/YongshengWin/VpsCT/releases/latest/download/install-agent.sh -o "$vpsct_installer" && sudo bash "$vpsct_installer"` + args + ` )`
 }

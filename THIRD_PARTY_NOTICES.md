@@ -19,25 +19,97 @@ VpsCT 的许可证适用于本项目原创代码，不替代第三方组件各�
 | 生态 | 组件 | 版本 | 许可与原始声明 |
 |---|---|---|---|
 | go-runtime | Go standard library and runtime | go1.26.8 | BSD-3-Clause; [LICENSE](third_party/go-runtime/go1.26.8/LICENSE), [PATENTS](third_party/go-runtime/go1.26.8/PATENTS) |
+| go | cloud.google.com/go/compute/metadata | v0.7.0 | See license text; [LICENSE](third_party/go/cloud.google.com_go_compute_metadata_v0.7.0/LICENSE) |
+| go | github.com/Microsoft/go-winio | v0.6.2 | See license text; [LICENSE](third_party/go/github.com_Microsoft_go-winio_v0.6.2/LICENSE) |
+| go | github.com/cenkalti/backoff/v5 | v5.0.3 | See license text; [LICENSE](third_party/go/github.com_cenkalti_backoff_v5_v5.0.3/LICENSE) |
+| go | github.com/codahale/rfc6979 | v0.0.0-20141003034818-6a90f24967eb | See license text; [LICENSE](third_party/go/github.com_codahale_rfc6979_v0.0.0-20141003034818-6a90f24967eb/LICENSE) |
+| go | github.com/containerd/errdefs | v1.0.0 | See license text; [LICENSE](third_party/go/github.com_containerd_errdefs_v1.0.0/LICENSE) |
+| go | github.com/containerd/errdefs/pkg | v0.3.0 | See license text; [LICENSE](third_party/go/github.com_containerd_errdefs_pkg_v0.3.0/LICENSE) |
+| go | github.com/containerd/log | v0.1.0 | See license text; [LICENSE](third_party/go/github.com_containerd_log_v0.1.0/LICENSE) |
+| go | github.com/containerd/stargz-snapshotter/estargz | v0.18.1 | See license text; [LICENSE](third_party/go/github.com_containerd_stargz-snapshotter_estargz_v0.18.1/LICENSE) |
+| go | github.com/coreos/go-oidc/v3 | v3.17.0 | See license text; [LICENSE](third_party/go/github.com_coreos_go-oidc_v3_v3.17.0/LICENSE), [NOTICE](third_party/go/github.com_coreos_go-oidc_v3_v3.17.0/NOTICE) |
+| go | github.com/cpuguy83/go-md2man/v2 | v2.0.7 | See license text; [LICENSE.md](third_party/go/github.com_cpuguy83_go-md2man_v2_v2.0.7/LICENSE.md) |
+| go | github.com/davecgh/go-spew | v1.1.1 | See license text; [LICENSE](third_party/go/github.com_davecgh_go-spew_v1.1.1/LICENSE) |
+| go | github.com/distribution/reference | v0.6.0 | See license text; [LICENSE](third_party/go/github.com_distribution_reference_v0.6.0/LICENSE) |
+| go | github.com/docker/cli | v29.0.3+incompatible | See license text; [LICENSE](third_party/go/github.com_docker_cli_v29.0.3_incompatible/LICENSE), [NOTICE](third_party/go/github.com_docker_cli_v29.0.3_incompatible/NOTICE), [LICENSE](third_party/go/github.com_docker_cli_v29.0.3_incompatible/cli/connhelper/internal/syntax/LICENSE) |
+| go | github.com/docker/distribution | v2.8.3+incompatible | See license text; [LICENSE](third_party/go/github.com_docker_distribution_v2.8.3_incompatible/LICENSE) |
+| go | github.com/docker/docker | v28.5.2+incompatible | See license text; [LICENSE](third_party/go/github.com_docker_docker_v28.5.2_incompatible/LICENSE), [NOTICE](third_party/go/github.com_docker_docker_v28.5.2_incompatible/NOTICE), [LICENSE](third_party/go/github.com_docker_docker_v28.5.2_incompatible/contrib/busybox/LICENSE) |
+| go | github.com/docker/docker-credential-helpers | v0.9.3 | See license text; [LICENSE](third_party/go/github.com_docker_docker-credential-helpers_v0.9.3/LICENSE) |
+| go | github.com/docker/go-connections | v0.5.0 | See license text; [LICENSE](third_party/go/github.com_docker_go-connections_v0.5.0/LICENSE) |
+| go | github.com/docker/go-units | v0.5.0 | See license text; [LICENSE](third_party/go/github.com_docker_go-units_v0.5.0/LICENSE) |
 | go | github.com/dustin/go-humanize | v1.0.1 | See license text; [LICENSE](third_party/go/github.com_dustin_go-humanize_v1.0.1/LICENSE) |
+| go | github.com/felixge/httpsnoop | v1.0.4 | See license text; [LICENSE.txt](third_party/go/github.com_felixge_httpsnoop_v1.0.4/LICENSE.txt) |
+| go | github.com/go-jose/go-jose/v4 | v4.1.3 | See license text; [LICENSE](third_party/go/github.com_go-jose_go-jose_v4_v4.1.3/LICENSE), [LICENSE](third_party/go/github.com_go-jose_go-jose_v4_v4.1.3/json/LICENSE) |
+| go | github.com/go-logr/logr | v1.4.3 | See license text; [LICENSE](third_party/go/github.com_go-logr_logr_v1.4.3/LICENSE) |
+| go | github.com/go-logr/stdr | v1.2.2 | See license text; [LICENSE](third_party/go/github.com_go-logr_stdr_v1.2.2/LICENSE) |
+| go | github.com/go-rod/rod | v0.116.2 | See license text; [LICENSE](third_party/go/github.com_go-rod_rod_v0.116.2/LICENSE) |
+| go | github.com/golang/protobuf | v1.5.0 | See license text; [LICENSE](third_party/go/github.com_golang_protobuf_v1.5.0/LICENSE) |
+| go | github.com/golang/snappy | v0.0.4 | See license text; [LICENSE](third_party/go/github.com_golang_snappy_v0.0.4/LICENSE) |
+| go | github.com/google/go-cmp | v0.7.0 | See license text; [LICENSE](third_party/go/github.com_google_go-cmp_v0.7.0/LICENSE) |
+| go | github.com/google/go-containerregistry | v0.20.7 | See license text; [LICENSE](third_party/go/github.com_google_go-containerregistry_v0.20.7/LICENSE) |
 | go | github.com/google/pprof | v0.0.0-20260802141513-ef3492d7dac3 | See license text; [LICENSE](third_party/go/github.com_google_pprof_v0.0.0-20260802141513-ef3492d7dac3/LICENSE), [LICENSE](third_party/go/github.com_google_pprof_v0.0.0-20260802141513-ef3492d7dac3/third_party/svgpan/LICENSE) |
 | go | github.com/google/uuid | v1.6.0 | See license text; [LICENSE](third_party/go/github.com_google_uuid_v1.6.0/LICENSE) |
 | go | github.com/hashicorp/golang-lru/v2 | v2.0.7 | See license text; [LICENSE](third_party/go/github.com_hashicorp_golang-lru_v2_v2.0.7/LICENSE), [LICENSE_list](third_party/go/github.com_hashicorp_golang-lru_v2_v2.0.7/simplelru/LICENSE_list) |
+| go | github.com/inconshreveable/mousetrap | v1.1.0 | See license text; [LICENSE](third_party/go/github.com_inconshreveable_mousetrap_v1.1.0/LICENSE) |
+| go | github.com/klauspost/compress | v1.18.1 | See license text; [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/gzhttp/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/internal/lz4ref/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/internal/snapref/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/s2/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/s2/cmd/internal/filepathx/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/s2/cmd/internal/readahead/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/snappy/LICENSE), [LICENSE](third_party/go/github.com_klauspost_compress_v1.18.1/snappy/xerial/LICENSE), [LICENSE.txt](third_party/go/github.com_klauspost_compress_v1.18.1/zstd/internal/xxhash/LICENSE.txt) |
+| go | github.com/letsencrypt/boulder | v0.20260223.0 | See license text; [LICENSE.txt](third_party/go/github.com_letsencrypt_boulder_v0.20260223.0/LICENSE.txt) |
 | go | github.com/lionsoul2014/ip2region/binding/golang | v0.0.0-20260901011515-c1a1fc7d5941 | See license text; [LICENSE.md](third_party/go/github.com_lionsoul2014_ip2region_binding_golang_v0.0.0-20260901011515-c1a1fc7d5941/LICENSE.md) |
 | go | github.com/mattn/go-isatty | v0.0.24 | See license text; [LICENSE](third_party/go/github.com_mattn_go-isatty_v0.0.24/LICENSE) |
 | go | github.com/mitchellh/go-homedir | v1.1.0 | See license text; [LICENSE](third_party/go/github.com_mitchellh_go-homedir_v1.1.0/LICENSE) |
+| go | github.com/moby/docker-image-spec | v1.3.1 | See license text; [LICENSE](third_party/go/github.com_moby_docker-image-spec_v1.3.1/LICENSE) |
+| go | github.com/moby/sys/atomicwriter | v0.1.0 | See license text; [LICENSE](third_party/go/github.com_moby_sys_atomicwriter_v0.1.0/LICENSE) |
+| go | github.com/moby/term | v0.0.0-20221205130635-1aeaba878587 | See license text; [LICENSE](third_party/go/github.com_moby_term_v0.0.0-20221205130635-1aeaba878587/LICENSE) |
+| go | github.com/morikuni/aec | v1.0.0 | See license text; [LICENSE](third_party/go/github.com_morikuni_aec_v1.0.0/LICENSE) |
 | go | github.com/ncruces/go-strftime | v1.0.0 | See license text; [LICENSE](third_party/go/github.com_ncruces_go-strftime_v1.0.0/LICENSE) |
+| go | github.com/opencontainers/go-digest | v1.0.0 | See license text; [LICENSE](third_party/go/github.com_opencontainers_go-digest_v1.0.0/LICENSE), [LICENSE.docs](third_party/go/github.com_opencontainers_go-digest_v1.0.0/LICENSE.docs) |
+| go | github.com/opencontainers/image-spec | v1.1.1 | See license text; [LICENSE](third_party/go/github.com_opencontainers_image-spec_v1.1.1/LICENSE) |
+| go | github.com/pkg/browser | v0.0.0-20210911075715-681adbf594b8 | See license text; [LICENSE](third_party/go/github.com_pkg_browser_v0.0.0-20210911075715-681adbf594b8/LICENSE) |
+| go | github.com/pkg/errors | v0.9.1 | See license text; [LICENSE](third_party/go/github.com_pkg_errors_v0.9.1/LICENSE) |
+| go | github.com/pmezard/go-difflib | v1.0.0 | See license text; [LICENSE](third_party/go/github.com_pmezard_go-difflib_v1.0.0/LICENSE) |
 | go | github.com/remyoudompheng/bigfft | v0.0.0-20230129092748-24d4a6f8daec | See license text; [LICENSE](third_party/go/github.com_remyoudompheng_bigfft_v0.0.0-20230129092748-24d4a6f8daec/LICENSE) |
+| go | github.com/russross/blackfriday/v2 | v2.1.0 | See license text; [LICENSE.txt](third_party/go/github.com_russross_blackfriday_v2_v2.1.0/LICENSE.txt) |
+| go | github.com/secure-systems-lab/go-securesystemslib | v0.11.0 | See license text; [LICENSE](third_party/go/github.com_secure-systems-lab_go-securesystemslib_v0.11.0/LICENSE) |
+| go | github.com/sigstore/protobuf-specs | v0.5.0 | See license text; [COPYRIGHT.txt](third_party/go/github.com_sigstore_protobuf-specs_v0.5.0/COPYRIGHT.txt), [LICENSE](third_party/go/github.com_sigstore_protobuf-specs_v0.5.0/LICENSE), [LICENSE](third_party/go/github.com_sigstore_protobuf-specs_v0.5.0/gen/pb-python/LICENSE), [LICENSE](third_party/go/github.com_sigstore_protobuf-specs_v0.5.0/gen/pb-ruby/LICENSE), [LICENSE](third_party/go/github.com_sigstore_protobuf-specs_v0.5.0/gen/pb-typescript/LICENSE) |
+| go | github.com/sigstore/sigstore | v1.10.6 | See license text; [COPYRIGHT.txt](third_party/go/github.com_sigstore_sigstore_v1.10.6/COPYRIGHT.txt), [LICENSE](third_party/go/github.com_sigstore_sigstore_v1.10.6/LICENSE) |
+| go | github.com/sirupsen/logrus | v1.9.3 | See license text; [LICENSE](third_party/go/github.com_sirupsen_logrus_v1.9.3/LICENSE) |
+| go | github.com/spf13/cobra | v1.10.2 | See license text; [LICENSE.txt](third_party/go/github.com_spf13_cobra_v1.10.2/LICENSE.txt) |
+| go | github.com/spf13/pflag | v1.0.9 | See license text; [LICENSE](third_party/go/github.com_spf13_pflag_v1.0.9/LICENSE) |
+| go | github.com/stretchr/testify | v1.11.1 | See license text; [LICENSE](third_party/go/github.com_stretchr_testify_v1.11.1/LICENSE) |
+| go | github.com/syndtr/goleveldb | v1.0.1-0.20220721030215-126854af5e6d | See license text; [LICENSE](third_party/go/github.com_syndtr_goleveldb_v1.0.1-0.20220721030215-126854af5e6d/LICENSE) |
+| go | github.com/theupdateframework/go-tuf | v0.7.0 | See license text; [LICENSE](third_party/go/github.com_theupdateframework_go-tuf_v0.7.0/LICENSE), [LICENSE.txt](third_party/go/github.com_theupdateframework_go-tuf_v0.7.0/client/python_interop/testdata/LICENSE.txt) |
+| go | github.com/theupdateframework/go-tuf/v2 | v2.4.2 | See license text; [LICENSE](third_party/go/github.com_theupdateframework_go-tuf_v2_v2.4.2/LICENSE), [NOTICE](third_party/go/github.com_theupdateframework_go-tuf_v2_v2.4.2/NOTICE) |
+| go | github.com/tink-crypto/tink-go/v2 | v2.6.0 | See license text; [LICENSE](third_party/go/github.com_tink-crypto_tink-go_v2_v2.6.0/LICENSE) |
+| go | github.com/titanous/rocacheck | v0.0.0-20171023193734-afe73141d399 | See license text; [LICENSE](third_party/go/github.com_titanous_rocacheck_v0.0.0-20171023193734-afe73141d399/LICENSE) |
+| go | github.com/vbatts/tar-split | v0.12.2 | See license text; [LICENSE](third_party/go/github.com_vbatts_tar-split_v0.12.2/LICENSE) |
+| go | github.com/ysmood/fetchup | v0.2.3 | See license text; [LICENSE](third_party/go/github.com_ysmood_fetchup_v0.2.3/LICENSE) |
+| go | github.com/ysmood/goob | v0.4.0 | See license text; [LICENSE](third_party/go/github.com_ysmood_goob_v0.4.0/LICENSE) |
+| go | github.com/ysmood/got | v0.40.0 | See license text; [LICENSE](third_party/go/github.com_ysmood_got_v0.40.0/LICENSE), [LICENSE](third_party/go/github.com_ysmood_got_v0.40.0/lib/got-vscode-extension/LICENSE) |
+| go | github.com/ysmood/gson | v0.7.3 | See license text; [LICENSE](third_party/go/github.com_ysmood_gson_v0.7.3/LICENSE) |
+| go | github.com/ysmood/leakless | v0.9.0 | See license text; [LICENSE](third_party/go/github.com_ysmood_leakless_v0.9.0/LICENSE) |
+| go | go.opentelemetry.io/auto/sdk | v1.1.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_auto_sdk_v1.1.0/LICENSE) |
+| go | go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp | v0.61.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_contrib_instrumentation_net_http_otelhttp_v0.61.0/LICENSE) |
+| go | go.opentelemetry.io/otel | v1.36.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_otel_v1.36.0/LICENSE) |
+| go | go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp | v1.33.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_otel_exporters_otlp_otlptrace_otlptracehttp_v1.33.0/LICENSE) |
+| go | go.opentelemetry.io/otel/metric | v1.36.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_otel_metric_v1.36.0/LICENSE) |
+| go | go.opentelemetry.io/otel/trace | v1.36.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_otel_trace_v1.36.0/LICENSE) |
 | go | golang.org/x/crypto | v0.57.0 | See license text; [LICENSE](third_party/go/golang.org_x_crypto_v0.57.0/LICENSE) |
 | go | golang.org/x/mod | v0.41.0 | See license text; [LICENSE](third_party/go/golang.org_x_mod_v0.41.0/LICENSE) |
 | go | golang.org/x/net | v0.58.0 | See license text; [LICENSE](third_party/go/golang.org_x_net_v0.58.0/LICENSE) |
+| go | golang.org/x/oauth2 | v0.35.0 | See license text; [LICENSE](third_party/go/golang.org_x_oauth2_v0.35.0/LICENSE) |
 | go | golang.org/x/sync | v0.23.0 | See license text; [LICENSE](third_party/go/golang.org_x_sync_v0.23.0/LICENSE) |
 | go | golang.org/x/sys | v0.48.0 | See license text; [LICENSE](third_party/go/golang.org_x_sys_v0.48.0/LICENSE) |
 | go | golang.org/x/term | v0.46.0 | See license text; [LICENSE](third_party/go/golang.org_x_term_v0.46.0/LICENSE) |
 | go | golang.org/x/text | v0.42.0 | See license text; [LICENSE](third_party/go/golang.org_x_text_v0.42.0/LICENSE) |
+| go | golang.org/x/time | v0.0.0-20210723032227-1f47c861a9ac | See license text; [LICENSE](third_party/go/golang.org_x_time_v0.0.0-20210723032227-1f47c861a9ac/LICENSE) |
 | go | golang.org/x/tools | v0.49.0 | See license text; [LICENSE](third_party/go/golang.org_x_tools_v0.49.0/LICENSE) |
+| go | google.golang.org/genproto | v0.0.0-20230706204954-ccb25ca9f130 | See license text; [LICENSE](third_party/go/google.golang.org_genproto_v0.0.0-20230706204954-ccb25ca9f130/LICENSE) |
+| go | google.golang.org/genproto/googleapis/api | v0.0.0-20250825161204-c5933d9347a5 | See license text; [LICENSE](third_party/go/google.golang.org_genproto_googleapis_api_v0.0.0-20250825161204-c5933d9347a5/LICENSE) |
+| go | google.golang.org/genproto/googleapis/rpc | v0.0.0-20250825161204-c5933d9347a5 | See license text; [LICENSE](third_party/go/google.golang.org_genproto_googleapis_rpc_v0.0.0-20250825161204-c5933d9347a5/LICENSE) |
+| go | google.golang.org/grpc | v1.75.0 | See license text; [LICENSE](third_party/go/google.golang.org_grpc_v1.75.0/LICENSE), [NOTICE.txt](third_party/go/google.golang.org_grpc_v1.75.0/NOTICE.txt) |
+| go | google.golang.org/protobuf | v1.36.11 | See license text; [LICENSE](third_party/go/google.golang.org_protobuf_v1.36.11/LICENSE) |
 | go | gopkg.in/check.v1 | v0.0.0-20161208181325-20d25e280405 | See license text; [LICENSE](third_party/go/gopkg.in_check.v1_v0.0.0-20161208181325-20d25e280405/LICENSE) |
 | go | gopkg.in/yaml.v3 | v3.0.1 | See license text; [LICENSE](third_party/go/gopkg.in_yaml.v3_v3.0.1/LICENSE), [NOTICE](third_party/go/gopkg.in_yaml.v3_v3.0.1/NOTICE) |
+| go | gotest.tools/v3 | v3.0.3 | See license text; [LICENSE](third_party/go/gotest.tools_v3_v3.0.3/LICENSE), [LICENSE](third_party/go/gotest.tools_v3_v3.0.3/internal/difflib/LICENSE) |
 | go | modernc.org/cc/v4 | v4.29.2 | See license text; [LICENSE](third_party/go/modernc.org_cc_v4_v4.29.2/LICENSE), [LICENSE](third_party/go/modernc.org_cc_v4_v4.29.2/testdata/jhjourdan/LICENSE) |
 | go | modernc.org/ccgo/v4 | v4.35.0 | See license text; [LICENSE](third_party/go/modernc.org_ccgo_v4_v4.35.0/LICENSE) |
 | go | modernc.org/fileutil | v1.4.0 | See license text; [LICENSE](third_party/go/modernc.org_fileutil_v1.4.0/LICENSE), [LICENSE](third_party/go/modernc.org_fileutil_v1.4.0/falloc/LICENSE), [LICENSE](third_party/go/modernc.org_fileutil_v1.4.0/hdb/LICENSE), [LICENSE](third_party/go/modernc.org_fileutil_v1.4.0/storage/LICENSE) |

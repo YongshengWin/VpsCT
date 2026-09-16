@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd /src
-asset=$(find /assets -maxdepth 1 -name '*-linux-*.tar.gz' -print -quit)
+target_arch=$(uname -m)
+case "$target_arch" in aarch64) target_arch=arm64;; x86_64) target_arch=amd64;; *) exit 1;; esac
+asset=$(find /assets -maxdepth 1 -name "*-linux-$target_arch.tar.gz" -print -quit)
 version=$(tar -xOf "$asset" VERSION | tr -d '\n')
 repo=$(tar -xOf "$asset" REPOSITORY | tr -d '\n')
 args=(--repo "$repo" --version "$version" --assets-dir /assets --domain panel.example.test)
+python3 /src/scripts/security-fixture.py init
+python3 /src/scripts/security-fixture.py sign controller "$version" "$asset"
 mkdir /etc/caddy
 printf '# Existing user configuration\n' > /etc/caddy/Caddyfile
 if bash install.sh "${args[@]}" > /tmp/existing-proxy.log 2>&1; then
