@@ -5,6 +5,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"ctlvps/internal/geoip"
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/notify"
+	"ctlvps/internal/safehttp"
 	"ctlvps/internal/scheduler"
 	"ctlvps/internal/share"
 	"ctlvps/internal/store"
@@ -29,15 +31,16 @@ import (
 
 // Config holds runtime options for the API.
 type Config struct {
-	SiteURL       string // external base URL for subscription links; falls back to request host
-	TrustProxy    bool
-	SecureCookies bool
-	SessionTTL    time.Duration
-	Version       string
-	StartedAt     time.Time
-	DataDir       string
-	AgentBinDir   string // where ctlvps-agent-linux-{arch} binaries live
-	SetupToken    string // local first-run capability; never exposed by the API
+	SiteURL           string // external base URL for subscription links; falls back to request host
+	TrustProxy        bool
+	TrustedProxyCIDRs []string
+	SecureCookies     bool
+	SessionTTL        time.Duration
+	Version           string
+	StartedAt         time.Time
+	DataDir           string
+	AgentBinDir       string // where ctlvps-agent-linux-{arch} binaries live
+	SetupToken        string // local first-run capability; never exposed by the API
 }
 
 // Deps wires the API to the services.
@@ -60,12 +63,24 @@ type Deps struct {
 // API is the HTTP surface.
 type API struct {
 	Deps
-	mux           *http.ServeMux
-	Events        *EventBus
-	challenges    *challengeStore // logins waiting for their second factor
-	loginLimiter  *rateLimiter    // password attempts per IP
-	factorLimiter *rateLimiter    // second-factor attempts per IP
-	cores         *corecatalog.Fetcher
+	batchMu            [64]sync.Mutex
+	streamMu           sync.Mutex
+	streams            map[int64]int
+	streamTotal        int
+	mux                *http.ServeMux
+	Events             *EventBus
+	challenges         *challengeStore // logins waiting for their second factor
+	loginLimiter       *rateLimiter    // password attempts per IP
+	factorLimiter      *rateLimiter    // second-factor attempts per IP
+	apiGate            safehttp.Gate
+	agentGate          safehttp.Gate
+	subscriptionGate   safehttp.Gate
+	agentLimiter       *rateLimiter
+	passwordGate       safehttp.Gate
+	csrfKey            []byte
+	entryLimiter       *rateLimiter
+	securityLogLimiter *rateLimiter
+	cores              *corecatalog.Fetcher
 }
 
 const (
@@ -83,13 +98,16 @@ func New(d Deps) *API {
 		d.Logger = slog.Default()
 	}
 	a := &API{
-		Deps:          d,
-		mux:           http.NewServeMux(),
-		Events:        NewEventBus(),
-		challenges:    newChallengeStore(),
-		loginLimiter:  newRateLimiter(10, time.Minute),
-		factorLimiter: newRateLimiter(30, time.Minute),
-		cores:         &corecatalog.Fetcher{},
+		Deps:               d,
+		mux:                http.NewServeMux(),
+		Events:             NewEventBus(),
+		challenges:         newChallengeStore(),
+		loginLimiter:       newRateLimiter(10, time.Minute),
+		factorLimiter:      newRateLimiter(30, time.Minute),
+		cores:              &corecatalog.Fetcher{},
+		securityLogLimiter: newRateLimiter(10, time.Minute),
+		passwordGate:       safehttp.Gate{Limit: 2}, csrfKey: csrfSecret(), agentLimiter: newRateLimiter(240, time.Minute), apiGate: safehttp.Gate{Limit: 8}, agentGate: safehttp.Gate{Limit: 16}, subscriptionGate: safehttp.Gate{Limit: 4},
+		entryLimiter: newRateLimiter(120, time.Minute),
 	}
 	a.routes()
 	return a
@@ -97,7 +115,7 @@ func New(d Deps) *API {
 
 // Handler returns the root handler.
 func (a *API) Handler() http.Handler {
-	return a.withCommon(a.mux)
+	return a.security(a.withCommon(a.mux))
 }
 
 func (a *API) withCommon(next http.Handler) http.Handler {
@@ -110,7 +128,7 @@ func (a *API) withCommon(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 		if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/agent/") && r.URL.Path != "/api/v1/events" {
-			a.Logger.Debug("http", "method", r.Method, "path", r.URL.Path, "took", time.Since(start))
+			a.Logger.Debug("http", "method", r.Method, "route", r.Pattern, "took", time.Since(start))
 		}
 	})
 }
@@ -127,12 +145,15 @@ func userFrom(ctx context.Context) *domain.User {
 }
 
 func (a *API) currentUser(r *http.Request) (*domain.User, error) {
-	c, err := r.Cookie(sessionCookie)
+	c, err := r.Cookie(a.sessionName())
 	if err != nil || c.Value == "" {
 		return nil, httpx.ErrUnauthorized
 	}
 	sess, err := a.Store.GetSession(r.Context(), auth.HashToken(c.Value))
 	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, httpx.E(503, "auth_unavailable", "身份验证暂时不可用")
+		}
 		return nil, httpx.ErrUnauthorized
 	}
 	u, err := a.Store.GetUser(r.Context(), sess.UserID)
@@ -143,14 +164,22 @@ func (a *API) currentUser(r *http.Request) (*domain.User, error) {
 }
 
 // handle registers an authenticated handler; admin restricts to admins.
-func (a *API) handle(pattern string, admin bool, h httpx.Handler) {
+func (a *API) handle(pattern string, policy accessPolicy, h httpx.Handler) {
+	if policy != memberAccess && policy != adminAccess {
+		panic("route access policy required")
+	}
 	a.mux.Handle(pattern, httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		u, err := a.currentUser(r)
 		if err != nil {
 			return err
 		}
-		if admin && u.Role != domain.RoleAdmin {
+		if policy == adminAccess && u.Role != domain.RoleAdmin {
+			a.securityEvent(r, "role_denied")
 			return httpx.ErrForbidden
+		}
+		if isWrite(r) && !a.checkCSRF(r) {
+			a.securityEvent(r, "csrf_denied")
+			return httpx.E(403, "invalid_csrf", "页面验证已失效，请刷新后重试")
 		}
 		ctx := context.WithValue(r.Context(), userKey, u)
 		return h(w, r.WithContext(ctx))
@@ -162,7 +191,7 @@ func (a *API) public(pattern string, h httpx.Handler) {
 	a.mux.Handle(pattern, h)
 }
 
-func (a *API) audit(r *http.Request, action, target string, detail any) {
+func (a *API) audit(r *http.Request, action, target string, detail any) error {
 	u := userFrom(r.Context())
 	e := domain.AuditEvent{Action: action, Target: target, IP: httpx.ClientIP(r, a.Config.TrustProxy)}
 	if u != nil {
@@ -177,7 +206,9 @@ func (a *API) audit(r *http.Request, action, target string, detail any) {
 	}
 	if err := a.Store.AddAudit(r.Context(), e); err != nil {
 		a.Logger.Warn("audit write failed", "err", err)
+		return err
 	}
+	return nil
 }
 
 func isAdmin(u *domain.User) bool { return u != nil && u.Role == domain.RoleAdmin }
@@ -253,131 +284,133 @@ func (a *API) routes() {
 	a.public("POST /api/v1/auth/login", a.login)
 	a.public("POST /api/v1/auth/login/2fa", a.login2FA)
 	a.public("POST /api/v1/auth/logout", a.logout)
-	a.handle("GET /api/v1/auth/me", false, a.me)
-	a.handle("POST /api/v1/auth/password", false, a.changePassword)
-	a.handle("PUT /api/v1/auth/avatar", false, a.setMyAvatar)
-	a.handle("PUT /api/v1/auth/profile", false, a.setMyProfile)
-	a.handle("POST /api/v1/auth/2fa/setup", false, a.twoFASetup)
-	a.handle("POST /api/v1/auth/2fa/enable", false, a.twoFAEnable)
-	a.handle("POST /api/v1/auth/2fa/disable", false, a.twoFADisable)
-	a.handle("POST /api/v1/auth/2fa/recovery", false, a.twoFARecovery)
+	a.handle("GET /api/v1/auth/me", memberAccess, a.me)
+	a.handle("POST /api/v1/auth/password", memberAccess, a.changePassword)
+	a.handle("PUT /api/v1/auth/avatar", memberAccess, a.setMyAvatar)
+	a.handle("PUT /api/v1/auth/profile", memberAccess, a.setMyProfile)
+	a.handle("POST /api/v1/auth/2fa/setup", memberAccess, a.twoFASetup)
+	a.handle("POST /api/v1/auth/2fa/enable", memberAccess, a.twoFAEnable)
+	a.handle("POST /api/v1/auth/2fa/disable", memberAccess, a.twoFADisable)
+	a.handle("POST /api/v1/auth/2fa/recovery", memberAccess, a.twoFARecovery)
+
+	a.handle("GET /api/v1/auth/csrf", memberAccess, a.csrf)
 
 	// users
-	a.handle("GET /api/v1/users", true, a.listUsers)
-	a.handle("POST /api/v1/users", true, a.createUser)
-	a.handle("PUT /api/v1/users/{id}", true, a.updateUser)
-	a.handle("DELETE /api/v1/users/{id}", true, a.deleteUser)
-	a.handle("GET /api/v1/users/{id}/avatar", false, a.userAvatar)
-	a.handle("POST /api/v1/users/{id}/2fa/reset", true, a.twoFAReset)
+	a.handle("GET /api/v1/users", adminAccess, a.listUsers)
+	a.handle("POST /api/v1/users", adminAccess, a.createUser)
+	a.handle("PUT /api/v1/users/{id}", adminAccess, a.updateUser)
+	a.handle("DELETE /api/v1/users/{id}", adminAccess, a.deleteUser)
+	a.handle("GET /api/v1/users/{id}/avatar", memberAccess, a.userAvatar)
+	a.handle("POST /api/v1/users/{id}/2fa/reset", adminAccess, a.twoFAReset)
 
 	// servers
-	a.handle("GET /api/v1/servers", true, a.listServers)
-	a.handle("POST /api/v1/servers", true, a.createServer)
-	a.handle("GET /api/v1/servers/{id}", true, a.getServer)
-	a.handle("PUT /api/v1/servers/{id}", true, a.updateServer)
-	a.handle("DELETE /api/v1/servers/{id}", true, a.deleteServer)
-	a.handle("POST /api/v1/servers/{id}/enroll-token", true, a.enrollToken)
-	a.handle("POST /api/v1/servers/{id}/reset-token", true, a.resetAgentToken)
-	a.handle("GET /api/v1/servers/{id}/traffic", true, a.serverTraffic)
-	a.handle("GET /api/v1/servers/{id}/samples", true, a.serverSamples)
-	a.handle("GET /api/v1/servers/{id}/desired", true, a.serverDesired)
-	a.handle("POST /api/v1/servers/{id}/republish", true, a.serverRepublish)
-	a.handle("POST /api/v1/servers/{id}/update-agent", true, a.updateAgent)
-	a.handle("GET /api/v1/servers/{id}/maintenance", true, a.serverMaintenance)
-	a.handle("POST /api/v1/servers/{id}/maintenance", true, a.startAgentMaintenance)
-	a.handle("GET /api/v1/system/maintenance", true, a.controllerMaintenance)
-	a.handle("GET /api/v1/system/maintenance/latest", true, a.latestController)
-	a.handle("POST /api/v1/system/maintenance", true, a.startControllerMaintenance)
+	a.handle("GET /api/v1/servers", adminAccess, a.listServers)
+	a.handle("POST /api/v1/servers", adminAccess, a.createServer)
+	a.handle("GET /api/v1/servers/{id}", adminAccess, a.getServer)
+	a.handle("PUT /api/v1/servers/{id}", adminAccess, a.updateServer)
+	a.handle("DELETE /api/v1/servers/{id}", adminAccess, a.deleteServer)
+	a.handle("POST /api/v1/servers/{id}/enroll-token", adminAccess, a.enrollToken)
+	a.handle("POST /api/v1/servers/{id}/reset-token", adminAccess, a.resetAgentToken)
+	a.handle("GET /api/v1/servers/{id}/traffic", adminAccess, a.serverTraffic)
+	a.handle("GET /api/v1/servers/{id}/samples", adminAccess, a.serverSamples)
+	a.handle("GET /api/v1/servers/{id}/desired", adminAccess, a.serverDesired)
+	a.handle("POST /api/v1/servers/{id}/republish", adminAccess, a.serverRepublish)
+	a.handle("POST /api/v1/servers/{id}/update-agent", adminAccess, a.updateAgent)
+	a.handle("GET /api/v1/servers/{id}/maintenance", adminAccess, a.serverMaintenance)
+	a.handle("POST /api/v1/servers/{id}/maintenance", adminAccess, a.startAgentMaintenance)
+	a.handle("GET /api/v1/system/maintenance", adminAccess, a.controllerMaintenance)
+	a.handle("GET /api/v1/system/maintenance/latest", adminAccess, a.latestController)
+	a.handle("POST /api/v1/system/maintenance", adminAccess, a.startControllerMaintenance)
 	a.public("POST /api/maintenance/v1/jobs/{job}/claim", a.claimMaintenance)
 	a.public("POST /api/maintenance/v1/jobs/{job}/report", a.reportMaintenance)
-	a.handle("POST /api/v1/agents/update", true, a.updateAllAgents)
-	a.handle("POST /api/v1/servers/{id}/nodes", true, a.deployNode)
+	a.handle("POST /api/v1/agents/update", adminAccess, a.updateAllAgents)
+	a.handle("POST /api/v1/servers/{id}/nodes", adminAccess, a.deployNode)
 
 	// nodes
-	a.handle("GET /api/v1/nodes", true, a.listNodes)
-	a.handle("POST /api/v1/nodes", true, a.createNode)
-	a.handle("POST /api/v1/nodes/parse", true, a.parseNodes)
-	a.handle("POST /api/v1/nodes/import", true, a.importNodes)
-	a.handle("POST /api/v1/nodes/reorder", true, a.reorderNodes)
-	a.handle("POST /api/v1/nodes/bulk-delete", true, a.bulkDeleteNodes)
-	a.handle("POST /api/v1/nodes/chain", true, a.setNodeChain)
-	a.handle("GET /api/v1/nodes/{id}", true, a.getNode)
-	a.handle("PUT /api/v1/nodes/{id}", true, a.updateNode)
-	a.handle("DELETE /api/v1/nodes/{id}", true, a.deleteNode)
-	a.handle("GET /api/v1/nodes/{id}/uri", true, a.nodeURI)
-	a.handle("GET /api/v1/nodes/{id}/traffic", true, a.nodeTraffic)
-	a.handle("POST /api/v1/nodes/{id}/regenerate", true, a.regenerateNode)
+	a.handle("GET /api/v1/nodes", adminAccess, a.listNodes)
+	a.handle("POST /api/v1/nodes", adminAccess, a.createNode)
+	a.handle("POST /api/v1/nodes/parse", adminAccess, a.parseNodes)
+	a.handle("POST /api/v1/nodes/import", adminAccess, a.importNodes)
+	a.handle("POST /api/v1/nodes/reorder", adminAccess, a.reorderNodes)
+	a.handle("POST /api/v1/nodes/bulk-delete", adminAccess, a.bulkDeleteNodes)
+	a.handle("POST /api/v1/nodes/chain", adminAccess, a.setNodeChain)
+	a.handle("GET /api/v1/nodes/{id}", adminAccess, a.getNode)
+	a.handle("PUT /api/v1/nodes/{id}", adminAccess, a.updateNode)
+	a.handle("DELETE /api/v1/nodes/{id}", adminAccess, a.deleteNode)
+	a.handle("GET /api/v1/nodes/{id}/uri", adminAccess, a.nodeURI)
+	a.handle("GET /api/v1/nodes/{id}/traffic", adminAccess, a.nodeTraffic)
+	a.handle("POST /api/v1/nodes/{id}/regenerate", adminAccess, a.regenerateNode)
 
 	// external subscriptions
-	a.handle("GET /api/v1/externals", true, a.listExternals)
-	a.handle("POST /api/v1/externals", true, a.createExternal)
-	a.handle("PUT /api/v1/externals/{id}", true, a.updateExternal)
-	a.handle("DELETE /api/v1/externals/{id}", true, a.deleteExternal)
-	a.handle("POST /api/v1/externals/{id}/sync", true, a.syncExternal)
-	a.handle("POST /api/v1/externals/{id}/import-body", true, a.importExternalBody)
-	a.handle("GET /api/v1/externals/{id}/traffic", true, a.externalTraffic)
+	a.handle("GET /api/v1/externals", adminAccess, a.listExternals)
+	a.handle("POST /api/v1/externals", adminAccess, a.createExternal)
+	a.handle("PUT /api/v1/externals/{id}", adminAccess, a.updateExternal)
+	a.handle("DELETE /api/v1/externals/{id}", adminAccess, a.deleteExternal)
+	a.handle("POST /api/v1/externals/{id}/sync", adminAccess, a.syncExternal)
+	a.handle("POST /api/v1/externals/{id}/import-body", adminAccess, a.importExternalBody)
+	a.handle("GET /api/v1/externals/{id}/traffic", adminAccess, a.externalTraffic)
 
 	// subscriptions
-	a.handle("GET /api/v1/subscriptions", false, a.listSubscriptions)
-	a.handle("POST /api/v1/subscriptions", true, a.createSubscription)
-	a.handle("POST /api/v1/subscriptions/preview", true, a.previewSubscription)
-	a.handle("POST /api/v1/subscriptions/validate-groups", true, a.validateGroups)
-	a.handle("GET /api/v1/subscriptions/{id}", false, a.getSubscription)
-	a.handle("PUT /api/v1/subscriptions/{id}", true, a.updateSubscription)
-	a.handle("DELETE /api/v1/subscriptions/{id}", true, a.deleteSubscription)
-	a.handle("POST /api/v1/subscriptions/{id}/rotate-token", true, a.rotateSubscriptionToken)
-	a.handle("GET /api/v1/subscriptions/{id}/render", false, a.renderSubscription)
-	a.handle("GET /api/v1/subscriptions/{id}/access-log", true, a.subscriptionAccessLog)
+	a.handle("GET /api/v1/subscriptions", memberAccess, a.listSubscriptions)
+	a.handle("POST /api/v1/subscriptions", adminAccess, a.createSubscription)
+	a.handle("POST /api/v1/subscriptions/preview", adminAccess, a.previewSubscription)
+	a.handle("POST /api/v1/subscriptions/validate-groups", adminAccess, a.validateGroups)
+	a.handle("GET /api/v1/subscriptions/{id}", memberAccess, a.getSubscription)
+	a.handle("PUT /api/v1/subscriptions/{id}", adminAccess, a.updateSubscription)
+	a.handle("DELETE /api/v1/subscriptions/{id}", adminAccess, a.deleteSubscription)
+	a.handle("POST /api/v1/subscriptions/{id}/rotate-token", adminAccess, a.rotateSubscriptionToken)
+	a.handle("GET /api/v1/subscriptions/{id}/render", memberAccess, a.renderSubscription)
+	a.handle("GET /api/v1/subscriptions/{id}/access-log", adminAccess, a.subscriptionAccessLog)
 
 	// templates & presets
-	a.handle("GET /api/v1/templates", false, a.listTemplates)
-	a.handle("POST /api/v1/templates", true, a.createTemplate)
-	a.handle("PUT /api/v1/templates/{id}", true, a.updateTemplate)
-	a.handle("DELETE /api/v1/templates/{id}", true, a.deleteTemplate)
-	a.handle("GET /api/v1/presets", false, a.listPresets)
-	a.handle("POST /api/v1/presets", true, a.createPreset)
-	a.handle("PUT /api/v1/presets/{id}", true, a.updatePreset)
-	a.handle("DELETE /api/v1/presets/{id}", true, a.deletePreset)
+	a.handle("GET /api/v1/templates", memberAccess, a.listTemplates)
+	a.handle("POST /api/v1/templates", adminAccess, a.createTemplate)
+	a.handle("PUT /api/v1/templates/{id}", adminAccess, a.updateTemplate)
+	a.handle("DELETE /api/v1/templates/{id}", adminAccess, a.deleteTemplate)
+	a.handle("GET /api/v1/presets", memberAccess, a.listPresets)
+	a.handle("POST /api/v1/presets", adminAccess, a.createPreset)
+	a.handle("PUT /api/v1/presets/{id}", adminAccess, a.updatePreset)
+	a.handle("DELETE /api/v1/presets/{id}", adminAccess, a.deletePreset)
 
 	// shares
-	a.handle("GET /api/v1/shares", false, a.listShares)
-	a.handle("POST /api/v1/shares", true, a.createShare)
-	a.handle("GET /api/v1/shares/{id}", false, a.getShare)
-	a.handle("PUT /api/v1/shares/{id}", true, a.updateShare)
-	a.handle("PUT /api/v1/shares/{id}/connlog", true, a.setShareConnlog)
-	a.handle("DELETE /api/v1/shares/{id}", true, a.deleteShare)
-	a.handle("POST /api/v1/shares/{id}/pause", true, a.shareAction("pause"))
-	a.handle("POST /api/v1/shares/{id}/resume", true, a.shareAction("resume"))
-	a.handle("POST /api/v1/shares/{id}/reset", true, a.shareAction("reset"))
-	a.handle("POST /api/v1/shares/{id}/revoke", true, a.shareAction("revoke"))
-	a.handle("POST /api/v1/shares/{id}/reissue", true, a.shareAction("reissue"))
-	a.handle("GET /api/v1/shares/{id}/events", false, a.shareEvents)
-	a.handle("GET /api/v1/shares/{id}/traffic", false, a.shareTraffic)
+	a.handle("GET /api/v1/shares", memberAccess, a.listShares)
+	a.handle("POST /api/v1/shares", adminAccess, a.createShare)
+	a.handle("GET /api/v1/shares/{id}", memberAccess, a.getShare)
+	a.handle("PUT /api/v1/shares/{id}", adminAccess, a.updateShare)
+	a.handle("PUT /api/v1/shares/{id}/connlog", adminAccess, a.setShareConnlog)
+	a.handle("DELETE /api/v1/shares/{id}", adminAccess, a.deleteShare)
+	a.handle("POST /api/v1/shares/{id}/pause", adminAccess, a.shareAction("pause"))
+	a.handle("POST /api/v1/shares/{id}/resume", adminAccess, a.shareAction("resume"))
+	a.handle("POST /api/v1/shares/{id}/reset", adminAccess, a.shareAction("reset"))
+	a.handle("POST /api/v1/shares/{id}/revoke", adminAccess, a.shareAction("revoke"))
+	a.handle("POST /api/v1/shares/{id}/reissue", adminAccess, a.shareAction("reissue"))
+	a.handle("GET /api/v1/shares/{id}/events", memberAccess, a.shareEvents)
+	a.handle("GET /api/v1/shares/{id}/traffic", memberAccess, a.shareTraffic)
 
 	// connection logs
-	a.handle("GET /api/v1/connlog", true, a.queryConnlog)
-	a.handle("GET /api/v1/connlog/top", true, a.topDomains)
-	a.handle("GET /api/v1/connlog/summary", true, a.connlogSummary)
-	a.handle("GET /api/v1/connlog/export", true, a.exportConnlog)
-	a.handle("GET /api/v1/connlog/stats", true, a.connlogStats)
-	a.handle("DELETE /api/v1/connlog/shares/{id}", true, a.deleteShareConnlog)
+	a.handle("GET /api/v1/connlog", adminAccess, a.queryConnlog)
+	a.handle("GET /api/v1/connlog/top", adminAccess, a.topDomains)
+	a.handle("GET /api/v1/connlog/summary", adminAccess, a.connlogSummary)
+	a.handle("GET /api/v1/connlog/export", adminAccess, a.exportConnlog)
+	a.handle("GET /api/v1/connlog/stats", adminAccess, a.connlogStats)
+	a.handle("DELETE /api/v1/connlog/shares/{id}", adminAccess, a.deleteShareConnlog)
 
 	// dashboard / settings / system
-	a.handle("GET /api/v1/dashboard", false, a.dashboard)
-	a.handle("GET /api/v1/traffic/overview", true, a.trafficOverview)
-	a.handle("GET /api/v1/settings", true, a.getSettings)
-	a.handle("GET /api/v1/settings/core-versions", true, a.coreVersions)
-	a.handle("PUT /api/v1/settings", true, a.putSettings)
-	a.handle("POST /api/v1/settings/telegram/test", true, a.testTelegram)
-	a.handle("GET /api/v1/audit", true, a.listAudit)
-	a.handle("GET /api/v1/bans", true, a.listBans)
-	a.handle("POST /api/v1/bans", true, a.createBan)
-	a.handle("PUT /api/v1/bans/{id}", true, a.updateBan)
-	a.handle("DELETE /api/v1/bans/{id}", true, a.deleteBan)
-	a.handle("GET /api/v1/access-log", true, a.accessLog)
-	a.handle("GET /api/v1/system/status", true, a.systemStatus)
-	a.handle("GET /api/v1/events", false, a.events)
-	a.handle("GET /api/v1/meta", false, a.meta)
+	a.handle("GET /api/v1/dashboard", memberAccess, a.dashboard)
+	a.handle("GET /api/v1/traffic/overview", adminAccess, a.trafficOverview)
+	a.handle("GET /api/v1/settings", adminAccess, a.getSettings)
+	a.handle("GET /api/v1/settings/core-versions", adminAccess, a.coreVersions)
+	a.handle("PUT /api/v1/settings", adminAccess, a.putSettings)
+	a.handle("POST /api/v1/settings/telegram/test", adminAccess, a.testTelegram)
+	a.handle("GET /api/v1/audit", adminAccess, a.listAudit)
+	a.handle("GET /api/v1/bans", adminAccess, a.listBans)
+	a.handle("POST /api/v1/bans", adminAccess, a.createBan)
+	a.handle("PUT /api/v1/bans/{id}", adminAccess, a.updateBan)
+	a.handle("DELETE /api/v1/bans/{id}", adminAccess, a.deleteBan)
+	a.handle("GET /api/v1/access-log", adminAccess, a.accessLog)
+	a.handle("GET /api/v1/system/status", adminAccess, a.systemStatus)
+	a.handle("GET /api/v1/events", memberAccess, a.events)
+	a.handle("GET /api/v1/meta", memberAccess, a.meta)
 
 	// agent protocol
 	a.public("POST /api/agent/v1/enroll", a.agentEnroll)
@@ -391,7 +424,7 @@ func (a *API) routes() {
 	a.public("GET /s/{token}/{format}", a.publicSubscription)
 	a.public("GET /r/{code}", a.publicShort)
 	a.public("GET /healthz", func(w http.ResponseWriter, r *http.Request) error {
-		httpx.OK(w, map[string]any{"ok": true, "version": a.Config.Version})
+		httpx.OK(w, map[string]any{"ok": true})
 		return nil
 	})
 	a.public("GET /install-agent.sh", func(w http.ResponseWriter, r *http.Request) error {

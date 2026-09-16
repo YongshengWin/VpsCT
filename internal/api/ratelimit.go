@@ -30,12 +30,12 @@ func (l *rateLimiter) Allow(key string) bool {
 // AllowN uses a per-call limit (settings-driven).
 func (l *rateLimiter) AllowN(key string, limit int) bool {
 	if limit <= 0 {
-		return true
+		limit = l.limit
 	}
 	now := time.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(l.hits) > 10000 { // crude GC
+	if len(l.hits) >= 10000 { // crude GC
 		for k, w := range l.hits {
 			if now.Sub(w.start) > l.window {
 				delete(l.hits, k)
@@ -43,6 +43,9 @@ func (l *rateLimiter) AllowN(key string, limit int) bool {
 		}
 	}
 	w, ok := l.hits[key]
+	if !ok && len(l.hits) >= 10000 {
+		return false
+	}
 	if !ok || now.Sub(w.start) > l.window {
 		l.hits[key] = &window{start: now, n: 1}
 		return true

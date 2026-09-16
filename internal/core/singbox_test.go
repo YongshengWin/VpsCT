@@ -16,6 +16,7 @@ import (
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/domain"
+	"ctlvps/internal/nft"
 	"ctlvps/internal/provision"
 )
 
@@ -149,7 +150,8 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	t.Setenv("TMPDIR", "/opt")
 	dir := t.TempDir()
-	paths := Paths{BinDir: filepath.Join(dir, "bin"), ConfDir: filepath.Join(dir, "conf"), LogDir: filepath.Join(dir, "logs"), CertDir: filepath.Join(dir, "certs"), DataDir: dir}
+	_ = dir
+	paths := DefaultPaths("/var/lib/ctlvps-agent")
 	if err := os.MkdirAll(paths.BinDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -174,6 +176,17 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	}
 	if err = sd.EnsureProxyBudget(ctx, ds.Tuning); err != nil {
 		t.Fatal(err)
+	}
+	g, e := sd.EnsureSingBoxSlice(ctx, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	groups := map[int64]string{}
+	for _, n := range nodes {
+		groups[n.NodeID] = g
+	}
+	if e = nft.New().EnsureEgress(ctx, nodes, groups); e != nil {
+		t.Fatal(e)
 	}
 	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || !changed {
 		t.Fatal("first apply", changed, err)

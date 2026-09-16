@@ -82,8 +82,7 @@ export function Avatar({ user, size = 32, className }: { user: AvatarUser; size?
 
 /**
  * fileToAvatarDataURL crops an image file to a centred square, downsizes it
- * to `px` and returns a compact data URL (WebP when the browser can encode
- * it, otherwise JPEG; PNG for small images with transparency such as logos).
+ * to `px` and returns a compact JPEG data URL supported by the server.
  */
 export async function fileToAvatarDataURL(file: File, px = 256): Promise<string> {
   const url = URL.createObjectURL(file);
@@ -105,8 +104,7 @@ export async function fileToAvatarDataURL(file: File, px = 256): Promise<string>
     ctx.drawImage(img, sx, sy, side, side, 0, 0, px, px);
     const keepAlpha = file.type === "image/png" && file.size < 64 * 1024;
     if (keepAlpha) return canvas.toDataURL("image/png");
-    const webp = canvas.toDataURL("image/webp", 0.86);
-    return webp.startsWith("data:image/webp") ? webp : canvas.toDataURL("image/jpeg", 0.86);
+    return canvas.toDataURL("image/jpeg", 0.86);
   } finally {
     URL.revokeObjectURL(url);
   }

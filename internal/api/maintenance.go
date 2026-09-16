@@ -62,18 +62,11 @@ func (a *API) maintenanceAuth(w http.ResponseWriter, r *http.Request, in *mainte
 		return httpx.E(403, "invalid_password", "管理员密码不正确")
 	}
 	if u.TOTPEnabled {
-		beforeStep := u.TOTPLastStep
-		beforeCodes, _ := json.Marshal(u.RecoveryCodes)
+		before := *u
 		if _, ok := a.consumeSecondFactor(u, in.Code); !ok {
 			return httpx.E(403, "invalid_code", "两步验证码不正确或已使用")
 		}
-		afterCodes, _ := json.Marshal(u.RecoveryCodes)
-		res, err := a.Store.DB().ExecContext(r.Context(), `UPDATE users SET totp_last_step=?,recovery_codes=? WHERE id=? AND totp_last_step=? AND recovery_codes=? AND totp_enabled=1`, u.TOTPLastStep, string(afterCodes), u.ID, beforeStep, string(beforeCodes))
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		if n != 1 {
+		if err := a.Store.UpdateUserSecurity(r.Context(), before, *u); err != nil {
 			return httpx.Conflict("验证状态已变化，请使用新的验证码")
 		}
 	}
@@ -113,6 +106,9 @@ func (a *API) startControllerMaintenance(w http.ResponseWriter, r *http.Request)
 	if in.Action == "uninstall" && in.Confirm != "VpsCT" {
 		return httpx.BadRequest("请输入 VpsCT 确认卸载控制端")
 	}
+	if err := a.audit(r, "maintenance.request."+in.Action, "controller", in.Request); err != nil {
+		return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未启动任务")
+	}
 	var j maintenance.Job
 	if err := a.maintenanceClient().Call(r.Context(), "POST", "/jobs", in.Request, &j); err != nil {
 		return httpx.Conflict(err.Error())
@@ -140,10 +136,10 @@ func (a *API) serverMaintenance(w http.ResponseWriter, r *http.Request) error {
 	_ = json.Unmarshal(ag.Diagnostics, &d)
 	var m agentproto.Metrics
 	_ = json.Unmarshal(ag.Metrics, &m)
-	available := err == nil && d.Maintenance >= maintenance.Protocol && a.agentStatus(ag) == domain.AgentOnline
+	available := err == nil && d.SecurityVersion >= 1 && d.SecurityPolicy && d.Maintenance >= maintenance.Protocol && a.agentStatus(ag) == domain.AgentOnline
 	reason := ""
 	if !available {
-		reason = "需要在线且支持网页维护的 agent；旧版请先通过安装命令更新一次"
+		reason = "需要在线且支持网页维护的 agent；旧版请先按安全迁移文档配置独立信任并更新"
 	}
 	httpx.OK(w, map[string]any{"available": available, "reason": reason, "version": ag.Version, "target_version": a.Config.Version, "agent_update": a.agentUpdateInfo(r, &m, &d), "jobs": jobs})
 	return nil
@@ -184,8 +180,8 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 	}
 	var d agentproto.Diagnostics
 	_ = json.Unmarshal(ag.Diagnostics, &d)
-	if d.Maintenance < maintenance.Protocol || a.agentStatus(ag) != domain.AgentOnline {
-		return httpx.Conflict("需要先将 agent 更新到支持网页维护的版本，并等待它上线")
+	if d.SecurityVersion < 1 || !d.SecurityPolicy || d.Maintenance < maintenance.Protocol || a.agentStatus(ag) != domain.AgentOnline {
+		return httpx.Conflict("需要先完成 agent 独立信任配置和安全迁移，并等待它上线")
 	}
 	var m agentproto.Metrics
 	_ = json.Unmarshal(ag.Metrics, &m)
@@ -202,6 +198,9 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 	}
 	_ = a.Store.ExpireMaintenance(r.Context(), id)
 	j := store.MaintenanceJob{Job: maintenance.Job{Request: in.Request, Status: "queued", Stage: "queued", Message: "等待 agent 接收；15 分钟内未接收会自动过期", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: id, ReportToken: auth.RandomToken(32), AgentSHA: sha}
+	if err := a.audit(r, "maintenance.request."+in.Action, fmt.Sprintf("server:%d", id), in.Request); err != nil {
+		return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未启动任务")
+	}
 	if err := a.Store.CreateMaintenance(r.Context(), j); err != nil {
 		return httpx.Conflict("已有维护任务正在执行，请等待当前任务结束")
 	}

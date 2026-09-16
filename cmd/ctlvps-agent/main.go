@@ -14,8 +14,12 @@ import (
 	"time"
 
 	"ctlvps/internal/agent"
+	"ctlvps/internal/agentnet"
 	"ctlvps/internal/buildinfo"
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/proxyguard"
+	"ctlvps/internal/proxysandbox"
+	"ctlvps/internal/secureupdate"
 )
 
 func usage() {
@@ -31,6 +35,34 @@ usage:
 }
 
 func main() {
+	if handled, err := proxyguard.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := proxysandbox.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := agentnet.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := secureupdate.Entry(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := maintenance.Entry(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

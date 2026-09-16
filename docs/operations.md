@@ -1,5 +1,6 @@
 # 安装、升级与恢复
 
+本安全版本安装前须完成[独立信任配置与兼容迁移](security-migration.md)。旧版下载管道不能用于建立新信任；真实环境迁移需单独安排。
 [返回 README](../README.md)
 
 本文按“选择部署方式 → 完成安装 → 配置与运维 → 更新 → 失败恢复”的顺序组织。除明确标注在被管理 VPS 上执行的步骤外，命令都在控制端服务器运行。
@@ -22,10 +23,11 @@
 
 安装器要求 Debian / Ubuntu、正在运行的 systemd、root 权限，以及 Linux amd64 / arm64。服务器需能访问 GitHub Release 和系统软件源；首次安装要求本机 8080 端口空闲。
 
-先下载最新正式版的安装脚本，再选择下面一种 HTTPS 配置方式：
+先按安全迁移说明配置可信验证器和根。下载指定版本脚本并验证后，再选择 HTTPS 配置方式（将 vX.Y.Z 替换为目标版本）：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install.sh
+curl -fsSL https://github.com/YongshengWin/VpsCT/releases/download/vX.Y.Z/install.sh -o install.sh
+sudo /usr/local/libexec/ctlvps-verify verify-release installer vX.Y.Z install.sh
 ```
 
 `latest` 入口会取得当时最新正式版的脚本。脚本随后下载该版本的程序及校验文件，确保本次安装使用同一版本。保存到本地的脚本不会自行变成新版，之后更新时应重新下载。
@@ -195,7 +197,7 @@ Docker 部署在源码的 `deploy/` 目录使用 `docker compose ps` 和 `docker
 
 ### 4.3 备份数据
 
-控制端每天备份主数据库，默认保留 7 份，目录为数据目录下的 `backups/`。这类自动备份不包含独立的连接日志库、环境文件和服务定义。
+控制端每天备份主数据库为加密 `.db.enc`，密钥单独保存；[恢复命令及凭据撤销](security-migration.md#42-日常数据库恢复)。默认保留 7 份，目录为数据目录下的 `backups/`。这类自动备份不包含独立的连接日志库、环境文件和服务定义。
 
 完整迁移前，应停止控制端，备份整个数据目录以及环境、服务和 HTTPS 配置。不要只复制运行中的 SQLite 主 `.db` 文件而遗漏 WAL 文件。备份、环境文件和访问链接均应限制访问权限。
 
@@ -217,11 +219,10 @@ Docker 部署在源码的 `deploy/` 目录使用 `docker compose ps` 和 `docker
 
 ### 5.1 安装器部署的更新
 
-执行以下命令，重新下载最新正式版的脚本并升级：
+完成本地安装器信任配置后升级：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
-  | sudo bash -s -- --update
+sudo bash /usr/local/libexec/ctlvps-install.sh --update --version latest
 ```
 
 升级保留站点配置，不同时传入域名或 HTTPS 模式参数。需要升级到指定版本时，使用对应 Release 的脚本。已有本地脚本也支持 `--version latest`，但它只改变程序下载版本，不会更新脚本本身，因此推荐上面的命令。
@@ -284,7 +285,7 @@ sudo journalctl -u ctlvps-maintenance
 
 切换版本前失败时，安装器会尝试重新启动原服务；已经切换后失败时，会停止控制端并给出备份位置，需要恢复旧程序及其对应的数据快照。升级备份不自动删除。
 
-下面的命令**仅适用于本安装器生成的备份**。先进入 root 终端，把 `restore_backup` 改为实际备份目录；命令会保留失败现场，恢复后的数据以备份时间为准。
+下面的命令**仅适用于本安全版本安装器生成的加密备份**。仅做本机升级失败回退；灾难恢复后还必须撤销旧会话和注册令牌。先进入 root 终端，把 `restore_backup` 改为实际备份目录；命令会保留失败现场，恢复后的数据以备份时间为准。
 
 ```bash
 sudo -i
@@ -295,16 +296,21 @@ sudo -i
 ```bash
 set -e
 restore_backup=/opt/ctlvps/backups/pre-upgrade-替换为实际目录
-for restore_file in data.tar.gz ctlvpsd.env ctlvpsd.service previous-release; do
+for restore_file in data.tar.gz.enc ctlvpsd.env ctlvpsd.service previous-release; do
   test -f "$restore_backup/$restore_file"
 done
 previous_release=$(cat "$restore_backup/previous-release")
 test -x "$previous_release/ctlvpsd"
 test -f "$previous_release/REPOSITORY"
-tar -tzf "$restore_backup/data.tar.gz" >/dev/null
+/usr/local/libexec/ctlvps-verify verify-rollback controller "$(cat "$previous_release/VERIFIED-SHA256")"
+restore_tmp=$(mktemp -d)
+chmod 0700 "$restore_tmp"
+/usr/local/libexec/ctlvps-verify backup open /etc/ctlvps/secrets.key "$restore_backup/data.tar.gz.enc" "$restore_tmp/data.tar.gz"
+tar -tzf "$restore_tmp/data.tar.gz" >/dev/null
 systemctl stop ctlvpsd
 mv /opt/ctlvps/data "/opt/ctlvps/data.failed.$(date -u +%Y%m%dT%H%M%SZ)"
-tar -xzf "$restore_backup/data.tar.gz" -C /opt/ctlvps
+tar -xzf "$restore_tmp/data.tar.gz" -C /opt/ctlvps
+rm -rf -- "$restore_tmp"
 install -m 0600 "$restore_backup/ctlvpsd.env" /etc/ctlvps/ctlvpsd.env
 install -m 0644 "$restore_backup/ctlvpsd.service" /etc/systemd/system/ctlvpsd.service
 install -m 0644 "$previous_release/REPOSITORY" /opt/ctlvps/REPOSITORY
@@ -413,3 +419,9 @@ sudo systemctl disable --now ctlvps-agent
 ```
 
 单独停用 agent 只停止管理进程，已部署服务由独立 systemd 单元运行，可能继续提供服务。控制端已不可用时，需要在 VPS 本地逐项确认并停止相关服务，不能依赖面板删除操作。
+
+## 8. 代理权限隔离
+
+加固后的代理使用专用低权限账户，管理文件仍由管理进程持有。开机必须先由 agent 安装出站规则，代理才会启动；不要为了启动失败而手工赋予代理 root 或 NET_ADMIN。无法兼容的内核或证书组合会报告失败，不能当作已经加固。
+
+首次身份切换会短暂重启代理。证书快照、原生 ACME 状态、私网分组及恢复行为见 [代理隔离实施记录](security-proxy-hardening-implementation.md)。该记录同时列出已完成测试和上线前仍需验证的项目。

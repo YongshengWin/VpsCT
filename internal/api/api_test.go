@@ -67,8 +67,10 @@ func (c *client) do(method, path string, body any, want int) map[string]any {
 	}
 	req, _ := http.NewRequest(method, c.srv.URL+path, rd)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", c.srv.URL)
 	if c.cookie != nil {
 		req.AddCookie(c.cookie)
+		req.Header.Set("X-CSRF-Token", c.api.csrfToken(c.cookie.Value))
 	}
 	if c.agent != "" && strings.HasPrefix(path, "/api/agent/") {
 		req.Header.Set("Authorization", "Bearer "+c.agent)

@@ -264,13 +264,14 @@ export function ServerDetailPage() {
 
       <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} />
 
+      {s.agent && <div className="mb-4 rounded-md border p-3 text-sm">安全状态：{s.agent_status === "pending" ? "尚未接入 agent" : !s.diagnostics?.security_version ? "旧版 agent，尚未迁移独立验签" : !s.diagnostics.security_policy ? "本机信任策略未配置，程序与配置变更已关闭" : s.diagnostics.security_paused ? "本机已暂停配置变更" : "独立验签与本机策略已启用"}</div>}
       {s.diagnostics?.metering_error && <div className="mb-4 rounded-md border border-red-500/40 p-3 text-sm text-destructive">节点流量采集异常：{s.diagnostics.metering_error}。当前用量可能未更新。</div>}
  {s.agent?.apply_error && (
         <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
       )}
       {s.agent && s.agent_update && !s.agent_update.supported && (
         <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          当前 agent 需手动更新一次。在「更多」中复制 agent 更新命令，在该 VPS 上执行后，即可随心跳自动同步控制端提供的版本。
+          请先在此 VPS 通过独立可信渠道配置验证器、签名根和本地安装器，再执行「更多」中的迁移命令。完成后只接受受信签名版本；未完成前不会自动更新。
         </div>
       )}
       {s.agent_update?.outdated && !s.diagnostics?.maintenance && (
@@ -451,7 +452,7 @@ export function ServerDetailPage() {
 
       <ServerDialog open={edit} onClose={() => setEdit(false)} server={s} />
       <DeployDialog open={deploy} onClose={() => setDeploy(false)} server={s} protocols={meta?.protocols ?? []} />
-      <Dialog open={!!enroll} onClose={() => setEnroll(null)} title="安装 agent" description="在目标 VPS 上以 root 执行以下命令（令牌 24 小时内有效，仅可使用一次）。">
+      <Dialog open={!!enroll} onClose={() => setEnroll(null)} title="安装 agent" description="先从独立可信发行渠道安装验证器、安装脚本和本机策略，再以 root 执行以下命令。令牌 15 分钟有效，仅可使用一次。">
         {enroll && (
           <div className="space-y-3">
             <Pre className="whitespace-pre-wrap break-all">{enroll.install_command}</Pre>
@@ -479,7 +480,7 @@ function Diag({ ok, label, warnOnly }: { ok: boolean; label: string; warnOnly?: 
 function DeployDialog({ open, onClose, server, protocols }: { open: boolean; onClose: () => void; server: Server; protocols: string[] }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, cert_mode: "" });
+  const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, cert_mode: "", cert_id: "" });
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
   const m = useMutation({
     mutationFn: () => post<Node>(`/api/v1/servers/${server.id}/nodes`, { ...f, port: Number(f.port) || 0, snell_version: Number(f.snell_version) }),
@@ -512,6 +513,7 @@ function DeployDialog({ open, onClose, server, protocols }: { open: boolean; onC
             </Field>
           </>
         )}
+        {tls && (f.cert_mode || server.cert_mode) === "external" && <Field label="外部证书 ID" hint="填写此 VPS 本机安全策略中已登记的证书名称"><Input value={f.cert_id} onChange={(e) => set("cert_id", e.target.value)} maxLength={64} /></Field>}
         {f.protocol === "hysteria2" && <div className="sm:col-span-2"><Switch checked={f.obfs} onChange={(v) => set("obfs", v)} label="启用 Salamander 混淆（对抗 QUIC 封锁）" /></div>}
         {f.protocol === "snell" && (
           <Field label="Snell 版本">

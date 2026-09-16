@@ -2,6 +2,7 @@
 """Build self-contained release attachments from make release's binaries."""
 import argparse
 import hashlib
+import json
 import pathlib
 import re
 import shutil
@@ -18,7 +19,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--version', required=True)
     parser.add_argument('--repository', required=True)
+    parser.add_argument('--security-epoch', type=int, default=1)
     args = parser.parse_args()
+    if args.security_epoch < 1: parser.error('security epoch must be positive')
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', args.version):
         parser.error('version must be vX.Y.Z, optionally with a prerelease suffix')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
@@ -64,6 +67,16 @@ def main():
             with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
                 for path in sorted(package.iterdir()):
                     archive.add(path, arcname=path.name, filter=metadata)
+    manifest = []
+    for arch in ('amd64','arm64'):
+        shutil.copy2(ROOT / f'bin/ctlvps-agent-linux-{arch}', out / f'ctlvps-agent-linux-{arch}')
+        shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
+        for component, name in [('controller',f'ctlvps-{args.version}-linux-{arch}.tar.gz'),('agent',f'ctlvps-agent-linux-{arch}'),('verifier',f'ctlvps-verify-linux-{arch}')]:
+            manifest.append({'path':str((out/name).relative_to(ROOT)),'identity':{'product':'VpsCT','component':component,'version':args.version,'arch':arch,'epoch':args.security_epoch}})
+    shutil.copy2(ROOT / 'internal/assets/install-agent.sh', out / 'install-agent.sh')
+    for name in ('install.sh','install-agent.sh','uninstall.sh'):
+        manifest.append({'path':str((out/name).relative_to(ROOT)),'identity':{'product':'VpsCT','component':'installer','version':args.version,'arch':'all','epoch':args.security_epoch}})
+    (out/'signing-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT / name, out / name)
     with (out / 'SHA256SUMS').open('w') as sums:

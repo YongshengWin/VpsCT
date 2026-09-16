@@ -33,7 +33,7 @@ esac
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	calls := []agentproto.Heartbeat{}
 	fail := true
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var hb agentproto.Heartbeat
 		if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
 			t.Error(err)
@@ -48,6 +48,7 @@ esac
 	defer server.Close()
 	state := &State{ServerURL: server.URL, AgentToken: "isolated-fixture", CounterNonce: "fixture"}
 	a := New(dir, state, slog.Default(), "fixture")
+	a.Client.HTTP = server.Client()
 	ds := &agentproto.DesiredState{Nodes: []agentproto.NodeSpec{{NodeID: 1, Core: "singbox", ListenPort: 21001}}}
 	if _, err := a.prepareMetering(context.Background(), ds); err == nil {
 		t.Fatal("expected failed ACK")
@@ -64,6 +65,7 @@ esac
 	}
 	fail = false
 	a = New(dir, persisted, slog.Default(), "fixture")
+	a.Client.HTTP = server.Client()
 	if err = a.flushSettlement(context.Background()); err != nil {
 		t.Fatal(err)
 	}

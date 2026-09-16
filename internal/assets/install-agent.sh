@@ -9,17 +9,24 @@ BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/ctlvps"
 STATE_DIR="/var/lib/ctlvps-agent"
 UPDATE=0
+VERIFIER=/usr/local/libexec/ctlvps-verify
+umask 077
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --server) SERVER="$2"; shift 2 ;;
     --token) TOKEN="$2"; shift 2 ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
+    --verifier) VERIFIER="$2"; shift 2 ;;
     --update) UPDATE=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
+if [[ "$SERVER" != https://* || "$SERVER" == *[[:space:]]* ]]; then
+ echo "HTTPS controller URL required" >&2; exit 2
+fi
+if [[ "$BIN_DIR" != /usr/local/bin ]]; then echo "binary directory must be /usr/local/bin" >&2; exit 2; fi
 if [[ -z "$SERVER" ]]; then
   echo "usage: install-agent.sh --server <url> --token <enroll-token>" >&2
   echo "       install-agent.sh --update --server <url>" >&2
@@ -58,7 +65,8 @@ if [[ "$UPDATE" -eq 1 ]]; then
   fi
   echo "==> updating ctlvps-agent (linux-$ARCH)"
   TMP="$(mktemp)"
-  curl -fsSL "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
+  curl --fail --silent --show-error --proto "=https" --max-time 300 --max-filesize 134217728 "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
+  "$BIN_DIR/ctlvps-agent" verify-release agent "" "$TMP"
   install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
   rm -f "$TMP"
   systemctl restart ctlvps-agent
@@ -85,7 +93,9 @@ systemctl enable --now chrony >/dev/null 2>&1 || systemctl enable --now chronyd 
 
 echo "==> downloading ctlvps-agent (linux-$ARCH)"
 TMP="$(mktemp)"
-curl -fsSL "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
+curl --fail --silent --show-error --proto "=https" --max-time 300 --max-filesize 134217728 "$SERVER/dl/agent/linux-$ARCH" -o "$TMP"
+[[ "$VERIFIER" == /* && -f "$VERIFIER" && ! -L "$VERIFIER" && -x "$VERIFIER" && "$(stat -c %u "$VERIFIER")" == 0 ]] || { echo "independently provision a trusted verifier first" >&2; exit 1; }
+"$VERIFIER" verify-release agent "" "$TMP"
 install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
 rm -f "$TMP"
 
@@ -110,6 +120,10 @@ LimitNOFILE=1048576
 Environment=GOMEMLIMIT=96MiB
 MemoryMax=192M
 Nice=-5
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+RestrictSUIDSGID=true
 
 [Install]
 WantedBy=multi-user.target

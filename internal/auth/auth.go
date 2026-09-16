@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -24,6 +25,9 @@ const (
 
 // HashPassword returns an argon2id PHC string.
 func HashPassword(password string) (string, error) {
+	if len(password) > 512 {
+		return "", errors.New("password too long")
+	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -35,6 +39,9 @@ func HashPassword(password string) (string, error) {
 
 // VerifyPassword checks password against a PHC string produced by HashPassword.
 func VerifyPassword(encoded, password string) bool {
+	if len(password) > 512 || len(encoded) > 1024 {
+		return false
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false
@@ -44,12 +51,18 @@ func VerifyPassword(encoded, password string) bool {
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &tm, &par); err != nil {
 		return false
 	}
+	if parts[2] != "v=19" || mem < 8 || mem > 65536 || tm < 1 || tm > 4 || par < 1 || par > 4 {
+		return false
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil {
 		return false
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
+		return false
+	}
+	if len(salt) < 8 || len(salt) > 64 || len(want) != 32 {
 		return false
 	}
 	got := argon2.IDKey([]byte(password), salt, tm, mem, par, uint32(len(want)))
@@ -85,13 +98,16 @@ const shortAlphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 // ShortCode returns a human-friendly random code of length n.
 func ShortCode(n int) string {
-	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic(err)
+	if n < 24 {
+		n = 24
 	}
 	out := make([]byte, n)
-	for i := range b {
-		out[i] = shortAlphabet[int(b[i])%len(shortAlphabet)]
+	for i := range out {
+		v, err := rand.Int(rand.Reader, big.NewInt(int64(len(shortAlphabet))))
+		if err != nil {
+			panic(err)
+		}
+		out[i] = shortAlphabet[v.Int64()]
 	}
 	return string(out)
 }

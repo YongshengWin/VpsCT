@@ -10,11 +10,18 @@ services:
       - "127.0.0.1:8080:8080"   # put Caddy/Nginx/Cloudflare in front for TLS
     environment:
       CTLVPS_SITE_URL: "https://panel.example.com"   # used in subscription links
-      CTLVPS_TRUST_PROXY: "true"
+      CTLVPS_TRUSTED_PROXIES: "" # set only the actual adjacent proxy CIDR
+      CTLVPS_SECRETS_KEY_FILE: /keys/secrets.key
       CTLVPS_LOG_LEVEL: info
       TZ: Asia/Shanghai
     volumes:
       - ctlvps-data:/data
+      - ctlvps-keys:/keys
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    pids_limit: 128
     # keep container logs bounded (json-file default is unbounded)
     logging:
       driver: json-file
@@ -28,3 +35,4 @@ services:
 
 volumes:
   ctlvps-data:
+  ctlvps-keys:

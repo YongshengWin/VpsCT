@@ -25,6 +25,10 @@ PrivateTmp=true
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+TasksMax=128
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
 
 [Install]
 WantedBy=multi-user.target

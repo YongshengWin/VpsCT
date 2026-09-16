@@ -27,7 +27,7 @@ jobs:
       - name: Clean build and tests
         run: bash scripts/check.sh
       - name: Concurrent initialization and authentication
-        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip ./internal/maintenance ./internal/agent
+        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip ./internal/maintenance ./internal/agent ./internal/secureupdate ./internal/safehttp ./internal/backup ./internal/connlog
       - name: Shell and workflow checks
         run: |
           sudo apt-get update
@@ -50,6 +50,16 @@ jobs:
         run: bash scripts/test-uninstall-container.sh
       - name: Web maintenance integration (isolated systemd container)
         run: bash scripts/test-maintenance-container.sh release/v0.0.0-ci
+      - name: Proxy kernel isolation (disposable containers)
+        run: bash scripts/test-meter-container.sh
+      - name: Parser fuzz budget
+        run: go test ./internal/proxynode -run '^$' -fuzz FuzzParseAny -fuzztime 20s -parallel 2
+      - name: Real browser origin and CSP checks
+        run: |
+          npm install --prefix "$RUNNER_TEMP/browser" --no-save playwright@1.62.1
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
+          go build -o "$RUNNER_TEMP/browser-controller" ./cmd/ctlvpsd
+          PLAYWRIGHT_MODULE_DIR="$RUNNER_TEMP/browser/node_modules" CTLVPS_TEST_BINARY="$RUNNER_TEMP/browser-controller" node scripts/security-browser.mjs
       - name: Docker build and first-run smoke test
         run: bash scripts/test-docker.sh
   security:

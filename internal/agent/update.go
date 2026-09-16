@@ -6,13 +6,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"ctlvps/internal/agentnet"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/core"
+	"ctlvps/internal/safehttp"
+	"ctlvps/internal/secureupdate"
+	"net/url"
 )
 
 func fileSHA256(path string) (string, error) {
@@ -26,6 +29,13 @@ func fileSHA256(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+var verifyRelease = func(ctx context.Context, component, version string, data []byte) error {
+	if err := secureupdate.Allow("agent.update"); err != nil {
+		return err
+	}
+	return secureupdate.Verify(ctx, component, version, data)
 }
 
 var executablePath = func() string {
@@ -54,22 +64,13 @@ func applySelfUpdate(ctx context.Context, baseURL string, spec agentproto.AgentU
 	if target == "" {
 		return fmt.Errorf("cannot resolve executable path")
 	}
-	url := resolveUpdateURL(baseURL, spec.URL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
+	rawURL := resolveUpdateURL(baseURL, spec.URL)
+	u, err := url.Parse(rawURL)
+	base, baseErr := url.Parse(baseURL)
+	if err != nil || baseErr != nil || u.Scheme != "https" || u.User != nil || safehttp.Origin(u) != safehttp.Origin(base) {
+		return fmt.Errorf("invalid update origin")
 	}
-	req.Header.Set("User-Agent", "ctlvps-agent")
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 80<<20))
+	data, err := downloadSelf(ctx, rawURL)
 	if err != nil {
 		return err
 	}
@@ -78,13 +79,13 @@ func applySelfUpdate(ctx context.Context, baseURL string, spec agentproto.AgentU
 	if !strings.EqualFold(got, spec.SHA256) {
 		return fmt.Errorf("sha256 mismatch: got %s want %s", got, spec.SHA256)
 	}
-	tmp := target + ".new"
-	if err := os.WriteFile(tmp, data, 0o755); err != nil {
+	if err := verifyRelease(ctx, "agent", "", data); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, target); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	_, err = core.WriteIfChanged(target, data, 0755)
+	return err
+}
+
+var downloadSelf = func(ctx context.Context, raw string) ([]byte, error) {
+	return agentnet.Download(ctx, raw, 128<<20, true)
 }

@@ -1,7 +1,7 @@
 """Isolated, synthetic TCP/UDP client <-> proxy <-> origin counter test.
 Run only in the disposable container launched by test-meter-container.sh.
 """
-import subprocess,sys,json,time,os,socket,threading,atexit
+import subprocess,sys,json,time,os,socket,threading,atexit,textwrap
 from pathlib import Path
 rules=Path(sys.argv[1])
 def run(*a):return subprocess.check_output(a,text=True)
@@ -140,7 +140,7 @@ except (TimeoutError,ConnectionError):
  except (TimeoutError,ConnectionRefusedError):
   assert {blocked}
  '''
- subprocess.run(['ip','netns','exec','client','python3','-c',code],check=True)
+ subprocess.run(['ip','netns','exec','client','python3','-c',textwrap.dedent(code)],check=True)
 for node in (1,2):
  for udp in (False,True):
   for ipv6 in (False,True):

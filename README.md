@@ -16,22 +16,20 @@
 
 **开启 Cloudflare 橙云时**：面板域名应使用 **完全（严格） / Full (strict)** 加密模式；“灵活 / Flexible”会与 Caddy 的 HTTPS 跳转形成循环，导致“重定向次数过多”。同一主域下还有其他站点时，建议只为面板子域添加配置规则。使用“仅 DNS”（灰云）时无需此设置，具体步骤见 [Cloudflare 设置与访问排查](docs/operations.md#26-cloudflare-设置与访问排查)。
 
-在控制端服务器上执行，安装最新正式版：
+先完成[独立信任与本地安装器配置](docs/security-migration.md#2-首次建立独立信任)，再在控制端服务器执行：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
-  | sudo bash -s -- --domain panel.example.com
+sudo bash /usr/local/libexec/ctlvps-install.sh --domain panel.example.com
 ```
 
-将 `panel.example.com` 替换为你的面板域名。此命令始终获取最新正式版，无需修改版本号；需要安装指定版本时，使用对应 [Release](https://github.com/YongshengWin/VpsCT/releases) 页面的命令。
+将 `panel.example.com` 替换为你的面板域名。本地安装器和信任根必须来自独立可信渠道；下载后的程序执行前通过 TUF 验证。具体版本以安装器参数为准。
 
 安装器会下载并校验程序、配置系统服务和 HTTPS。服务器无需安装 Go、Node 或源码编译环境。安装完成后，还需通过面板域名确认 HTTPS 可访问；本机服务启动成功不代表公网入口已就绪。已有 HTTPS 入口等部署方式见 [安装文档](docs/operations.md)。
 
 **使用已有 HTTPS 入口或其他端口**：先将入口转发到本机 `127.0.0.1:8080`，再执行以下命令。这里以 `8443` 为例；使用标准 HTTPS 端口时去掉 `:8443`。这种方式无需为安装器腾出 80、443 端口。
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
-  | sudo bash -s -- --site-url https://panel.example.com:8443 --no-proxy
+sudo bash /usr/local/libexec/ctlvps-install.sh --site-url https://panel.example.com:8443 --no-proxy
 ```
 
 ### 1.2 创建管理员
@@ -48,7 +46,7 @@ sudo cat /opt/ctlvps/data/setup-token
 
 登录面板后，按以下顺序接入每台 VPS：
 
-1. 打开「服务器 → 添加服务器」，填写名称、地址和流量配额。
+1. 先在 VPS 完成独立信任配置和可信本地 agent 安装器准备，再打开「服务器 → 添加服务器」，填写名称、地址和流量配额。
 2. 在服务器详情中生成 agent 安装命令。
 3. 到**这台被管理的 VPS** 上，以 root 执行生成的命令。
 4. 返回面板，确认服务器显示「在线」。
@@ -95,17 +93,16 @@ agent 主动连接控制端，因此 VPS 无需额外开放管理端口。服务
 对于使用安装器部署的控制端，在**控制端服务器**执行以下命令，更新到最新正式版：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
-  | sudo bash -s -- --update
+sudo bash /usr/local/libexec/ctlvps-install.sh --update
 ```
 
 更新前会停服备份，并保留账户、配置和分享记录。其他部署方式及失败恢复步骤见 [运维文档](docs/operations.md)。
 
-网页升级入口：**设置 → 系统 → 控制端维护**。2026-09-15 更新的 `v0.1.0` 附件已包含此能力；此前安装的用户需先执行一次上面的终端更新命令，之后即可从网页操作。网页升级会在启动失败时自动恢复旧程序和升级前数据。
+网页升级入口：**设置 → 系统 → 控制端维护**。安全加固前的版本需先完成独立信任迁移。网页升级失败时仅能回退到本机已验证、满足安全代次底线的版本。
 
 ### 4.2 同步 agent 与配置
 
-支持自动更新的 agent 会随心跳同步控制端提供的版本。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
+完成本机信任配置的新版 agent 才会随心跳同步受信签名版本。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
 
 | 操作 | 用途 |
 |---|---|
@@ -121,12 +118,11 @@ curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/instal
 
 发行附件提供独立的 [uninstall.sh](uninstall.sh)，支持分别卸载控制端、agent，或卸载本机两端。脚本也适用于早期 v0.1.0 的默认 systemd 安装，无需先升级程序。
 
-在目标 VPS 下载卸载脚本后，先查看范围，再选择要卸载的一端：
+在目标 VPS 使用已验证安装包中的本地卸载器，先查看范围，再选择要卸载的一端：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/uninstall.sh -o uninstall.sh
-sudo bash uninstall.sh --controller --dry-run
-sudo bash uninstall.sh --controller --yes
+sudo bash /opt/ctlvps/uninstall.sh --controller --dry-run
+sudo bash /opt/ctlvps/uninstall.sh --controller --yes
 # 卸载 agent 改用 --agent；卸载本机两端用 --all。
 ```
 
@@ -144,6 +140,7 @@ sudo bash uninstall.sh --controller --yes
 | 查看版本变化 | [变更记录](CHANGELOG.md) |
 | 从源码构建或参与开发 | [贡献指南](CONTRIBUTING.md) |
 | 私密报告安全问题 | [安全报告流程](SECURITY.md) |
+| 查看完整系统的安全边界与实施计划 | [系统安全设计](docs/security-design.md)与[迁移说明](docs/security-migration.md) |
 | 维护和发布版本 | [发布流程](docs/releasing.md) |
 
 欢迎通过 [Issue](https://github.com/YongshengWin/VpsCT/issues) 和 [PR](https://github.com/YongshengWin/VpsCT/pulls) 提交问题、改进建议或代码，参与前请阅读 [社区约定](CODE_OF_CONDUCT.md)。

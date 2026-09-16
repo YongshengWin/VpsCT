@@ -10,12 +10,12 @@ import (
 
 const extCols = `id, name, url, user_agent, sync_interval_min, last_sync_at, last_error, upload, download, total, expire_at, node_count, enabled, owner_user_id, created_at, updated_at`
 
-func scanExt(sc interface{ Scan(...any) error }) (domain.ExternalSubscription, error) {
+func (s *Store) scanExt(sc interface{ Scan(...any) error }) (domain.ExternalSubscription, error) {
 	var e domain.ExternalSubscription
 	var lastSync, expire sql.NullString
 	var enabled int
 	var created, updated string
-	if err := sc.Scan(&e.ID, &e.Name, &e.URL, &e.UserAgent, &e.SyncIntervalMin, &lastSync, &e.LastError, &e.Upload, &e.Download, &e.Total, &expire,
+	if err := sc.Scan(&e.ID, &e.Name, s.scanSecret("external_subscriptions.url", &e.URL), &e.UserAgent, &e.SyncIntervalMin, &lastSync, &e.LastError, &e.Upload, &e.Download, &e.Total, &expire,
 		&e.NodeCount, &enabled, &e.OwnerUserID, &created, &updated); err != nil {
 		return e, err
 	}
@@ -34,7 +34,7 @@ func (s *Store) CreateExternal(ctx context.Context, e *domain.ExternalSubscripti
 		e.SyncIntervalMin = 360
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO external_subscriptions(name,url,user_agent,sync_interval_min,enabled,owner_user_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-		e.Name, e.URL, e.UserAgent, e.SyncIntervalMin, b2i(e.Enabled), e.OwnerUserID, fmtTime(now), fmtTime(now))
+		e.Name, s.seal("external_subscriptions.url", e.URL), e.UserAgent, e.SyncIntervalMin, b2i(e.Enabled), e.OwnerUserID, fmtTime(now), fmtTime(now))
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func (s *Store) CreateExternal(ctx context.Context, e *domain.ExternalSubscripti
 func (s *Store) UpdateExternal(ctx context.Context, e *domain.ExternalSubscription) error {
 	now := s.Now()
 	_, err := s.db.ExecContext(ctx, `UPDATE external_subscriptions SET name=?, url=?, user_agent=?, sync_interval_min=?, enabled=?, updated_at=? WHERE id=?`,
-		e.Name, e.URL, e.UserAgent, e.SyncIntervalMin, b2i(e.Enabled), fmtTime(now), e.ID)
+		e.Name, s.seal("external_subscriptions.url", e.URL), e.UserAgent, e.SyncIntervalMin, b2i(e.Enabled), fmtTime(now), e.ID)
 	e.UpdatedAt = now
 	return err
 }
@@ -73,18 +73,18 @@ func (s *Store) RecordExternalSync(ctx context.Context, id int64, r ExternalSync
 	}
 	if r.HasInfo {
 		_, err := s.db.ExecContext(ctx, `UPDATE external_subscriptions SET last_sync_at=?, last_error='', upload=?, download=?, total=?, expire_at=?, raw_content=?, node_count=?, updated_at=? WHERE id=?`,
-			now, r.Upload, r.Download, r.Total, fmtTimePtr(r.ExpireAt), r.RawContent, r.NodeCount, now, id)
+			now, r.Upload, r.Download, r.Total, fmtTimePtr(r.ExpireAt), s.seal("external_subscriptions.raw_content", r.RawContent), r.NodeCount, now, id)
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE external_subscriptions SET last_sync_at=?, last_error='', raw_content=?, node_count=?, updated_at=? WHERE id=?`,
-		now, r.RawContent, r.NodeCount, now, id)
+		now, s.seal("external_subscriptions.raw_content", r.RawContent), r.NodeCount, now, id)
 	return err
 }
 
 // ExternalRawContent returns the last fetched body.
 func (s *Store) ExternalRawContent(ctx context.Context, id int64) (string, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT raw_content FROM external_subscriptions WHERE id=?`, id).Scan(&raw)
+	err := s.db.QueryRowContext(ctx, `SELECT raw_content FROM external_subscriptions WHERE id=?`, id).Scan(s.scanSecret("external_subscriptions.raw_content", &raw))
 	if isNoRows(err) {
 		return "", ErrNotFound
 	}
@@ -99,7 +99,7 @@ func (s *Store) DeleteExternal(ctx context.Context, id int64) error {
 
 // GetExternal fetches one.
 func (s *Store) GetExternal(ctx context.Context, id int64) (domain.ExternalSubscription, error) {
-	e, err := scanExt(s.db.QueryRowContext(ctx, `SELECT `+extCols+` FROM external_subscriptions WHERE id=?`, id))
+	e, err := s.scanExt(s.db.QueryRowContext(ctx, `SELECT `+extCols+` FROM external_subscriptions WHERE id=?`, id))
 	if isNoRows(err) {
 		return e, ErrNotFound
 	}
@@ -115,7 +115,7 @@ func (s *Store) ListExternal(ctx context.Context) ([]domain.ExternalSubscription
 	defer rows.Close()
 	out := []domain.ExternalSubscription{}
 	for rows.Next() {
-		e, err := scanExt(rows)
+		e, err := s.scanExt(rows)
 		if err != nil {
 			return nil, err
 		}

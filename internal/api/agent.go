@@ -15,6 +15,7 @@ import (
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
+	"ctlvps/internal/safehttp"
 	"ctlvps/internal/store"
 )
 
@@ -33,8 +34,12 @@ func agentFrom(ctx context.Context) *agentCtx {
 // agentRoute wraps a handler with bearer-token agent authentication.
 func (a *API) agentRoute(pattern string, h httpx.Handler) {
 	a.mux.Handle(pattern, httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
-		tok := strings.TrimSpace(strings.TrimPrefix(r.Header.Get(agentproto.AuthHeader), "Bearer"))
-		if tok == "" {
+		header := r.Header.Get(agentproto.AuthHeader)
+		if !strings.HasPrefix(header, "Bearer ") {
+			return httpx.ErrUnauthorized
+		}
+		tok := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		if tok == "" || len(tok) > 256 {
 			return httpx.ErrUnauthorized
 		}
 		ag, err := a.Store.GetAgentByTokenHash(r.Context(), auth.HashToken(tok))
@@ -67,7 +72,7 @@ func (a *API) agentEnroll(w http.ResponseWriter, r *http.Request) error {
 		return httpx.ErrNotFound
 	}
 	token := auth.RandomToken(32)
-	if err := a.Store.CompleteEnrollment(r.Context(), ag.ID, auth.HashToken(token), in.Version); err != nil {
+	if err := a.Store.CompleteEnrollment(r.Context(), ag.ID, ag.EnrollTokenHash, auth.HashToken(token), in.Version); err != nil {
 		return err
 	}
 	metrics, _ := json.Marshal(agentproto.Metrics{Hostname: in.Hostname, Kernel: in.Kernel, Arch: in.Arch})
@@ -91,6 +96,9 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	var hb agentproto.Heartbeat
 	if err := httpx.Decode(r, &hb); err != nil {
 		return err
+	}
+	if len(hb.Ports) > 4096 || len(hb.Diagnostics.Cores) > 32 || len(hb.Diagnostics.Certs) > 2048 || len(hb.Diagnostics.Warnings) > 64 || len(hb.Diagnostics.RecentErrors) > 64 || len(hb.ApplyError) > 4096 || len(hb.Version) > 128 || len(hb.Epoch) > 256 {
+		return httpx.BadRequest("设备上报超出限额")
 	}
 	ctx := r.Context()
 	ipv4, ipv6 := hb.PublicIPv4, hb.PublicIPv6
@@ -147,7 +155,7 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 			resp.DesiredRevision, resp.DesiredHash = rec.Revision, rec.Hash
 		}
 	}
-	if spec := a.agentUpdateSpec(hb.Metrics.Arch); spec != nil {
+	if spec := a.agentUpdateSpec(hb.Metrics.Arch); spec != nil && hb.Diagnostics.SecurityVersion >= 1 && hb.Diagnostics.SecurityPolicy {
 		current := agentReportedSHA(hb, hb.Diagnostics)
 		if current != "" && !strings.EqualFold(current, spec.SHA256) {
 			if hb.Diagnostics.Maintenance >= 1 {
@@ -157,7 +165,7 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 			}
 		}
 	}
-	if hb.Diagnostics.Maintenance >= 1 {
+	if hb.Diagnostics.Maintenance >= 1 && hb.Diagnostics.SecurityVersion >= 1 && hb.Diagnostics.SecurityPolicy {
 		resp.Maintenance = a.nextAgentMaintenance(r.Context(), ac.Server.ID)
 	}
 	a.Events.Publish("agent.heartbeat", map[string]any{"server_id": ac.Server.ID, "metrics": hb.Metrics, "applied_revision": hb.AppliedRevision, "desired_revision": resp.DesiredRevision})
@@ -274,7 +282,10 @@ func (a *API) agentApplyReport(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) agentConnlog(w http.ResponseWriter, r *http.Request) error {
 	ac := agentFrom(r.Context())
-	var body io.Reader = http.MaxBytesReader(w, r.Body, 32<<20)
+	lock := &a.batchMu[ac.Agent.ID%64]
+	lock.Lock()
+	defer lock.Unlock()
+	var body io.Reader = http.MaxBytesReader(w, r.Body, 2<<20)
 	if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
 		gz, err := gzip.NewReader(body)
 		if err != nil {
@@ -284,15 +295,25 @@ func (a *API) agentConnlog(w http.ResponseWriter, r *http.Request) error {
 		body = gz
 	}
 	var batch agentproto.ConnlogBatch
-	if err := json.NewDecoder(body).Decode(&batch); err != nil {
-		return httpx.BadRequest("invalid batch: " + err.Error())
+	raw, err := safehttp.ReadBounded(body, 8<<20)
+	if err != nil {
+		return httpx.E(413, "batch_too_large", "日志批次过大")
+	}
+	if err := json.Unmarshal(raw, &batch); err != nil {
+		return httpx.BadRequest("日志 JSON 无效")
+	}
+	if len(batch.Events) > 10000 {
+		return httpx.BadRequest("日志条数过多")
 	}
 	ack := agentproto.ConnlogAck{AcceptedSeq: batch.Seq, Enabled: a.Connlog != nil}
 	if a.Connlog == nil {
 		httpx.OK(w, ack)
 		return nil
 	}
-	last, _ := a.Store.AgentConnlogSeq(r.Context(), ac.Agent.ID)
+	last, seqErr := a.Store.AgentConnlogSeq(r.Context(), ac.Agent.ID)
+	if seqErr != nil {
+		return seqErr
+	}
 	if batch.Seq <= last {
 		// duplicate: idempotent ack
 		ack.AcceptedSeq = last

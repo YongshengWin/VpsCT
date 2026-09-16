@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,6 +19,8 @@ import (
 	"ctlvps/internal/core"
 	"ctlvps/internal/diag"
 	"ctlvps/internal/nft"
+	"ctlvps/internal/proxyguard"
+	"ctlvps/internal/secureupdate"
 )
 
 // Agent is the long-running process.
@@ -28,12 +31,13 @@ type Agent struct {
 	Logger   *slog.Logger
 	Version  string
 
-	Paths   core.Paths
-	Systemd *core.Systemd
-	NFT     *nft.Manager
-	Drivers map[string]core.Driver
-	Metrics *MetricsCollector
-	Tail    *conntail.Tailer
+	Paths       core.Paths
+	Systemd     *core.Systemd
+	NFT         *nft.Manager
+	Drivers     map[string]core.Driver
+	Metrics     *MetricsCollector
+	Tail        *conntail.Tailer
+	PrivateTail *conntail.Tailer
 
 	HoldUpdates bool // locally pin a canary; pauses binary synchronization and web maintenance
 
@@ -87,6 +91,9 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 		}
 		return false
 	}
+	a.PrivateTail = conntail.New(filepath.Join(paths.LogDir, "sing-box-private.log"))
+	a.PrivateTail.Enabled = a.Tail.Enabled
+	a.PrivateTail.Allowed = a.Tail.Allowed
 	return a
 }
 
@@ -121,7 +128,7 @@ func nonce() string {
 
 // Run executes the main loop until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
-	interval := time.Duration(a.State.PollIntervalSec) * time.Second
+	interval := time.Duration(max(10, min(300, a.State.PollIntervalSec))) * time.Second
 	if interval <= 0 {
 		interval = agentproto.DefaultPollIntervalSec * time.Second
 	}
@@ -136,6 +143,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 	a.stateMu.Lock()
 	go a.Tail.Run(ctx)
+	go a.PrivateTail.Run(ctx)
 	go a.connlogLoop(ctx)
 
 	// always apply once on start so a self-update can rewrite units
@@ -405,6 +413,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		a.clockSkewMs = resp.ServerTime.Add(rtt / 2).Sub(time.Now()).Milliseconds()
 		a.mu.Unlock()
 	}
+	resp.PollIntervalSec = max(10, min(300, resp.PollIntervalSec))
 	if resp.PollIntervalSec > 0 && resp.PollIntervalSec != a.State.PollIntervalSec {
 		a.State.PollIntervalSec = resp.PollIntervalSec
 		_ = a.State.Save(a.StateDir)
@@ -450,6 +459,12 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		OOMEvents: h.OOMEvents, Nftables: h.Nftables, Systemd: h.Systemd, TimeSync: h.TimeSync, Warnings: h.Warnings,
 		BinarySHA256: a.selfSHA,
 	}
+	d.SecurityVersion = 1
+	d.Warnings = append(append([]string(nil), d.Warnings...), secureupdate.TrustWarnings(secureupdate.StateDir, time.Now())...)
+	if policy, e := secureupdate.LoadPolicy(); e == nil {
+		d.SecurityPolicy = true
+		d.SecurityPaused = policy.PauseConfig
+	}
 	if a.maintenanceSupported() {
 		d.Maintenance = 1
 	}
@@ -471,6 +486,10 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		d.RecentErrors = sb.RecentErrors(5)
 	}
 	pending, _ := a.Tail.Pending()
+	if a.PrivateTail != nil {
+		p, _ := a.PrivateTail.Pending()
+		pending += p
+	}
 	d.ConnlogLag = int64(pending)
 	return d
 }
@@ -490,15 +509,73 @@ func (a *Agent) converge(ctx context.Context, force bool) {
 		a.mu.Unlock()
 	}()
 
+	if p, e := secureupdate.LoadPolicy(); e != nil || p.PauseConfig {
+		a.Logger.Warn("本机安全策略未就绪或已暂停配置变更")
+		return
+	}
 	ds, err := a.Client.Desired(ctx)
 	if err != nil {
 		a.Logger.Warn("fetch desired state", "err", err)
 		return
 	}
+	if err := agentproto.ValidateDesired(ds, a.State.ServerID, a.State.AppliedRevision, a.State.AppliedHash); err != nil {
+		a.Logger.Warn("rejected desired state", "err", err)
+		return
+	}
+	policy, _ := secureupdate.LoadPolicy()
+	if e := secureupdate.Allow("agent.configure"); e != nil {
+		a.Logger.Warn("configuration not permitted by local policy")
+		return
+	}
+	maxNodes := policy.MaxNodes
+	if maxNodes <= 0 {
+		maxNodes = 256
+	}
+	maxMemory := policy.MaxMemoryMB
+	if maxMemory <= 0 {
+		maxMemory = 512
+	}
+	if len(ds.Nodes) > maxNodes || ds.Tuning.MemoryMaxMB > maxMemory || ds.Tuning.GoMemLimitMB > maxMemory {
+		a.Logger.Warn("configuration exceeds local resource policy")
+		return
+	}
+	for i := range ds.Nodes {
+		for _, id := range policy.PrivateNodes {
+			if ds.Nodes[i].NodeID == id {
+				ds.Nodes[i].AllowPrivate = true
+			}
+		}
+		c := ds.Nodes[i].Cert
+		if c != nil && c.Mode == "acme" {
+			allowed := false
+			for _, domain := range policy.ACMEDomains {
+				if domain == c.Domain {
+					allowed = true
+				}
+			}
+			if !allowed {
+				a.Logger.Warn("ACME domain not locally authorized")
+				return
+			}
+		}
+		if c != nil && c.Mode == "external" {
+			p, e := secureupdate.LoadPolicy()
+			if e != nil {
+				a.Logger.Warn("external certificate policy unavailable")
+				return
+			}
+			cert, ok := p.Certificates[c.ID]
+			if !ok || c.ID == "" {
+				a.Logger.Warn("external certificate not registered")
+				return
+			}
+			c.CertPath, c.KeyPath = cert.Cert, cert.Key
+		}
+	}
 	a.mu.Lock()
 	a.desired = ds
 	a.mu.Unlock()
-	if !force && ds.Revision == a.State.AppliedRevision && ds.Hash == a.State.AppliedHash && a.State.ApplyError == "" {
+	if !force && ds.Revision == a.State.AppliedRevision && ds.Hash == a.State.AppliedHash && a.State.ApplyError == "" && proxyguard.Ready() == nil {
 		return
 	}
 	a.Logger.Info("applying desired state", "revision", ds.Revision, "nodes", len(ds.Nodes))
@@ -573,6 +650,30 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		return details, err
 	}
 
+	groups := map[int64]string{}
+	for _, n := range ds.Nodes {
+		if n.Core == "singbox" {
+			g, e := a.Systemd.EnsureSingBoxSlice(ctx, n.AllowPrivate)
+			if e != nil {
+				return details, e
+			}
+			groups[n.NodeID] = g
+		}
+		if n.Core == "snell" {
+			if _, e := a.Systemd.EnsureSnellMeter(ctx, n); e != nil {
+				return details, e
+			}
+			g, e := a.Systemd.ControlGroup(ctx, core.SnellSlice(n.NodeID))
+			if e != nil {
+				return details, e
+			}
+			groups[n.NodeID] = g
+		}
+	}
+	if e := a.NFT.EnsureEgress(ctx, ds.Nodes, groups); e != nil {
+		return details, fmt.Errorf("proxy egress protection unavailable: %w", e)
+	}
+
 	// host tuning
 	if ds.Tuning.EnableBBR {
 		if changed, err := diag.EnableBBR(ctx); err != nil {
@@ -600,7 +701,12 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		}
 		if live > 0 {
 			key := map[string]string{"singbox": "sing-box", "snell": "snell-server"}[name]
-			if v, ok := ds.Versions[key]; ok {
+			v, ok := ds.Versions[key]
+			if !ok {
+				errs = append(errs, fmt.Errorf("missing trusted core version"))
+				continue
+			}
+			{
 				if changed, err := drv.EnsureInstalled(ctx, v); err != nil {
 					errs = append(errs, err)
 					note("%s: install failed: %v", name, err)
@@ -657,15 +763,26 @@ func (a *Agent) connlogLoop(ctx context.Context) {
 		if batch <= 0 {
 			batch = 500
 		}
+		batch = min(batch, 500)
 		flush := time.Duration(ds.Connlog.FlushSec) * time.Second
 		if flush <= 0 {
 			flush = 30 * time.Second
 		}
 		pending, _ := a.Tail.Pending()
+		if a.PrivateTail != nil {
+			p, _ := a.PrivateTail.Pending()
+			pending += p
+		}
 		if pending == 0 || (pending < batch && time.Since(lastFlush) < flush) {
 			continue
 		}
-		events := a.Tail.Take(batch)
+		events := a.Tail.Take(max(1, batch/2))
+		if a.PrivateTail != nil && len(events) < batch {
+			events = append(events, a.PrivateTail.Take(batch-len(events))...)
+		}
+		if len(events) < batch {
+			events = append(events, a.Tail.Take(batch-len(events))...)
+		}
 		a.stateMu.Lock()
 		seq := a.State.ConnlogSeq + 1
 		a.stateMu.Unlock()

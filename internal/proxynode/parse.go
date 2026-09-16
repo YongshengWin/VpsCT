@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
 // ParseResult is the outcome of parsing arbitrary subscription/node text.
@@ -21,6 +19,9 @@ type ParseResult struct {
 // ParseAny auto-detects Clash YAML, a base64 blob, share links, or Surge
 // proxy lines and returns the proxies found.
 func ParseAny(text string) ParseResult {
+	if len(text) > 16<<20 {
+		return ParseResult{Errors: []string{"订阅内容过大"}}
+	}
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return ParseResult{Errors: []string{"empty input"}}
@@ -66,18 +67,22 @@ func looksLikeClash(s string) bool {
 
 func parseURIList(text string) ParseResult {
 	var res ParseResult
-	for _, line := range strings.Split(text, "\n") {
+	for i, line := range strings.Split(text, "\n") {
+		if i >= 10000 {
+			res.Errors = append(res.Errors, "订阅条目过多")
+			break
+		}
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
 		p, err := ParseURI(line)
 		if err != nil {
-			short := line
-			if len(short) > 48 {
-				short = short[:48] + "…"
-			}
-			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", short, err))
+			res.Errors = append(res.Errors, fmt.Sprintf("第 %d 行不是有效的节点", i+1))
+			continue
+		}
+		if err := validateProxy(p); err != nil {
+			res.Errors = append(res.Errors, "节点参数无效")
 			continue
 		}
 		res.Proxies = append(res.Proxies, p)
@@ -88,13 +93,17 @@ func parseURIList(text string) ParseResult {
 func parseClashYAML(text string) ParseResult {
 	var res ParseResult
 	var doc map[string]any
-	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
+	if err := boundedYAML(text, &doc); err != nil {
 		res.Errors = append(res.Errors, "yaml: "+err.Error())
 		return res
 	}
 	res.ClashDoc = normalizeYAML(doc).(map[string]any)
 	list, _ := res.ClashDoc["proxies"].([]any)
 	for i, item := range list {
+		if i >= 10000 {
+			res.Errors = append(res.Errors, "订阅条目过多")
+			break
+		}
 		m, ok := item.(map[string]any)
 		if !ok {
 			res.Errors = append(res.Errors, fmt.Sprintf("proxies[%d]: not a map", i))
@@ -103,6 +112,10 @@ func parseClashYAML(text string) ParseResult {
 		p, err := FromClashMap(m)
 		if err != nil {
 			res.Errors = append(res.Errors, err.Error())
+			continue
+		}
+		if err := validateProxy(p); err != nil {
+			res.Errors = append(res.Errors, "节点参数无效")
 			continue
 		}
 		res.Proxies = append(res.Proxies, p)

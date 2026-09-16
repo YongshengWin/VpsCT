@@ -100,23 +100,26 @@ type CertStatus struct {
 
 // Diagnostics is the health section of a heartbeat.
 type Diagnostics struct {
-	MeteringError string       `json:"metering_error,omitempty"`
-	Maintenance   int          `json:"maintenance,omitempty"`
-	Cores         []CoreStatus `json:"cores"`
-	Certs         []CertStatus `json:"certs,omitempty"`
-	ClockSkewMs   int64        `json:"clock_skew_ms"`
-	BBR           bool         `json:"bbr"`
-	CongestionCtl string       `json:"congestion_ctl"`
-	IPv6Reachable bool         `json:"ipv6_reachable"`
-	IPv4Reachable bool         `json:"ipv4_reachable"`
-	OOMEvents     int          `json:"oom_events"`
-	Nftables      bool         `json:"nftables"`
-	Systemd       bool         `json:"systemd"`
-	TimeSync      bool         `json:"time_sync"`
-	Warnings      []string     `json:"warnings,omitempty"`
-	RecentErrors  []string     `json:"recent_errors,omitempty"`
-	ConnlogLag    int64        `json:"connlog_lag"` // buffered events not yet uploaded
-	BinarySHA256  string       `json:"binary_sha256,omitempty"`
+	SecurityVersion int          `json:"security_version,omitempty"`
+	SecurityPolicy  bool         `json:"security_policy,omitempty"`
+	SecurityPaused  bool         `json:"security_paused,omitempty"`
+	MeteringError   string       `json:"metering_error,omitempty"`
+	Maintenance     int          `json:"maintenance,omitempty"`
+	Cores           []CoreStatus `json:"cores"`
+	Certs           []CertStatus `json:"certs,omitempty"`
+	ClockSkewMs     int64        `json:"clock_skew_ms"`
+	BBR             bool         `json:"bbr"`
+	CongestionCtl   string       `json:"congestion_ctl"`
+	IPv6Reachable   bool         `json:"ipv6_reachable"`
+	IPv4Reachable   bool         `json:"ipv4_reachable"`
+	OOMEvents       int          `json:"oom_events"`
+	Nftables        bool         `json:"nftables"`
+	Systemd         bool         `json:"systemd"`
+	TimeSync        bool         `json:"time_sync"`
+	Warnings        []string     `json:"warnings,omitempty"`
+	RecentErrors    []string     `json:"recent_errors,omitempty"`
+	ConnlogLag      int64        `json:"connlog_lag"` // buffered events not yet uploaded
+	BinarySHA256    string       `json:"binary_sha256,omitempty"`
 }
 
 // Heartbeat is sent every poll interval.
@@ -164,7 +167,8 @@ type AgentUpdateSpec struct {
 
 // CertSpec tells the agent how to obtain the TLS certificate for a node.
 type CertSpec struct {
-	Mode     string `json:"mode"` // self_signed | acme | external
+	ID       string `json:"id,omitempty"` // local certificate registration, never an arbitrary path
+	Mode     string `json:"mode"`         // self_signed | acme | external
 	Domain   string `json:"domain"`
 	CertPath string `json:"cert_path,omitempty"` // external
 	KeyPath  string `json:"key_path,omitempty"`
@@ -173,6 +177,7 @@ type CertSpec struct {
 
 // NodeSpec is one inbound the agent must serve.
 type NodeSpec struct {
+	AllowPrivate   bool           `json:"-"` // resolved only from root-owned local policy
 	Retired        bool           `json:"-"` // local accounting tombstone, never an inbound
 	NodeID         int64          `json:"node_id"`
 	Name           string         `json:"name"`

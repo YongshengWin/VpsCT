@@ -14,11 +14,11 @@ import (
 
 const desiredCols = `id, server_id, revision, payload, hash, status, error, created_at, applied_at`
 
-func scanDesired(sc interface{ Scan(...any) error }) (domain.DesiredState, error) {
+func (s *Store) scanDesired(sc interface{ Scan(...any) error }) (domain.DesiredState, error) {
 	var d domain.DesiredState
 	var payload, created string
 	var applied sql.NullString
-	if err := sc.Scan(&d.ID, &d.ServerID, &d.Revision, &payload, &d.Hash, &d.Status, &d.Error, &created, &applied); err != nil {
+	if err := sc.Scan(&d.ID, &d.ServerID, &d.Revision, s.scanSecret("desired_states.payload", &payload), &d.Hash, &d.Status, &d.Error, &created, &applied); err != nil {
 		return d, err
 	}
 	d.Payload = rawOrEmpty(payload)
@@ -42,7 +42,7 @@ func (s *Store) CreateDesiredState(ctx context.Context, serverID int64, payload 
 		}
 		now := s.Now()
 		res, err := tx.ExecContext(ctx, `INSERT INTO desired_states(server_id,revision,payload,hash,status,created_at) VALUES (?,?,?,?,?,?)`,
-			serverID, rev, string(payload), hash, domain.DesiredPending, fmtTime(now))
+			serverID, rev, s.seal("desired_states.payload", string(payload)), hash, domain.DesiredPending, fmtTime(now))
 		if err != nil {
 			return err
 		}
@@ -56,13 +56,13 @@ func (s *Store) CreateDesiredState(ctx context.Context, serverID int64, payload 
 // UpdateDesiredPayload rewrites the payload of a revision (used to embed the
 // assigned revision number).
 func (s *Store) UpdateDesiredPayload(ctx context.Context, id int64, payload []byte) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE desired_states SET payload=? WHERE id=?`, string(payload), id)
+	_, err := s.db.ExecContext(ctx, `UPDATE desired_states SET payload=? WHERE id=?`, s.seal("desired_states.payload", string(payload)), id)
 	return err
 }
 
 // LatestDesiredState returns the newest revision for a server.
 func (s *Store) LatestDesiredState(ctx context.Context, serverID int64) (domain.DesiredState, error) {
-	d, err := scanDesired(s.db.QueryRowContext(ctx, `SELECT `+desiredCols+` FROM desired_states WHERE server_id=? ORDER BY revision DESC LIMIT 1`, serverID))
+	d, err := s.scanDesired(s.db.QueryRowContext(ctx, `SELECT `+desiredCols+` FROM desired_states WHERE server_id=? ORDER BY revision DESC LIMIT 1`, serverID))
 	if isNoRows(err) {
 		return d, ErrNotFound
 	}
@@ -87,7 +87,7 @@ func (s *Store) ListDesiredStates(ctx context.Context, serverID int64, limit int
 	defer rows.Close()
 	out := []domain.DesiredState{}
 	for rows.Next() {
-		d, err := scanDesired(rows)
+		d, err := s.scanDesired(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -107,6 +107,13 @@ func (s *Store) PruneDesiredStates(ctx context.Context, keep int) error {
 
 // AddAudit appends an audit event.
 func (s *Store) AddAudit(ctx context.Context, e domain.AuditEvent) error {
+	if len(e.Target) > 512 {
+		e.Target = e.Target[:512]
+	}
+	if len(e.Detail) > 4096 {
+		e.Detail = []byte(`{"truncated":true}`)
+	}
+
 	if e.TS.IsZero() {
 		e.TS = s.Now()
 	}
@@ -263,7 +270,7 @@ func (s *Store) ListBans(ctx context.Context) ([]domain.BanRule, error) {
 // GetSetting returns a setting or def when missing.
 func (s *Store) GetSetting(ctx context.Context, key, def string) string {
 	var v string
-	if err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(&v); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, key).Scan(s.scanSecret("settings.value", &v)); err != nil {
 		return def
 	}
 	return v
@@ -296,7 +303,7 @@ func (s *Store) GetSettingBool(ctx context.Context, key string, def bool) bool {
 
 // SetSetting upserts a setting.
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, value)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, s.seal("settings.value", value))
 	return err
 }
 
@@ -310,7 +317,7 @@ func (s *Store) AllSettings(ctx context.Context) (map[string]string, error) {
 	out := map[string]string{}
 	for rows.Next() {
 		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
+		if err := rows.Scan(&k, s.scanSecret("settings.value", &v)); err != nil {
 			return nil, err
 		}
 		out[k] = v

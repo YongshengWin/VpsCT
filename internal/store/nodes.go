@@ -11,12 +11,12 @@ import (
 
 const nodeCols = `id, name, protocol, server, port, params, server_params, source, server_id, listen_port, core, share_id, external_sub_id, chain_front_node_id, enabled, owner_user_id, tags, sort_order, revoked, created_at, updated_at`
 
-func scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
+func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
 	var n domain.Node
 	var params, serverParams, tags, created, updated string
 	var serverID, shareID, extID, chainID sql.NullInt64
 	var enabled, revoked int
-	if err := sc.Scan(&n.ID, &n.Name, &n.Protocol, &n.Server, &n.Port, &params, &serverParams, &n.Source, &serverID, &n.ListenPort, &n.Core,
+	if err := sc.Scan(&n.ID, &n.Name, &n.Protocol, &n.Server, &n.Port, s.scanSecret("nodes.params", &params), s.scanSecret("nodes.server_params", &serverParams), &n.Source, &serverID, &n.ListenPort, &n.Core,
 		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated); err != nil {
 		return n, err
 	}
@@ -34,7 +34,7 @@ func scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
 	return n, nil
 }
 
-func nodeArgs(n *domain.Node) []any {
+func (s *Store) nodeArgs(n *domain.Node) []any {
 	if n.Tags == nil {
 		n.Tags = []string{}
 	}
@@ -47,7 +47,7 @@ func nodeArgs(n *domain.Node) []any {
 	if n.Source == "" {
 		n.Source = domain.NodeManual
 	}
-	return []any{n.Name, n.Protocol, n.Server, n.Port, string(n.Params), string(n.ServerParams), n.Source, nullInt(n.ServerID), n.ListenPort, n.Core,
+	return []any{n.Name, n.Protocol, n.Server, n.Port, s.seal("nodes.params", string(n.Params)), s.seal("nodes.server_params", string(n.ServerParams)), n.Source, nullInt(n.ServerID), n.ListenPort, n.Core,
 		nullInt(n.ShareID), nullInt(n.ExternalSubID), nullInt(n.ChainFrontNodeID), b2i(n.Enabled), n.OwnerUserID, jsonStr(n.Tags), n.SortOrder, b2i(n.Revoked)}
 }
 
@@ -58,7 +58,7 @@ func (s *Store) CreateNode(ctx context.Context, n *domain.Node) error {
 
 func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error {
 	now := s.Now()
-	args := append(nodeArgs(n), fmtTime(now), fmtTime(now))
+	args := append(s.nodeArgs(n), fmtTime(now), fmtTime(now))
 	res, err := q.ExecContext(ctx, `INSERT INTO nodes(name,protocol,server,port,params,server_params,source,server_id,listen_port,core,share_id,external_sub_id,chain_front_node_id,enabled,owner_user_id,tags,sort_order,revoked,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 	if err != nil {
@@ -72,7 +72,7 @@ func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error
 // UpdateNode saves all editable fields.
 func (s *Store) UpdateNode(ctx context.Context, n *domain.Node) error {
 	now := s.Now()
-	args := append(nodeArgs(n), fmtTime(now), n.ID)
+	args := append(s.nodeArgs(n), fmtTime(now), n.ID)
 	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=?,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...)
 	n.UpdatedAt = now
 	return err
@@ -86,7 +86,7 @@ func (s *Store) DeleteNode(ctx context.Context, id int64) error {
 
 // GetNode fetches one node.
 func (s *Store) GetNode(ctx context.Context, id int64) (domain.Node, error) {
-	n, err := scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, id))
+	n, err := s.scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, id))
 	if isNoRows(err) {
 		return n, ErrNotFound
 	}
@@ -95,12 +95,12 @@ func (s *Store) GetNode(ctx context.Context, id int64) (domain.Node, error) {
 
 // NodeFilter narrows ListNodes.
 type NodeFilter struct {
-	Source        domain.NodeSource
-	ServerID      *int64
-	ExternalSubID *int64
-	ShareID       *int64
-	IDs           []int64
-	OnlyEnabled   bool
+	Source         domain.NodeSource
+	ServerID       *int64
+	ExternalSubID  *int64
+	ShareID        *int64
+	IDs            []int64
+	OnlyEnabled    bool
 	IncludeRevoked bool
 }
 
@@ -150,7 +150,7 @@ func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]domain.Node, err
 	defer rows.Close()
 	out := []domain.Node{}
 	for rows.Next() {
-		n, err := scanNode(rows)
+		n, err := s.scanNode(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -170,7 +170,7 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 		}
 		existing := map[string]domain.Node{}
 		for rows.Next() {
-			n, err := scanNode(rows)
+			n, err := s.scanNode(rows)
 			if err != nil {
 				rows.Close()
 				return err
@@ -194,7 +194,7 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 				n.SortOrder = old.SortOrder
 				n.Enabled = old.Enabled
 				n.OwnerUserID = old.OwnerUserID
-				args := append(nodeArgs(n), now, n.ID)
+				args := append(s.nodeArgs(n), now, n.ID)
 				if _, err := tx.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=?,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...); err != nil {
 					return err
 				}
@@ -254,7 +254,7 @@ func (s *Store) ReorderNodes(ctx context.Context, ids []int64) error {
 
 // FindChainNode returns the virtual chain node for a front + landing endpoint.
 func (s *Store) FindChainNode(ctx context.Context, frontID int64, server string, port int) (domain.Node, error) {
-	n, err := scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE source=? AND chain_front_node_id=? AND server=? AND port=? AND revoked=0`,
+	n, err := s.scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE source=? AND chain_front_node_id=? AND server=? AND port=? AND revoked=0`,
 		domain.NodeChain, frontID, server, port))
 	if isNoRows(err) {
 		return n, ErrNotFound
@@ -275,7 +275,7 @@ func (s *Store) SplitInlineChains(ctx context.Context) error {
 	defer rows.Close()
 	var marked []domain.Node
 	for rows.Next() {
-		n, err := scanNode(rows)
+		n, err := s.scanNode(rows)
 		if err != nil {
 			return err
 		}

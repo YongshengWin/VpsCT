@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 
+	"ctlvps/internal/auth"
 	"ctlvps/internal/domain"
 )
 
@@ -12,13 +13,13 @@ import (
 // retiring configuration hosting does not delete the operator's original data.
 const subCols = `id, name, kind, token, token_hash, token_hint, short_code, template_id, default_format, proxy_groups, chains, rules, rule_providers, node_selection, source_external_id, expire_at, traffic_limit_bytes, reset_day, userinfo_header, show_info_nodes, owner_user_id, allowed_user_ids, share_id, enabled, access_count, last_access_at, created_at, updated_at`
 
-func scanSub(sc interface{ Scan(...any) error }) (domain.Subscription, error) {
+func (s *Store) scanSub(sc interface{ Scan(...any) error }) (domain.Subscription, error) {
 	var v domain.Subscription
 	var templateID, srcExt, shareID sql.NullInt64
 	var expire, lastAccess sql.NullString
 	var groups, chains, rules, providers, sel, allowed, created, updated string
 	var userinfo, showInfo, enabled int
-	if err := sc.Scan(&v.ID, &v.Name, &v.Kind, &v.Token, &v.TokenHash, &v.TokenHint, &v.ShortCode, &templateID, &v.DefaultFormat, &groups, &chains, &rules, &providers, &sel,
+	if err := sc.Scan(&v.ID, &v.Name, &v.Kind, s.scanSecret("subscriptions.token", &v.Token), &v.TokenHash, &v.TokenHint, s.scanSecret("subscriptions.short_code", &v.ShortCode), &templateID, &v.DefaultFormat, &groups, &chains, &rules, &providers, &sel,
 		&srcExt, &expire, &v.TrafficLimitBytes, &v.ResetDay, &userinfo, &showInfo, &v.OwnerUserID, &allowed, &shareID, &enabled, &v.AccessCount, &lastAccess, &created, &updated); err != nil {
 		return v, err
 	}
@@ -47,7 +48,7 @@ func scanSub(sc interface{ Scan(...any) error }) (domain.Subscription, error) {
 	return v, nil
 }
 
-func subArgs(v *domain.Subscription) []any {
+func (s *Store) subArgs(v *domain.Subscription) []any {
 	if v.ProxyGroups == nil {
 		v.ProxyGroups = []domain.ProxyGroup{}
 	}
@@ -66,16 +67,16 @@ func subArgs(v *domain.Subscription) []any {
 	if v.DefaultFormat == "" {
 		v.DefaultFormat = "mihomo"
 	}
-	return []any{v.Name, v.Kind, v.Token, v.TokenHash, v.TokenHint, v.ShortCode, nullInt(v.TemplateID), v.DefaultFormat, jsonStr(v.ProxyGroups), jsonStr(v.Chains), jsonStr(v.Rules), string(v.RuleProviders), jsonStr(v.NodeSelection),
+	return []any{v.Name, v.Kind, s.seal("subscriptions.token", v.Token), v.TokenHash, v.TokenHint, s.seal("subscriptions.short_code", v.ShortCode), auth.HashToken(v.ShortCode), nullInt(v.TemplateID), v.DefaultFormat, jsonStr(v.ProxyGroups), jsonStr(v.Chains), jsonStr(v.Rules), string(v.RuleProviders), jsonStr(v.NodeSelection),
 		nullInt(v.SourceExternalID), fmtTimePtr(v.ExpireAt), v.TrafficLimitBytes, v.ResetDay, b2i(v.UserinfoHeader), b2i(v.ShowInfoNodes), v.OwnerUserID, jsonStr(v.AllowedUserIDs), nullInt(v.ShareID), b2i(v.Enabled)}
 }
 
 // CreateSubscription inserts a subscription.
 func (s *Store) CreateSubscription(ctx context.Context, v *domain.Subscription) error {
 	now := s.Now()
-	args := append(subArgs(v), fmtTime(now), fmtTime(now))
-	res, err := s.db.ExecContext(ctx, `INSERT INTO subscriptions(name,kind,token,token_hash,token_hint,short_code,template_id,default_format,proxy_groups,chains,rules,rule_providers,node_selection,source_external_id,expire_at,traffic_limit_bytes,reset_day,userinfo_header,show_info_nodes,owner_user_id,allowed_user_ids,share_id,enabled,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
+	args := append(s.subArgs(v), fmtTime(now), fmtTime(now))
+	res, err := s.db.ExecContext(ctx, `INSERT INTO subscriptions(name,kind,token,token_hash,token_hint,short_code,short_code_hash,template_id,default_format,proxy_groups,chains,rules,rule_providers,node_selection,source_external_id,expire_at,traffic_limit_bytes,reset_day,userinfo_header,show_info_nodes,owner_user_id,allowed_user_ids,share_id,enabled,created_at,updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 	if err != nil {
 		return err
 	}
@@ -87,8 +88,8 @@ func (s *Store) CreateSubscription(ctx context.Context, v *domain.Subscription) 
 // UpdateSubscription saves all editable fields.
 func (s *Store) UpdateSubscription(ctx context.Context, v *domain.Subscription) error {
 	now := s.Now()
-	args := append(subArgs(v), fmtTime(now), v.ID)
-	_, err := s.db.ExecContext(ctx, `UPDATE subscriptions SET name=?,kind=?,token=?,token_hash=?,token_hint=?,short_code=?,template_id=?,default_format=?,proxy_groups=?,chains=?,rules=?,rule_providers=?,node_selection=?,source_external_id=?,expire_at=?,traffic_limit_bytes=?,reset_day=?,userinfo_header=?,show_info_nodes=?,owner_user_id=?,allowed_user_ids=?,share_id=?,enabled=?,updated_at=? WHERE id=?`, args...)
+	args := append(s.subArgs(v), fmtTime(now), v.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE subscriptions SET name=?,kind=?,token=?,token_hash=?,token_hint=?,short_code=?,short_code_hash=?,template_id=?,default_format=?,proxy_groups=?,chains=?,rules=?,rule_providers=?,node_selection=?,source_external_id=?,expire_at=?,traffic_limit_bytes=?,reset_day=?,userinfo_header=?,show_info_nodes=?,owner_user_id=?,allowed_user_ids=?,share_id=?,enabled=?,updated_at=? WHERE id=?`, args...)
 	v.UpdatedAt = now
 	return err
 }
@@ -101,7 +102,7 @@ func (s *Store) DeleteSubscription(ctx context.Context, id int64) error {
 
 // GetSubscription fetches one.
 func (s *Store) GetSubscription(ctx context.Context, id int64) (domain.Subscription, error) {
-	v, err := scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE id=?`, id))
+	v, err := s.scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE id=?`, id))
 	if isNoRows(err) {
 		return v, ErrNotFound
 	}
@@ -110,7 +111,7 @@ func (s *Store) GetSubscription(ctx context.Context, id int64) (domain.Subscript
 
 // GetSubscriptionByTokenHash resolves /s/<token>.
 func (s *Store) GetSubscriptionByTokenHash(ctx context.Context, hash string) (domain.Subscription, error) {
-	v, err := scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE token_hash=?`, hash))
+	v, err := s.scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE token_hash=?`, hash))
 	if isNoRows(err) {
 		return v, ErrNotFound
 	}
@@ -122,7 +123,7 @@ func (s *Store) GetSubscriptionByShortCode(ctx context.Context, code string) (do
 	if code == "" {
 		return domain.Subscription{}, ErrNotFound
 	}
-	v, err := scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE short_code=?`, code))
+	v, err := s.scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE short_code_hash=?`, auth.HashToken(code)))
 	if isNoRows(err) {
 		return v, ErrNotFound
 	}
@@ -131,7 +132,7 @@ func (s *Store) GetSubscriptionByShortCode(ctx context.Context, code string) (do
 
 // GetSubscriptionByShare returns the share's subscription.
 func (s *Store) GetSubscriptionByShare(ctx context.Context, shareID int64) (domain.Subscription, error) {
-	v, err := scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE share_id=? ORDER BY id LIMIT 1`, shareID))
+	v, err := s.scanSub(s.db.QueryRowContext(ctx, `SELECT `+subCols+` FROM subscriptions WHERE share_id=? ORDER BY id LIMIT 1`, shareID))
 	if isNoRows(err) {
 		return v, ErrNotFound
 	}
@@ -147,7 +148,7 @@ func (s *Store) ListSubscriptions(ctx context.Context) ([]domain.Subscription, e
 	defer rows.Close()
 	out := []domain.Subscription{}
 	for rows.Next() {
-		v, err := scanSub(rows)
+		v, err := s.scanSub(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -166,11 +167,11 @@ func (s *Store) TouchSubscription(ctx context.Context, id int64) error {
 
 const tplCols = `id, name, kind, description, content, variables, is_builtin, created_at, updated_at`
 
-func scanTpl(sc interface{ Scan(...any) error }) (domain.RuleTemplate, error) {
+func (s *Store) scanTpl(sc interface{ Scan(...any) error }) (domain.RuleTemplate, error) {
 	var t domain.RuleTemplate
 	var vars, created, updated string
 	var builtin int
-	if err := sc.Scan(&t.ID, &t.Name, &t.Kind, &t.Description, &t.Content, &vars, &builtin, &created, &updated); err != nil {
+	if err := sc.Scan(&t.ID, &t.Name, &t.Kind, &t.Description, s.scanSecret("rule_templates.content", &t.Content), s.scanSecret("rule_templates.variables", &vars), &builtin, &created, &updated); err != nil {
 		return t, err
 	}
 	t.Variables = rawOrEmpty(vars)
@@ -190,7 +191,7 @@ func (s *Store) CreateTemplate(ctx context.Context, t *domain.RuleTemplate) erro
 		t.Variables = []byte("{}")
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO rule_templates(name,kind,description,content,variables,is_builtin,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)`,
-		t.Name, t.Kind, t.Description, t.Content, string(t.Variables), b2i(t.IsBuiltin), fmtTime(now), fmtTime(now))
+		t.Name, t.Kind, t.Description, s.seal("rule_templates.content", t.Content), s.seal("rule_templates.variables", string(t.Variables)), b2i(t.IsBuiltin), fmtTime(now), fmtTime(now))
 	if err != nil {
 		return err
 	}
@@ -206,7 +207,7 @@ func (s *Store) UpdateTemplate(ctx context.Context, t *domain.RuleTemplate) erro
 		t.Variables = []byte("{}")
 	}
 	_, err := s.db.ExecContext(ctx, `UPDATE rule_templates SET name=?, kind=?, description=?, content=?, variables=?, updated_at=? WHERE id=?`,
-		t.Name, t.Kind, t.Description, t.Content, string(t.Variables), fmtTime(now), t.ID)
+		t.Name, t.Kind, t.Description, s.seal("rule_templates.content", t.Content), s.seal("rule_templates.variables", string(t.Variables)), fmtTime(now), t.ID)
 	t.UpdatedAt = now
 	return err
 }
@@ -219,7 +220,7 @@ func (s *Store) DeleteTemplate(ctx context.Context, id int64) error {
 
 // GetTemplate fetches one.
 func (s *Store) GetTemplate(ctx context.Context, id int64) (domain.RuleTemplate, error) {
-	t, err := scanTpl(s.db.QueryRowContext(ctx, `SELECT `+tplCols+` FROM rule_templates WHERE id=?`, id))
+	t, err := s.scanTpl(s.db.QueryRowContext(ctx, `SELECT `+tplCols+` FROM rule_templates WHERE id=?`, id))
 	if isNoRows(err) {
 		return t, ErrNotFound
 	}
@@ -235,7 +236,7 @@ func (s *Store) ListTemplates(ctx context.Context) ([]domain.RuleTemplate, error
 	defer rows.Close()
 	out := []domain.RuleTemplate{}
 	for rows.Next() {
-		t, err := scanTpl(rows)
+		t, err := s.scanTpl(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -255,11 +256,11 @@ func (s *Store) CountTemplatesByName(ctx context.Context, name string) (int, err
 
 const presetCols = `id, name, groups_json, rules_json, is_builtin, created_at, updated_at`
 
-func scanPreset(sc interface{ Scan(...any) error }) (domain.ProxyGroupPreset, error) {
+func (s *Store) scanPreset(sc interface{ Scan(...any) error }) (domain.ProxyGroupPreset, error) {
 	var p domain.ProxyGroupPreset
 	var groups, rules, created, updated string
 	var builtin int
-	if err := sc.Scan(&p.ID, &p.Name, &groups, &rules, &builtin, &created, &updated); err != nil {
+	if err := sc.Scan(&p.ID, &p.Name, s.scanSecret("proxy_group_presets.groups_json", &groups), s.scanSecret("proxy_group_presets.rules_json", &rules), &builtin, &created, &updated); err != nil {
 		return p, err
 	}
 	p.Groups = jsonList[domain.ProxyGroup](groups)
@@ -280,7 +281,7 @@ func (s *Store) CreatePreset(ctx context.Context, p *domain.ProxyGroupPreset) er
 		p.Rules = []string{}
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO proxy_group_presets(name,groups_json,rules_json,is_builtin,created_at,updated_at) VALUES (?,?,?,?,?,?)`,
-		p.Name, jsonStr(p.Groups), jsonStr(p.Rules), b2i(p.IsBuiltin), fmtTime(now), fmtTime(now))
+		p.Name, s.seal("proxy_group_presets.groups_json", jsonStr(p.Groups)), s.seal("proxy_group_presets.rules_json", jsonStr(p.Rules)), b2i(p.IsBuiltin), fmtTime(now), fmtTime(now))
 	if err != nil {
 		return err
 	}
@@ -293,7 +294,7 @@ func (s *Store) CreatePreset(ctx context.Context, p *domain.ProxyGroupPreset) er
 func (s *Store) UpdatePreset(ctx context.Context, p *domain.ProxyGroupPreset) error {
 	now := s.Now()
 	_, err := s.db.ExecContext(ctx, `UPDATE proxy_group_presets SET name=?, groups_json=?, rules_json=?, updated_at=? WHERE id=?`,
-		p.Name, jsonStr(p.Groups), jsonStr(p.Rules), fmtTime(now), p.ID)
+		p.Name, s.seal("proxy_group_presets.groups_json", jsonStr(p.Groups)), s.seal("proxy_group_presets.rules_json", jsonStr(p.Rules)), fmtTime(now), p.ID)
 	p.UpdatedAt = now
 	return err
 }
@@ -313,7 +314,7 @@ func (s *Store) ListPresets(ctx context.Context) ([]domain.ProxyGroupPreset, err
 	defer rows.Close()
 	out := []domain.ProxyGroupPreset{}
 	for rows.Next() {
-		p, err := scanPreset(rows)
+		p, err := s.scanPreset(rows)
 		if err != nil {
 			return nil, err
 		}

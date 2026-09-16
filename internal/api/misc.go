@@ -403,12 +403,12 @@ func (a *API) systemStatus(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) meta(w http.ResponseWriter, r *http.Request) error {
 	httpx.OK(w, map[string]any{
-		"version":     a.Config.Version,
-		"site_name":   a.Store.GetSetting(r.Context(), domain.SettingSiteName, defaultSiteName),
-		"protocols":   domain.DeployableProtocols,
-		"formats":     []string{"mihomo", "raw", "uri", "surge", "shadowrocket", "singbox"},
-		"base_url":    a.baseURL(r),
-		"connlog":     a.Connlog != nil,
+		"version":   a.Config.Version,
+		"site_name": a.Store.GetSetting(r.Context(), domain.SettingSiteName, defaultSiteName),
+		"protocols": domain.DeployableProtocols,
+		"formats":   []string{"mihomo", "raw", "uri", "surge", "shadowrocket", "singbox"},
+		"base_url":  a.baseURL(r),
+		"connlog":   a.Connlog != nil,
 	})
 	return nil
 }
@@ -434,34 +434,88 @@ func (a *API) downloadAgent(w http.ResponseWriter, r *http.Request) error {
 func (a *API) events(w http.ResponseWriter, r *http.Request) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return httpx.E(http.StatusInternalServerError, "no_stream", "streaming unsupported")
+		return httpx.E(500, "no_stream", "streaming unsupported")
 	}
+	u := userFrom(r.Context())
+	a.streamMu.Lock()
+	if a.streams == nil {
+		a.streams = map[int64]int{}
+	}
+	if a.streamTotal >= 100 || a.streams[u.ID] >= 5 {
+		a.streamMu.Unlock()
+		return httpx.E(429, "stream_limit", "实时连接过多")
+	}
+	a.streams[u.ID]++
+	a.streamTotal++
+	a.streamMu.Unlock()
+	defer func() {
+		a.streamMu.Lock()
+		a.streams[u.ID]--
+		a.streamTotal--
+		if a.streams[u.ID] == 0 {
+			delete(a.streams, u.ID)
+		}
+		a.streamMu.Unlock()
+	}()
 	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "event: hello\ndata: {\"version\":%q}\n\n", a.Config.Version)
-	flusher.Flush()
+	rc := http.NewResponseController(w)
+	send := func(s string) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := fmt.Fprint(w, s); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send("event: hello\ndata: {}\n\n") {
+		return nil
+	}
 	ch, cancel := a.Events.Subscribe()
 	defer cancel()
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
-	admin := isAdmin(userFrom(r.Context()))
 	for {
 		select {
 		case <-r.Context().Done():
 			return nil
 		case <-ping.C:
-			fmt.Fprint(w, ": ping\n\n")
-			flusher.Flush()
+			var err error
+			u, err = a.currentUser(r)
+			if err != nil {
+				return nil
+			}
+			if !send(": ping\n\n") {
+				return nil
+			}
 		case ev := <-ch:
-			if !admin && ev.Type != "share.changed" {
-				continue
+			current, err := a.currentUser(r)
+			if err != nil {
+				return nil
+			}
+			u = current
+			if !isAdmin(u) {
+				if ev.Type != "share.changed" {
+					continue
+				}
+				data, ok := ev.Data.(map[string]any)
+				if !ok {
+					continue
+				}
+				id, ok := data["id"].(int64)
+				if !ok {
+					continue
+				}
+				sh, err := a.Store.GetShare(r.Context(), id)
+				if err != nil || !a.canSeeShare(u, sh) {
+					continue
+				}
 			}
 			b, _ := json.Marshal(ev.Data)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
-			flusher.Flush()
+			if !send(fmt.Sprintf("event: %s\ndata: %s\n\n", ev.Type, b)) {
+				return nil
+			}
 		}
 	}
 }

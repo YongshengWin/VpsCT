@@ -2,9 +2,9 @@
 package httpx
 
 import (
+	"ctlvps/internal/safehttp"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -62,21 +62,27 @@ func WriteError(w http.ResponseWriter, err error) {
 		JSON(w, e.Status, map[string]any{"error": e})
 		return
 	}
-	JSON(w, http.StatusInternalServerError, map[string]any{"error": Error{Code: "internal", Message: err.Error()}})
+	JSON(w, http.StatusInternalServerError, map[string]any{"error": Error{Code: "internal", Message: "服务暂时无法完成请求"}})
 }
 
 // Decode reads a JSON body (max 4 MiB) into v.
 func Decode(r *http.Request, v any) error {
-	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	body, err := safehttp.ReadBounded(r.Body, 4<<20)
 	if err != nil {
 		return BadRequest("读取请求体失败")
 	}
 	if len(strings.TrimSpace(string(body))) == 0 {
 		return BadRequest("请求体为空")
 	}
+	if err := validateJSON(body); err != nil {
+		return BadRequest("JSON 结构无效")
+	}
 	dec := json.NewDecoder(strings.NewReader(string(body)))
+	if strings.HasPrefix(r.URL.Path, "/api/v1/auth/") || strings.Contains(r.URL.Path, "maintenance") {
+		dec.DisallowUnknownFields()
+	}
 	if err := dec.Decode(v); err != nil {
-		return BadRequest("JSON 解析失败: " + err.Error())
+		return BadRequest("JSON 字段或类型无效")
 	}
 	return nil
 }
@@ -98,8 +104,11 @@ func QueryInt(r *http.Request, name string, def int) int {
 		return def
 	}
 	n, err := strconv.Atoi(v)
-	if err != nil {
+	if err != nil || n < 0 {
 		return def
+	}
+	if n > 10000 {
+		return 10000
 	}
 	return n
 }

@@ -4,6 +4,7 @@ COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "")
 LDFLAGS := -s -w -X ctlvps/internal/buildinfo.Version=$(VERSION) -X ctlvps/internal/buildinfo.Commit=$(COMMIT)
 GOFLAGS := -trimpath
 BIN     := bin
+SECURITY_EPOCH ?= 1
 REPOSITORY ?= $(GITHUB_REPOSITORY)
 
 .PHONY: all web server agent agents build dev dev-web test vet check lint clean docker release
@@ -36,7 +37,8 @@ release: web
 	$(MAKE) agents
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvpsd-linux-amd64 ./cmd/ctlvpsd
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvpsd-linux-arm64 ./cmd/ctlvpsd
-	python3 scripts/package-release.py --version "$(VERSION)" --repository "$(REPOSITORY)"
+	for arch in amd64 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-verify-linux-$$arch ./cmd/ctlvps-verify; CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-sign-linux-$$arch ./cmd/ctlvps-sign; done
+	python3 scripts/package-release.py --version "$(VERSION)" --repository "$(REPOSITORY)" --security-epoch "$(SECURITY_EPOCH)"
 
 ## dev: run the API with hot-reloading SPA proxied from Vite (run `make dev-web` in another shell)
 dev:

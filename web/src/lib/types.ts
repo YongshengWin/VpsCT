@@ -53,6 +53,9 @@ export interface CoreStatus {
 }
 
 export interface Diagnostics {
+ security_version?: number;
+ security_policy?: boolean;
+ security_paused?: boolean;
  metering_error?: string;
   maintenance?: number;
   cores: CoreStatus[] | null;

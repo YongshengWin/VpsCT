@@ -1,7 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"strconv"
@@ -144,7 +147,9 @@ func TestAvatar(t *testing.T) {
 	c.do("PUT", "/api/v1/auth/avatar", map[string]any{"avatar": "data:text/html;base64,PGI+"}, 400)
 	c.do("PUT", "/api/v1/auth/avatar", map[string]any{"avatar": "data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, avatarMaxBytes+1))}, 400)
 
-	png := []byte{0x89, 'P', 'N', 'G', 0, 1, 2, 3}
+	var imageBytes bytes.Buffer
+	_ = png.Encode(&imageBytes, image.NewRGBA(image.Rect(0, 0, 1, 1)))
+	png := imageBytes.Bytes()
 	me = c.do("PUT", "/api/v1/auth/avatar", map[string]any{"avatar": "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)}, 200)
 	url, _ := me["avatar"].(string)
 	if !strings.HasPrefix(url, "/api/v1/users/1/avatar?v=") {

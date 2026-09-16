@@ -25,7 +25,7 @@ RUN go build -trimpath -ldflags "-s -w -X ctlvps/internal/buildinfo.Version=${VE
 # ---- runtime ----
 FROM alpine:3.23
 RUN apk add --no-cache ca-certificates tzdata && adduser -D -u 10001 ctlvps \
- && mkdir /data && chown ctlvps:ctlvps /data && chmod 0750 /data
+ && mkdir /data /keys && chown ctlvps:ctlvps /data /keys && chmod 0700 /data /keys
 WORKDIR /app
 COPY --from=build /out/ctlvpsd /app/ctlvpsd
 COPY --from=build /out/agents /app/agents
@@ -34,8 +34,8 @@ COPY third_party/ /app/licenses/third_party/
 ENV CTLVPS_LISTEN=:8080 \
     CTLVPS_DATA_DIR=/data \
     CTLVPS_AGENT_BIN_DIR=/app/agents \
-    CTLVPS_TRUST_PROXY=true
-VOLUME ["/data"]
+    CTLVPS_SECRETS_KEY_FILE=/keys/secrets.key
+VOLUME ["/data", "/keys"]
 EXPOSE 8080
 USER ctlvps
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1

@@ -456,5 +456,5 @@ export function QR({ text, className }: { text: string; className?: string }) {
     return () => { alive = false; };
   }, [text]);
   if (!svg) return null;
-  return <div className={cn("mx-auto mt-2 w-48 rounded-md bg-white p-2 [&>svg]:h-full [&>svg]:w-full", className)} dangerouslySetInnerHTML={{ __html: svg }} />;
+  return <div className={cn("mx-auto mt-2 w-48 rounded-md bg-white p-2", className)}><img className="h-full w-full" alt="节点二维码" src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`} /></div>;
 }

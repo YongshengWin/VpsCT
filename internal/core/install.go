@@ -8,18 +8,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
+	"ctlvps/internal/agentnet"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/safehttp"
+	"ctlvps/internal/secureupdate"
 )
 
 // archFor maps GOARCH to release naming.
@@ -42,28 +43,14 @@ func ExpandURL(tmpl, version string) string {
 
 // download fetches url into memory (cores are < 60 MB) with a size cap.
 func download(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "ctlvps-agent")
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 200<<20))
+	return agentnet.Download(ctx, url, 200<<20, false)
 }
 
 // verify checks the archive hash when one is pinned for this arch.
 func verify(data []byte, v agentproto.CoreVersion) error {
 	want := v.SHA256[runtime.GOARCH]
 	if want == "" {
-		return nil
+		return errors.New("缺少内核 SHA256，拒绝安装")
 	}
 	sum := sha256.Sum256(data)
 	if !strings.EqualFold(hex.EncodeToString(sum[:]), strings.TrimSpace(want)) {
@@ -83,8 +70,14 @@ func extractBinary(data []byte, name string) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		tr := tar.NewReader(gz)
+		defer gz.Close()
+		tr := tar.NewReader(io.LimitReader(gz, 256<<20))
+		entries := 0
 		for {
+			entries++
+			if entries > 4096 {
+				return nil, errors.New("too many archive entries")
+			}
 			h, err := tr.Next()
 			if err == io.EOF {
 				break
@@ -92,8 +85,8 @@ func extractBinary(data []byte, name string) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			if h.Typeflag == tar.TypeReg && filepath.Base(h.Name) == name {
-				return io.ReadAll(tr)
+			if h.Typeflag == tar.TypeReg && filepath.Base(h.Name) == name && !strings.Contains(h.Name, "..") && !filepath.IsAbs(h.Name) {
+				return safehttp.ReadBounded(tr, 200<<20)
 			}
 		}
 		return nil, fmt.Errorf("%s not found in tar.gz", name)
@@ -102,26 +95,20 @@ func extractBinary(data []byte, name string) ([]byte, error) {
 	if err != nil {
 		return nil, errors.New("unknown archive format")
 	}
+	if len(zr.File) > 4096 {
+		return nil, errors.New("too many archive entries")
+	}
 	for _, f := range zr.File {
-		if filepath.Base(f.Name) == name && !f.FileInfo().IsDir() {
+		if filepath.Base(f.Name) == name && f.Mode().IsRegular() && !strings.Contains(f.Name, "..") && !filepath.IsAbs(f.Name) {
 			rc, err := f.Open()
 			if err != nil {
 				return nil, err
 			}
 			defer rc.Close()
-			return io.ReadAll(rc)
+			return safehttp.ReadBounded(rc, 200<<20)
 		}
 	}
 	return nil, fmt.Errorf("%s not found in zip", name)
-}
-
-// installedVersion runs `bin version|-v` and extracts the version token.
-func installedVersion(ctx context.Context, bin string, args ...string) string {
-	if _, err := os.Stat(bin); err != nil {
-		return ""
-	}
-	out, _ := exec.CommandContext(ctx, bin, args...).CombinedOutput()
-	return strings.TrimSpace(string(out))
 }
 
 // installBinary downloads, verifies and atomically installs name into binDir.
@@ -129,12 +116,18 @@ func installBinary(ctx context.Context, binDir, name string, v agentproto.CoreVe
 	if v.Version == "" || v.URL == "" {
 		return fmt.Errorf("no version pinned for %s", name)
 	}
+	if e := secureupdate.Allow("core.install"); e != nil {
+		return e
+	}
 	url := ExpandURL(v.URL, v.Version)
 	data, err := download(ctx, url)
 	if err != nil {
 		return err
 	}
 	if err := verify(data, v); err != nil {
+		return err
+	}
+	if err := secureupdate.Verify(ctx, name, v.Version, data); err != nil {
 		return err
 	}
 	bin, err := extractBinary(data, name)
@@ -145,23 +138,49 @@ func installBinary(ctx context.Context, binDir, name string, v agentproto.CoreVe
 		return err
 	}
 	target := filepath.Join(binDir, name)
-	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, bin, 0o755); err != nil {
+	if _, err := WriteIfChanged(target, bin, 0755); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	sum := sha256.Sum256(bin)
+	receipt, _ := json.Marshal(struct {
+		Version string
+		SHA256  string
+	}{v.Version, hex.EncodeToString(sum[:])})
+	_, err = WriteIfChanged(target+".trusted", receipt, 0600)
+	if err != nil {
 		return err
 	}
-	// remember which version the file is, since some cores lack `version`
-	_ = os.WriteFile(target+".version", []byte(v.Version), 0o644)
 	return nil
 }
 
 // recordedVersion reads the sidecar written by installBinary.
 func recordedVersion(bin string) string {
-	b, err := os.ReadFile(bin + ".version")
-	if err != nil {
+	b, e := os.ReadFile(bin + ".trusted")
+	if e != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(b))
+	var r struct {
+		Version string
+		SHA256  string
+	}
+	if json.Unmarshal(b, &r) != nil {
+		return ""
+	}
+	f, e := os.Open(bin)
+	if e != nil {
+		return ""
+	}
+	defer f.Close()
+	st, e := f.Stat()
+	if e != nil || !st.Mode().IsRegular() || st.Size() > 200<<20 {
+		return ""
+	}
+	h := sha256.New()
+	if _, e = io.Copy(h, f); e != nil {
+		return ""
+	}
+	if hex.EncodeToString(h.Sum(nil)) != r.SHA256 {
+		return ""
+	}
+	return r.Version
 }

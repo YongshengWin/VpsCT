@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"ctlvps/internal/diskbudget"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,7 +19,10 @@ import (
 	"time"
 
 	lifecycle "ctlvps"
+	"ctlvps/internal/agentnet"
+	"ctlvps/internal/secureupdate"
 	"golang.org/x/sys/unix"
+	"runtime"
 )
 
 func (m *Manager) Run(id string) error {
@@ -33,7 +37,17 @@ func (m *Manager) Run(id string) error {
 	if err := s.Validate(); err != nil || s.Request != j.Request {
 		return errors.New("维护任务文件无效")
 	}
-	log, err := os.OpenFile(m.path(id, "worker.log"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	if m.Dir == Directory {
+		if err := secureupdate.Allow(s.Role + "." + s.Action); err != nil {
+			return err
+		}
+		if s.Purge {
+			if err := secureupdate.Allow(s.Role + ".purge"); err != nil {
+				return err
+			}
+		}
+	}
+	log, err := openLog(m.path(id, "worker.log"))
 	if err != nil {
 		return err
 	}
@@ -96,9 +110,8 @@ func (m *Manager) Run(id string) error {
 	// Keep the safe result and root-only diagnostic log. Remove copied code and
 	// job-scoped credentials even when the application itself was purged.
 	cleanup := []string{"request.json", "worker", "install.sh", "uninstall.sh", "agent.new"}
-	if status != "failed" {
-		cleanup = append(cleanup, "agent.previous")
-	}
+	// A successful health check does not authorize deleting the previous safe
+	// binary. Keep recovery artifacts until an explicit retention policy applies.
 	for _, name := range cleanup {
 		_ = os.Remove(m.path(id, name))
 	}
@@ -149,15 +162,45 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	if err := downloadAgent(ctx, s.DownloadURL, s.SHA256, newPath); err != nil {
 		return "failed", "下载或 SHA256 校验失败，原 agent 未更换", err
 	}
+	payload, err := os.ReadFile(newPath)
+	if err != nil {
+		return "failed", "无法读取新程序", err
+	}
+	if err = secureupdate.Verify(ctx, "agent", "", payload); err != nil {
+		return "failed", "发布签名验证失败，原程序未更换", err
+	}
 	if err := command(ctx, log, newPath, "version"); err != nil {
 		return "failed", "新 agent 无法在本机运行，原 agent 未更换", err
 	}
 	if info, err := os.Lstat(target); err != nil || !info.Mode().IsRegular() {
 		return "failed", "agent 安装路径不是默认普通文件", errors.New("nonstandard agent path")
 	}
+	if err = diskbudget.Check(filepath.Dir(oldPath), int64(len(payload))+8<<20, 16); err != nil {
+		return "failed", "维护目录空间不足，原 agent 保持运行", err
+	}
 	if err := copyFile(target, oldPath, 0700); err != nil {
 		return "failed", "备份 agent 失败，原程序未更换", err
 	}
+	reservation, err := diskbudget.Reserve(filepath.Dir(target), int64(len(payload))*2)
+	if err != nil {
+		return "failed", "程序分区无法预留更新与恢复空间，原 agent 保持运行", err
+	}
+	defer func() {
+		if reservation != nil {
+			_ = diskbudget.Release(reservation)
+		}
+	}()
+	recovery, err := secureupdate.PrepareAgentRecovery(oldPath)
+	if err != nil {
+		return "failed", "旧程序不是安全恢复点，原 agent 保持运行", err
+	}
+	if err = writeJSON(m.path(s.ID, "recovery.json"), recovery); err != nil {
+		return "failed", "恢复事务无法持久化，原 agent 保持运行", err
+	}
+	if err = diskbudget.Release(reservation); err != nil {
+		return "failed", "无法启用预留空间，原 agent 保持运行", err
+	}
+	reservation = nil
 	stage("running", "restart", "正在替换并重启 agent，已部署服务继续运行")
 	if err := command(ctx, log, "systemctl", "stop", "ctlvps-agent"); err != nil {
 		return "failed", "停止 agent 失败，原程序未更换", err
@@ -177,7 +220,10 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	_, _ = fmt.Fprintln(log, "new agent failed:", err)
 	stage("running", "rollback", "新 agent 启动失败，正在恢复旧程序")
 	_ = command(ctx, log, "systemctl", "stop", "ctlvps-agent")
-	rollback := installAgentFile(oldPath, target)
+	rollback := recovery.CheckLocal()
+	if rollback == nil {
+		rollback = installAgentFile(oldPath, target)
+	}
 	if rollback == nil {
 		rollback = command(ctx, log, "systemctl", "start", "ctlvps-agent")
 	}
@@ -269,30 +315,19 @@ func downloadAgent(ctx context.Context, rawURL, want, path string) error {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || !shaPattern.MatchString(want) {
 		return errors.New("invalid agent download")
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	data, err := downloadAgentBytes(ctx, rawURL)
 	if err != nil {
 		return err
 	}
-	c := &http.Client{Timeout: 5 * time.Minute, CheckRedirect: func(r *http.Request, via []*http.Request) error {
-		if len(via) > 5 || r.URL.Scheme != "https" || r.URL.Host != u.Host {
-			return errors.New("unexpected download redirect")
-		}
-		return nil
-	}}
-	resp, err := c.Do(req)
-	if err != nil {
-		return errors.New("agent download connection failed")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("agent download HTTP %d", resp.StatusCode)
+	if err = diskbudget.Check(filepath.Dir(path), int64(len(data)), 4); err != nil {
+		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 	if err != nil {
 		return err
 	}
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, (128<<20)+1))
+	n, err := io.Copy(io.MultiWriter(f, h), bytes.NewReader(data))
 	if err == nil {
 		err = f.Sync()
 	}
@@ -327,6 +362,9 @@ func report(s Spec, j Job) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+s.CallbackToken)
 	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if runtime.GOOS == "linux" && os.Geteuid() == 0 {
+		c.Transport = agentnet.Transport{}
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return errors.New("report connection failed")
@@ -336,4 +374,8 @@ func report(s Spec, j Job) error {
 		return fmt.Errorf("report HTTP %d", resp.StatusCode)
 	}
 	return nil
+}
+
+var downloadAgentBytes = func(ctx context.Context, raw string) ([]byte, error) {
+	return agentnet.Download(ctx, raw, 128<<20, true)
 }

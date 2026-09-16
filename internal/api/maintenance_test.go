@@ -28,11 +28,13 @@ func TestAgentMaintenanceReportsBinaryUpdateStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name, current string
 		missingBinary bool
+		legacy        bool
 		outdated      bool
 	}{
 		{name: "same binary despite version display suffix", current: strings.ToUpper(sha)},
 		{name: "same version with different binary", current: strings.Repeat("0", 64), outdated: true},
 		{name: "agent has not reported binary"},
+		{name: "legacy agent cannot update", current: strings.Repeat("0", 64), legacy: true},
 		{name: "controller binary unavailable", current: sha, missingBinary: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -50,10 +52,13 @@ func TestAgentMaintenanceReportsBinaryUpdateStatus(t *testing.T) {
 			et := c.do("POST", path+"/enroll-token", nil, 200)
 			en := c.do("POST", "/api/agent/v1/enroll", agentproto.EnrollRequest{EnrollToken: et["token"].(string), Version: "v0.1.0", Arch: "amd64"}, 200)
 			c.agent = en["agent_token"].(string)
-			c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "v0.1.0", TS: time.Now(), Epoch: "test", Metrics: agentproto.Metrics{Arch: "amd64"}, Diagnostics: agentproto.Diagnostics{Maintenance: 1, BinarySHA256: tc.current}}, 200)
+			reply := c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "v0.1.0", TS: time.Now(), Epoch: "test", Metrics: agentproto.Metrics{Arch: "amd64"}, Diagnostics: agentproto.Diagnostics{SecurityVersion: 1, SecurityPolicy: !tc.legacy, Maintenance: 1, BinarySHA256: tc.current}}, 200)
+			if tc.legacy && (reply["agent_update"] != nil || reply["maintenance"] != nil) {
+				t.Fatal("legacy agent received executable task")
+			}
 			status := c.do("GET", path+"/maintenance", nil, 200)
 			update := status["agent_update"].(map[string]any)
-			if status["available"] != true || update["outdated"] != tc.outdated {
+			if status["available"] != !tc.legacy || update["outdated"] != tc.outdated {
 				t.Fatalf("unexpected update status: %v", status)
 			}
 			if tc.current != "" && update["current_sha"] != tc.current {
@@ -87,6 +92,7 @@ func maintenanceHTTP(t *testing.T, c *client, path string, body any, origin, tok
 	}
 	if c.cookie != nil {
 		req.AddCookie(c.cookie)
+		req.Header.Set("X-CSRF-Token", c.api.csrfToken(c.cookie.Value))
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -134,6 +140,8 @@ func TestControllerMaintenanceAuthorization(t *testing.T) {
 	if err := c.api.Store.UpdateUser(context.Background(), &u); err != nil {
 		t.Fatal(err)
 	}
+	c.do("GET", p, nil, 401)
+	c.do("POST", "/api/v1/auth/login", map[string]any{"username": "admin", "password": "password123"}, 200)
 	c.do("GET", p, nil, 403)
 	maintenanceHTTP(t, c, p, in, c.srv.URL, "", 403)
 }
@@ -153,6 +161,8 @@ func TestMaintenanceSecondFactorCannotReplay(t *testing.T) {
 	if err := c.api.Store.UpdateUser(context.Background(), &u); err != nil {
 		t.Fatal(err)
 	}
+	login := c.do("POST", "/api/v1/auth/login", map[string]any{"username": "admin", "password": "password123"}, 200)
+	c.do("POST", "/api/v1/auth/login/2fa", map[string]any{"challenge": login["challenge"], "code": plain[1]}, 200)
 	in := maintenanceInput{Request: maintenance.Request{ID: maintenance.NewID(), Role: "controller", Action: "update", Version: "v0.2.0"}, Password: "password123"}
 	path := "/api/v1/system/maintenance"
 	maintenanceHTTP(t, c, path, in, c.srv.URL, "", 403)
@@ -177,7 +187,7 @@ func TestAgentMaintenanceClaimExpiryAndReports(t *testing.T) {
 	et := c.do("POST", fmt.Sprintf("/api/v1/servers/%d/enroll-token", sid), nil, 200)
 	en := c.do("POST", "/api/agent/v1/enroll", agentproto.EnrollRequest{EnrollToken: et["token"].(string), Version: "test", Arch: "amd64"}, 200)
 	c.agent = en["agent_token"].(string)
-	hb := agentproto.Heartbeat{Version: "test", TS: time.Now(), Epoch: "test", Diagnostics: agentproto.Diagnostics{Maintenance: 1}}
+	hb := agentproto.Heartbeat{Version: "test", TS: time.Now(), Epoch: "test", Diagnostics: agentproto.Diagnostics{SecurityVersion: 1, SecurityPolicy: true, Maintenance: 1}}
 	c.do("POST", "/api/agent/v1/heartbeat", hb, 200)
 	p := fmt.Sprintf("/api/v1/servers/%d/maintenance", sid)
 	in := maintenanceInput{Request: maintenance.Request{ID: maintenance.NewID(), Role: "agent", Action: "uninstall"}, Password: "password123", Confirm: "test-vps"}
