@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -94,13 +95,17 @@ func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []
 			continue
 		}
 		want[n.ListenPort] = true
+		meterChanged, err := d.Systemd.EnsureSnellMeter(ctx, n)
+		if err != nil {
+			return changed, err
+		}
 		path := filepath.Join(d.confDir(), strconv.Itoa(n.ListenPort)+".conf")
 		c, err := WriteIfChanged(path, []byte(Config(n, ds.IPv4Only)), 0o600)
 		if err != nil {
 			return changed, err
 		}
 		u := unitFor(n.ListenPort)
-		if c || unitChanged || !d.Systemd.IsActive(ctx, u) {
+		if c || unitChanged || meterChanged || !d.Systemd.IsActive(ctx, u) {
 			if err := d.Systemd.EnableRestart(ctx, u); err != nil {
 				return changed, err
 			}
@@ -114,7 +119,9 @@ func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []
 		if err != nil || want[port] {
 			continue
 		}
-		_ = d.Systemd.StopDisable(ctx, u)
+		if err := d.Systemd.StopDisable(ctx, u); err != nil {
+			return changed, err
+		}
 		_ = os.Remove(filepath.Join(d.confDir(), portStr+".conf"))
 		changed = true
 	}
@@ -161,8 +168,11 @@ func (d *Snell) Status(ctx context.Context) agentproto.CoreStatus {
 
 // Stop implements Driver.
 func (d *Snell) Stop(ctx context.Context) error {
+	var errs []error
 	for _, u := range d.Systemd.ListUnits(ctx, "ctlvps-snell@*.service") {
-		_ = d.Systemd.StopDisable(ctx, u)
+		if err := d.Systemd.StopDisable(ctx, u); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

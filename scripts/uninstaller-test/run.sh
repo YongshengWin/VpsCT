@@ -195,4 +195,30 @@ assert test -f /opt/ctlvps/data/ctlvps.db
 assert test -f /var/lib/ctlvps-agent/state.json
 done_case 'stop failure aborts before deleting files'
 
+
+
+fixture
+cat > /etc/systemd/system/ctlvps-proxy.slice <<'EOF'
+[Slice]
+MemoryMax=256M
+EOF
+cat > /etc/systemd/system/ctlvps-proxy-n2.slice <<'EOF'
+[Slice]
+IPAccounting=yes
+EOF
+mkdir -p /etc/systemd/system/ctlvps-snell@21002.service.d
+cat > /etc/systemd/system/ctlvps-snell@21002.service.d/meter.conf <<'EOF'
+[Service]
+Slice=ctlvps-proxy-n2.slice
+EOF
+nft add table inet ctlvps_nodes
+systemctl daemon-reload
+systemctl restart ctlvps-snell@21002.service
+uninstall --agent --yes
+assert test ! -f /etc/systemd/system/ctlvps-proxy-n2.slice
+assert test ! -f /etc/systemd/system/ctlvps-snell@21002.service.d/meter.conf
+if nft list table inet ctlvps_nodes 2>/dev/null; then exit 1; fi
+assert nft list table inet keep_fixture
+done_case 'shared process meters and generated Snell slice drop-in are removed safely'
+
 printf 'Uninstaller integration: %s scenarios passed (real systemd and nftables)\n' "$checks"

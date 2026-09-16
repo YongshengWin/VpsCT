@@ -4,10 +4,10 @@ import "testing"
 
 func TestParseCounterName(t *testing.T) {
 	cases := []struct {
-		name     string
-		port     int
-		inbound  bool
-		ok       bool
+		name    string
+		port    int
+		inbound bool
+		ok      bool
 	}{
 		{"in_443", 443, true, true},
 		{"out_443", 443, false, true},

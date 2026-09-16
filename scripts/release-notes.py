@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import re
+from pathlib import Path
 
 version = os.environ['RELEASE_VERSION']
 repo = os.environ['RELEASE_REPOSITORY']
@@ -9,6 +10,13 @@ if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?', version):
 if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', repo):
     raise SystemExit('invalid repository')
 base = f'https://github.com/{repo}/releases/download/{version}'
+changelog = Path('CHANGELOG.md').read_text()
+sections = re.split(r'(?=^## \d+\. )', changelog, flags=re.M)
+changes = next((s.strip() for s in sections if re.match(r'^## \d+\. ' + re.escape(version) + r'(?: —|\s|$)', s)), '')
+if not changes:
+    raise SystemExit('version missing from CHANGELOG.md')
+changes = re.sub(r'^## \d+\.', '## 5.', changes, flags=re.M)
+changes = re.sub(r'^### \d+\.', '### 5.', changes, flags=re.M)
 print(f'''# VpsCT {version}
 
 ## 1. 安装控制端
@@ -58,9 +66,5 @@ curl -fsSL {base}/uninstall.sh | sudo bash -s -- --controller --dry-run
 每个控制端压缩包包含对应架构的控制端、两种架构的 agent、systemd 单元、卸载脚本和许可证。
 `SHA256SUMS` 用于检查下载完整性，不替代发布者身份验证。
 
-## 5. 发布前由维护者填写
-
-- 本次变化与兼容性说明（参见 CHANGELOG.md）。
-- 实际完成的 Linux 安装、HTTPS 和 agent 接入验证。
-- 当前已知限制。
+{changes}
 ''')

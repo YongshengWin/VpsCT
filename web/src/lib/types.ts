@@ -53,6 +53,7 @@ export interface CoreStatus {
 }
 
 export interface Diagnostics {
+ metering_error?: string;
   maintenance?: number;
   cores: CoreStatus[] | null;
   certs?: { domain: string; mode: string; not_after: string; issuer: string }[];
@@ -133,6 +134,7 @@ export interface Server {
 }
 
 export interface Node {
+ traffic?: { inbound: number; outbound: number; total: number; days: number; has_data: boolean; first_sample?: string; last_sample?: string };
   id: number;
   name: string;
   protocol: string;
@@ -307,6 +309,8 @@ export interface TrafficPoint {
 }
 
 export interface Series {
+ has_data: boolean;
+ total: number;
   subject: string;
   id: number;
   from: string;

@@ -64,11 +64,15 @@ type Metrics struct {
 
 // PortCounter is a cumulative nftables counter for one listening port.
 type PortCounter struct {
-	Port   int   `json:"port"`
-	Rx     int64 `json:"rx"` // VPS inbound for this inbound (client + origin)
-	Tx     int64 `json:"tx"` // VPS outbound for this inbound (client + origin)
-	RxPkts int64 `json:"rx_pkts,omitempty"`
-	TxPkts int64 `json:"tx_pkts,omitempty"`
+	NodeID   int64  `json:"node_id,omitempty"`
+	Source   string `json:"source,omitempty"`
+	Epoch    string `json:"epoch,omitempty"`
+	FromZero bool   `json:"from_zero,omitempty"`
+	Port     int    `json:"port"`
+	Rx       int64  `json:"rx"` // VPS inbound for this inbound (client + origin)
+	Tx       int64  `json:"tx"` // VPS outbound for this inbound (client + origin)
+	RxPkts   int64  `json:"rx_pkts,omitempty"`
+	TxPkts   int64  `json:"tx_pkts,omitempty"`
 }
 
 // CoreStatus describes one proxy core process.
@@ -96,6 +100,7 @@ type CertStatus struct {
 
 // Diagnostics is the health section of a heartbeat.
 type Diagnostics struct {
+	MeteringError string       `json:"metering_error,omitempty"`
 	Maintenance   int          `json:"maintenance,omitempty"`
 	Cores         []CoreStatus `json:"cores"`
 	Certs         []CertStatus `json:"certs,omitempty"`
@@ -133,6 +138,7 @@ type Heartbeat struct {
 
 // HeartbeatResponse tells the agent what to do next.
 type HeartbeatResponse struct {
+	MeteringVersion int                 `json:"metering_version,omitempty"`
 	Maintenance     *MaintenanceCommand `json:"maintenance,omitempty"`
 	ServerTime      time.Time           `json:"server_time"`
 	DesiredRevision int64               `json:"desired_revision"`
@@ -167,6 +173,7 @@ type CertSpec struct {
 
 // NodeSpec is one inbound the agent must serve.
 type NodeSpec struct {
+	Retired        bool           `json:"-"` // local accounting tombstone, never an inbound
 	NodeID         int64          `json:"node_id"`
 	Name           string         `json:"name"`
 	Protocol       string         `json:"protocol"`
@@ -213,7 +220,7 @@ type ConnlogSpec struct {
 // Tuning are host-level knobs applied idempotently.
 type Tuning struct {
 	EnableBBR    bool `json:"enable_bbr"`
-	MemoryMaxMB  int  `json:"memory_max_mb"` // per core process
+	MemoryMaxMB  int  `json:"memory_max_mb"` // aggregate proxy slice budget, also an individual safety ceiling
 	LimitNOFILE  int  `json:"limit_nofile"`
 	Chrony       bool `json:"chrony"`
 	RestartSec   int  `json:"restart_sec"`

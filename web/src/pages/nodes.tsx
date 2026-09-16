@@ -6,9 +6,10 @@ import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } 
 import { CSS } from "@dnd-kit/utilities";
 import { del, get, post, put } from "@/lib/api";
 import type { Node, Series } from "@/lib/types";
-import { copyText, fmtDate, PROTOCOL_LABELS, cn } from "@/lib/utils";
+import { copyText, fmtBytes, fmtDate, PROTOCOL_LABELS, cn } from "@/lib/utils";
 import { Badge, Button, Confirm, Dialog, Empty, Field, Input, PageHeader, Select, Spinner, Switch, Table, Td, Th, Tr, Textarea, Pre, Tabs, Code } from "@/components/ui";
 import { useToast } from "@/components/toast";
+import { TrafficIO } from "@/components/traffic-ways";
 import { TrafficBars } from "@/components/charts";
 
 export function ProtocolBadge({ p }: { p: string }) {
@@ -40,6 +41,7 @@ export function NodeRow({ n, onOpen, selectable, selected, onSelect, dragHandle,
       <Td><ProtocolBadge p={n.protocol} /></Td>
       <Td className="mono text-xs text-muted-foreground">{n.server || "—"}:{n.port}</Td>
       <Td><SourceBadge n={n} /></Td>
+      <Td>{n.source !== "deployed" ? <span className="text-xs text-muted-foreground">不可采集</span> : !n.traffic ? <span className="text-xs text-muted-foreground">暂不可用</span> : !n.traffic.has_data ? <span className="text-xs text-muted-foreground">暂无采集记录</span> : <div><p className="tabular-nums font-medium">{fmtBytes(n.traffic.total)}</p><p className="text-xs text-muted-foreground">入 {fmtBytes(n.traffic.inbound)} · 出 {fmtBytes(n.traffic.outbound)}</p></div>}</Td>
       <Td>{n.revoked ? <Badge variant="destructive">已撤销</Badge> : n.enabled ? <Badge variant="success">启用</Badge> : <Badge variant="secondary">禁用</Badge>}</Td>
       <Td className="text-right" onClick={(e) => e.stopPropagation()}>
         {n.uri && (
@@ -74,6 +76,8 @@ export function NodesPage() {
   const toast = useToast();
   const [source, setSource] = React.useState<"" | Node["source"]>("");
   const [q, setQ] = React.useState("");
+ const [serverFilter,setServerFilter]=React.useState("");
+ const [sortUsage,setSortUsage]=React.useState(false);
   const [showRevoked, setShowRevoked] = React.useState(false);
   const nodes = useQuery({ queryKey: ["nodes", { source, showRevoked }], queryFn: () => get<Node[]>(`/api/v1/nodes?source=${source}${showRevoked ? "&include_revoked=1" : ""}`) });
   const [order, setOrder] = React.useState<Node[]>([]);
@@ -102,8 +106,10 @@ export function NodesPage() {
     onError: (e) => toast.fromError(e),
   });
 
-  const filtered = order.filter((n) => !q || n.name.toLowerCase().includes(q.toLowerCase()) || n.server.includes(q) || n.protocol.includes(q));
-  const canDrag = !q && source !== "";
+  const filtered = order.filter((n) => (!serverFilter || String(n.server_id)===serverFilter) && (!q || n.name.toLowerCase().includes(q.toLowerCase()) || n.server.includes(q) || n.protocol.includes(q)));
+ if(sortUsage)filtered.sort((a,b)=>(b.traffic?.total??-1)-(a.traffic?.total??-1));
+ const serverOptions=[...new Map(order.filter(n=>n.server_id).map(n=>[n.server_id,n.server_name])).entries()];
+  const canDrag = !q && source !== "" && !serverFilter && !sortUsage;
 
   return (
     <div>
@@ -124,7 +130,9 @@ export function NodesPage() {
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input className="w-56 pl-8" placeholder="搜索名称 / 地址 / 协议" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
-          <Switch checked={showRevoked} onChange={setShowRevoked} label="含已撤销" />
+          <Select aria-label="按服务器筛选" value={serverFilter} onChange={e=>setServerFilter(e.target.value)}><option value="">全部服务器</option>{serverOptions.map(([id,name])=><option key={id} value={String(id)}>{name}</option>)}</Select>
+ <Switch checked={sortUsage} onChange={setSortUsage} label="按用量排序" />
+ <Switch checked={showRevoked} onChange={setShowRevoked} label="含已撤销" />
         </div>
       </div>
       {selected.size > 0 && (
@@ -150,7 +158,7 @@ export function NodesPage() {
                 <tr className="border-b">
                   <Th className="w-8"><input type="checkbox" className="h-4 w-4 accent-primary" checked={selected.size > 0 && selected.size === filtered.length} onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((n) => n.id)) : new Set())} /></Th>
                   <Th className="w-8"></Th>
-                  <Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>来源</Th><Th>状态</Th><Th></Th>
+                  <Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>来源</Th><Th>近 30 天用量</Th><Th>状态</Th><Th></Th>
                 </tr>
               </thead>
               <tbody>
@@ -378,8 +386,9 @@ export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose
   const [confirmDel, setConfirmDel] = React.useState(false);
   const [confirmRegen, setConfirmRegen] = React.useState(false);
   const [showQR, setShowQR] = React.useState(false);
+ const [trafficDays,setTrafficDays]=React.useState(30);
   const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node });
-  const traffic = useQuery({ queryKey: ["nodes", node?.id, "traffic"], queryFn: () => get<Series>(`/api/v1/nodes/${node!.id}/traffic?days=30`), enabled: !!node && node.source === "deployed" });
+  const traffic = useQuery({ queryKey: ["nodes", node?.id, "traffic",trafficDays], queryFn: () => get<Series>(`/api/v1/nodes/${node!.id}/traffic?days=${trafficDays}`), refetchInterval:30000, enabled: !!node && node.source === "deployed" });
   const delM = useMutation({ mutationFn: () => del(`/api/v1/nodes/${node!.id}`), onSuccess: () => { toast.success("已删除"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (e) => toast.fromError(e) });
   const regen = useMutation({ mutationFn: () => post(`/api/v1/nodes/${node!.id}/regenerate`), onSuccess: () => { toast.success("凭据已重置，订阅将自动更新"); setConfirmRegen(false); qc.invalidateQueries({ queryKey: ["nodes"] }); }, onError: (e) => toast.fromError(e) });
   const toggle = useMutation({ mutationFn: (enabled: boolean) => put(`/api/v1/nodes/${node!.id}`, { enabled }), onSuccess: () => { qc.invalidateQueries({ queryKey: ["nodes"] }); onClose(); }, onError: (e) => toast.fromError(e) });
@@ -425,12 +434,10 @@ export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose
                 <Pre className="max-h-64">{JSON.stringify(uri.data.clash, null, 2)}</Pre>
               </div>
             )}
-            {node.source === "deployed" && traffic.data && (
-              <div>
-                <p className="mb-1 text-xs font-medium text-muted-foreground">近 30 天流量</p>
-                <TrafficBars points={traffic.data.points} height={160} />
-              </div>
-            )}
+            {node.source === "deployed" && <div className="space-y-2">
+              <Select aria-label="节点流量时间范围" value={trafficDays} onChange={e=>setTrafficDays(Number(e.target.value))}>{[7,30,90].map(d=><option key={d} value={d}>近 {d} 天流量</option>)}</Select>
+              {traffic.isError ? <p className="text-sm text-destructive">流量加载失败，请稍后重试</p> : traffic.isLoading ? <Spinner /> : traffic.data?.has_data ? <><TrafficIO inbound={traffic.data.total_up} outbound={traffic.data.total_down}/><TrafficBars points={traffic.data.points} height={160}/><p className="text-xs text-muted-foreground">仅汇总已采集数据；无记录的日期不代表实际未使用。</p></> : <p className="text-sm text-muted-foreground">该时间范围暂无用量记录</p>}
+            </div>}
           </div>
         </div>
       </Dialog>

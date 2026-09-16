@@ -35,6 +35,9 @@ type Agent struct {
 	Metrics *MetricsCollector
 	Tail    *conntail.Tailer
 
+	HoldUpdates bool // locally pin a canary; pauses binary synchronization and web maintenance
+
+	stateMu     sync.Mutex // serializes the main loop and connlog state persistence
 	mu          sync.Mutex
 	desired     *agentproto.DesiredState
 	lastDiag    diag.Host
@@ -127,10 +130,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		_ = a.State.Save(a.StateDir)
 	}
 	// nft table missing (fresh boot) -> counters restart from zero: new epoch
-	if a.NFT.Available(ctx) && !a.NFT.Exists(ctx) {
+	if a.NFT.Available(ctx) && ((a.State.MeteringV1 && !a.NFT.NodesExist(ctx)) || (!a.State.MeteringV1 && !a.NFT.Exists(ctx))) {
 		a.State.CounterNonce = nonce()
 		_ = a.State.Save(a.StateDir)
 	}
+	a.stateMu.Lock()
 	go a.Tail.Run(ctx)
 	go a.connlogLoop(ctx)
 
@@ -138,11 +142,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.maintenanceAction() != "uninstall" {
 		a.converge(ctx, true)
 	}
+	a.stateMu.Unlock()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	backoff := time.Second
 	for {
-		if err := a.heartbeat(ctx); err != nil {
+		a.stateMu.Lock()
+		err := a.heartbeat(ctx)
+		a.stateMu.Unlock()
+		if err != nil {
 			if errors.Is(err, ErrUnauthorized) {
 				a.Logger.Error("token rejected; waiting for re-enrolment", "err", err)
 			} else {
@@ -168,56 +176,207 @@ func (a *Agent) Run(ctx context.Context) error {
 // epoch identifies the current counter baseline.
 func (a *Agent) epoch() string { return a.bootID + ":" + a.State.CounterNonce }
 
-// portCounters is VPS in/out per listen port.
-// Prefers systemd IPAccounting (the process cgroup: client + origin).
-// nft listen-port counters are only a fallback before the unit is ready.
-func (a *Agent) portCounters(ctx context.Context) []agentproto.PortCounter {
-	byPort := map[int]agentproto.PortCounter{}
-	if a.NFT != nil && a.NFT.Available(ctx) {
-		if counters, err := a.NFT.Read(ctx); err == nil {
-			byPort = counters
+// portCounters includes retired identities until their final counters are
+// acknowledged. Accounting lives outside the service lifetime.
+func (a *Agent) portCounters(ctx context.Context) ([]agentproto.PortCounter, error) {
+	var out []agentproto.PortCounter
+	if a.NFT.NodesExist(ctx) {
+		counters, err := a.NFT.ReadNodes(ctx)
+		if err != nil {
+			return nil, err
 		}
+		for j := range counters {
+			counters[j].Epoch = a.epoch() + ":nft-node-v1"
+		}
+		out = append(out, counters...)
+	} else if a.State.MeteringV1 {
+		return nil, fmt.Errorf("node accounting table missing")
 	}
-	a.mu.Lock()
-	ds := a.desired
-	a.mu.Unlock()
-	if ds != nil && a.Systemd != nil {
-		for _, n := range ds.Nodes {
-			if n.ListenPort <= 0 {
+	units := []string{}
+	byUnit := map[string]MeterIdentity{}
+	for _, n := range a.State.MeterNodes {
+		if n.Core != "snell" {
+			continue
+		}
+		u := core.SnellSlice(n.NodeID)
+		if !a.Systemd.IsActive(ctx, u) {
+			if a.State.MeteringV1 && a.Systemd.IsActive(ctx, core.SnellUnit(n.Port)) {
+				return nil, fmt.Errorf("Snell accounting slice unavailable")
+			}
+			continue
+		}
+		units = append(units, u)
+		byUnit[u] = n
+	}
+	readings, err := a.Systemd.AccountingSnapshot(ctx, units)
+	if err != nil {
+		return nil, err
+	}
+	for _, u := range units {
+		r := readings[u]
+		if !r.Valid {
+			return nil, fmt.Errorf("accounting unavailable for %s", u)
+		}
+		n := byUnit[u]
+		out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: "systemd-v1", Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: true})
+	}
+	if !a.State.MeteringV1 && a.State.LegacySettled {
+		for _, n := range a.State.MeterNodes {
+			u := core.SingBoxUnit(n.Port)
+			if n.Core == "snell" {
+				u = core.SnellUnit(n.Port)
+				if a.Systemd.InSlice(ctx, u, core.SnellSlice(n.NodeID)) {
+					continue
+				}
+			}
+			if !a.Systemd.IsActive(ctx, u) {
 				continue
 			}
-			var unit string
-			switch n.Core {
-			case "snell":
-				unit = core.SnellUnit(n.ListenPort)
-			case "singbox":
-				unit = core.SingBoxUnit(n.ListenPort)
-			default:
-				continue
+			r, e := a.Systemd.AccountingSnapshot(ctx, []string{u})
+			if e != nil {
+				return nil, e
 			}
-			in, out, ok := a.Systemd.IPAccounting(ctx, unit)
-			if !ok {
-				continue
+			v := r[u]
+			if !v.Valid {
+				return nil, fmt.Errorf("legacy accounting unavailable")
 			}
-			pc := byPort[n.ListenPort]
-			pc.Port = n.ListenPort
-			pc.Rx, pc.Tx = in, out
-			byPort[n.ListenPort] = pc
+			out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: "systemd-legacy-v1", Epoch: v.Epoch, Rx: v.Rx, Tx: v.Tx, FromZero: true})
 		}
 	}
-	out := make([]agentproto.PortCounter, 0, len(byPort))
-	for _, c := range byPort {
-		if c.Port > 0 {
-			out = append(out, c)
+	return out, nil
+}
+
+// flushSettlement retries the exact durable snapshot, never a newly sampled
+// value. Baselines and usage are committed together by the controller.
+func (a *Agent) flushSettlement(ctx context.Context) error {
+	if a.State.PendingSettlement == nil {
+		return nil
+	}
+	resp, err := a.Client.Heartbeat(ctx, *a.State.PendingSettlement)
+	if err != nil {
+		return fmt.Errorf("legacy meter settlement: %w", err)
+	}
+	if resp.MeteringVersion < 1 {
+		return fmt.Errorf("upgrade controller before migrating node accounting")
+	}
+	pending := a.State.PendingSettlement
+	a.State.PendingSettlement = nil
+	a.State.LegacySettled = true
+	if err := a.State.Save(a.StateDir); err != nil {
+		a.State.PendingSettlement = pending
+		return err
+	}
+	return nil
+}
+
+// prepareMetering stops legacy services before reading their retained final
+// counters. Failure restores their availability; a durable report survives a
+// lost acknowledgment and prevents double billing on retry.
+func (a *Agent) prepareMetering(ctx context.Context, ds *agentproto.DesiredState) (func(bool), error) {
+	if err := a.flushSettlement(ctx); err != nil {
+		return nil, err
+	}
+	if a.State.MeteringV1 {
+		return func(bool) {}, nil
+	}
+	identities := map[string]agentproto.NodeSpec{}
+	for _, n := range ds.Nodes {
+		u := core.SingBoxUnit(n.ListenPort)
+		if n.Core == "snell" {
+			u = core.SnellUnit(n.ListenPort)
+		}
+		identities[u] = n
+	}
+	for _, n := range a.State.MeterNodes {
+		u := core.SingBoxUnit(n.Port)
+		if n.Core == "snell" {
+			u = core.SnellUnit(n.Port)
+		}
+		if _, ok := identities[u]; !ok {
+			identities[u] = agentproto.NodeSpec{NodeID: n.NodeID, ListenPort: n.Port, Core: n.Core}
 		}
 	}
-	return out
+	for _, pattern := range []string{"ctlvps-singbox@*.service", "ctlvps-snell@*.service"} {
+		for _, u := range a.Systemd.ListUnits(ctx, pattern) {
+			if _, ok := identities[u]; !ok && a.Systemd.IsActive(ctx, u) {
+				return nil, fmt.Errorf("cannot settle unknown legacy service %s; reconcile its node identity first", u)
+			}
+		}
+	}
+	active := []string{}
+	for u := range identities {
+		if n := identities[u]; n.Core == "snell" && a.Systemd.InSlice(ctx, u, core.SnellSlice(n.NodeID)) {
+			continue
+		}
+		if a.Systemd.IsActive(ctx, u) {
+			active = append(active, u)
+		}
+	}
+	restore := func(success bool) {
+		if success {
+			return
+		}
+		c, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		// No legacy process may run under the new sing-box counters: its
+		// process counters already include the same client packets.
+		if !a.Systemd.IsActive(c, "ctlvps-singbox.service") && a.NFT.NodesExist(c) {
+			if err := a.NFT.EnsureNodes(c, nil); err != nil {
+				a.Logger.Error("restore accounting rules", "err", err)
+				return
+			}
+		}
+		for _, u := range active {
+			if strings.HasPrefix(u, "ctlvps-singbox@") && a.Systemd.IsActive(c, "ctlvps-singbox.service") {
+				continue
+			}
+			_ = a.Systemd.StartUnits(c, []string{u})
+		}
+	}
+	if err := a.Systemd.StopUnits(ctx, active); err != nil {
+		restore(false)
+		return nil, err
+	}
+	readings, err := a.Systemd.AccountingSnapshot(ctx, active)
+	if err != nil {
+		restore(false)
+		return nil, err
+	}
+	hb := agentproto.Heartbeat{Version: a.Version, Epoch: a.epoch(), TS: time.Now().UTC(), Metrics: a.Metrics.Collect()}
+	for _, u := range active {
+		n, r := identities[u], readings[u]
+		if !r.Valid {
+			restore(false)
+			return nil, fmt.Errorf("legacy accounting unavailable for %s", u)
+		}
+		if !a.State.LegacySettled {
+			hb.Ports = append(hb.Ports, agentproto.PortCounter{Port: n.ListenPort, Rx: r.Rx, Tx: r.Tx})
+		}
+		hb.Ports = append(hb.Ports, agentproto.PortCounter{NodeID: n.NodeID, Port: n.ListenPort, Source: "systemd-legacy-v1", Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: a.State.LegacySettled})
+	}
+	a.State.PendingSettlement = &hb
+	if err = a.State.Save(a.StateDir); err != nil {
+		restore(false)
+		return nil, err
+	}
+	if err = a.flushSettlement(ctx); err != nil {
+		restore(false)
+		return nil, err
+	}
+	return restore, nil
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
+	if err := a.flushSettlement(ctx); err != nil {
+		return err
+	}
 	hb := agentproto.Heartbeat{Version: a.Version, BinarySHA256: a.selfSHA, Epoch: a.epoch(), TS: time.Now().UTC(), Metrics: a.Metrics.Collect()}
 	hb.PublicIPv4, hb.PublicIPv6 = diag.PublicIPs()
-	hb.Ports = a.portCounters(ctx)
+	var meterErr error
+	hb.Ports, meterErr = a.portCounters(ctx)
+	if meterErr != nil {
+		hb.Ports = nil
+	}
 	a.mu.Lock()
 	hb.AppliedRevision, hb.AppliedHash, hb.ApplyError = a.State.AppliedRevision, a.State.AppliedHash, a.State.ApplyError
 	if hb.ApplyError != "" {
@@ -229,6 +388,11 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 	hb.Diagnostics = a.diagnostics(ctx)
+	if meterErr != nil {
+		a.State.ApplyError = "node metering unavailable"
+		hb.ApplyError, hb.ApplyStatus = a.State.ApplyError, "failed"
+		hb.Diagnostics.MeteringError = meterErr.Error()
+	}
 
 	sent := time.Now()
 	resp, err := a.Client.Heartbeat(ctx, hb)
@@ -251,7 +415,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	if a.maintenanceAction() != "" {
 		return nil
 	}
-	if resp.AgentUpdate != nil && resp.AgentUpdate.SHA256 != "" && !strings.EqualFold(resp.AgentUpdate.SHA256, a.selfSHA) {
+	if !a.HoldUpdates && resp.AgentUpdate != nil && resp.AgentUpdate.SHA256 != "" && !strings.EqualFold(resp.AgentUpdate.SHA256, a.selfSHA) {
 		a.Logger.Info("self-update available", "sha", resp.AgentUpdate.SHA256[:min(12, len(resp.AgentUpdate.SHA256))])
 		if err := applySelfUpdate(ctx, a.State.ServerURL, *resp.AgentUpdate); err != nil {
 			a.Logger.Error("self-update failed", "err", err)
@@ -362,6 +526,53 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 	var errs []error
 	note := func(format string, args ...any) { details = append(details, fmt.Sprintf(format, args...)) }
 
+	// Persist meter identities before any process can start producing bytes.
+	known := map[int64]bool{}
+	for _, n := range a.State.MeterNodes {
+		known[n.NodeID] = true
+	}
+	for _, n := range ds.Nodes {
+		if !known[n.NodeID] {
+			a.State.MeterNodes = append(a.State.MeterNodes, MeterIdentity{NodeID: n.NodeID, Port: n.ListenPort, Core: n.Core})
+		}
+	}
+	if err := a.State.Save(a.StateDir); err != nil {
+		return details, err
+	}
+
+	restore, err := a.prepareMetering(ctx, ds)
+	if err != nil {
+		return details, err
+	}
+	success := false
+	defer func() { restore(success) }()
+	if !a.NFT.Available(ctx) {
+		return details, fmt.Errorf("nftables is required for shared-process node accounting")
+	}
+	if !a.NFT.NodesExist(ctx) {
+		a.State.CounterNonce = nonce()
+		if err := a.State.Save(a.StateDir); err != nil {
+			return details, err
+		}
+	}
+	meterNodes := append([]agentproto.NodeSpec(nil), ds.Nodes...)
+	current := map[int64]bool{}
+	for _, n := range ds.Nodes {
+		current[n.NodeID] = true
+	}
+	for _, n := range a.State.MeterNodes {
+		if n.Core == "singbox" && !current[n.NodeID] {
+			meterNodes = append(meterNodes, agentproto.NodeSpec{NodeID: n.NodeID, Core: n.Core, Blocked: true, Retired: true})
+		}
+	}
+	if err := a.NFT.EnsureNodes(ctx, meterNodes); err != nil {
+		return details, fmt.Errorf("node accounting: %w", err)
+	}
+
+	if err := a.Systemd.EnsureProxyBudget(ctx, ds.Tuning); err != nil {
+		return details, err
+	}
+
 	// host tuning
 	if ds.Tuning.EnableBBR {
 		if changed, err := diag.EnableBBR(ctx); err != nil {
@@ -376,10 +587,8 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 
 	// group nodes per core
 	byCore := map[string][]agentproto.NodeSpec{}
-	var ports []int
 	for _, n := range ds.Nodes {
 		byCore[n.Core] = append(byCore[n.Core], n)
-		ports = append(ports, n.ListenPort) // count blocked ports too (keep history)
 	}
 	for name, drv := range a.Drivers {
 		nodes := byCore[name]
@@ -411,15 +620,19 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 			note("%s: %d node(s) applied", name, live)
 		}
 	}
-	// nftables counters
-	if a.NFT.Available(ctx) {
-		if err := a.NFT.Ensure(ctx, ports); err != nil {
-			errs = append(errs, fmt.Errorf("nftables: %w", err))
-			note("nftables: %v", err)
+	if len(errs) == 0 && a.NFT.Exists(ctx) {
+		if err := a.NFT.Teardown(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("remove settled legacy counters: %w", err))
 		}
-	} else {
-		note("nftables unavailable: per-port accounting disabled")
 	}
+	if len(errs) == 0 {
+		a.State.MeteringV1 = true
+		if err := a.State.Save(a.StateDir); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	success = len(errs) == 0
 	return details, errors.Join(errs...)
 }
 
@@ -453,15 +666,19 @@ func (a *Agent) connlogLoop(ctx context.Context) {
 			continue
 		}
 		events := a.Tail.Take(batch)
+		a.stateMu.Lock()
 		seq := a.State.ConnlogSeq + 1
+		a.stateMu.Unlock()
 		ack, err := a.Client.UploadConnlog(ctx, agentproto.ConnlogBatch{Seq: seq, Events: events})
 		if err != nil {
 			a.Tail.Requeue(events)
 			a.Logger.Warn("connlog upload failed", "err", err)
 			continue
 		}
+		a.stateMu.Lock()
 		a.State.ConnlogSeq = max(seq, ack.AcceptedSeq)
 		_ = a.State.Save(a.StateDir)
+		a.stateMu.Unlock()
 		lastFlush = time.Now()
 	}
 }
@@ -473,9 +690,13 @@ func (a *Agent) StatusSummary(ctx context.Context) string {
 	b += fmt.Sprintf("applied revision: %d  error: %q\n", a.State.AppliedRevision, a.State.ApplyError)
 	for _, drv := range a.Drivers {
 		st := drv.Status(ctx)
-		b += fmt.Sprintf("core %-13s installed=%v version=%s active=%v restarts=%d rss=%dMiB\n", st.Name, st.Installed, st.Version, st.Active, st.NRestarts, st.RSSBytes>>20)
+		b += fmt.Sprintf("core %-13s installed=%v version=%s active=%v restarts=%d cgroup-memory=%dMiB\n", st.Name, st.Installed, st.Version, st.Active, st.NRestarts, st.RSSBytes>>20)
 	}
-	for _, c := range a.portCounters(ctx) {
+	counters, err := a.portCounters(ctx)
+	if err != nil {
+		b += "metering unavailable: " + err.Error() + "\n"
+	}
+	for _, c := range counters {
 		b += fmt.Sprintf("port %-6d rx=%d tx=%d\n", c.Port, c.Rx, c.Tx)
 	}
 	return b

@@ -1,13 +1,18 @@
 package core
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/domain"
@@ -66,8 +71,8 @@ func TestSingBoxConfigPassesCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	inbounds := cfg["inbounds"].([]any)
-	if len(inbounds) != 6 {
-		t.Fatalf("blocked node must be omitted: got %d inbounds", len(inbounds))
+	if len(inbounds) != 7 {
+		t.Fatalf("blocked node is enforced by the firewall without restarting other nodes: got %d inbounds", len(inbounds))
 	}
 	if cfg["log"].(map[string]any)["level"] != "info" {
 		t.Fatal("connlog-enabled node must raise log level to info")
@@ -76,8 +81,8 @@ func TestSingBoxConfigPassesCheck(t *testing.T) {
 		t.Fatal("ipv4_only strategy")
 	}
 	outs := cfg["outbounds"].([]any)
-	if len(outs) != 1 {
-		t.Fatalf("want one direct outbound, got %d", len(outs))
+	if len(outs) != 7 {
+		t.Fatalf("want a marked direct outbound per node, got %d", len(outs))
 	}
 	one, err := d.BuildConfig(ds, []agentproto.NodeSpec{sbNodes[0]})
 	if err != nil {
@@ -91,7 +96,10 @@ func TestSingBoxConfigPassesCheck(t *testing.T) {
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(bin, "check", "-c", path).CombinedOutput()
+	var out []byte
+	if runtime.GOOS == "linux" {
+		out, err = exec.Command(bin, "check", "-c", path).CombinedOutput()
+	}
 	if err != nil {
 		t.Fatalf("sing-box check failed: %v\n%s\n%s", err, out, data)
 	}
@@ -130,5 +138,158 @@ func TestExpandURL(t *testing.T) {
 	u := ExpandURL("https://x/{version}/sing-box-{version}-linux-{arch}.tar.gz", "1.12.14")
 	if !strings.Contains(u, "1.12.14") || strings.Contains(u, "{") {
 		t.Fatal(u)
+	}
+}
+
+// This test touches systemd only inside the explicitly isolated fixture.
+func TestSharedServiceLifecycle(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getenv("CTLVPS_SYSTEMD_TEST") != "1" {
+		t.Skip("disposable systemd container only")
+	}
+	ctx := context.Background()
+	t.Setenv("TMPDIR", "/opt")
+	dir := t.TempDir()
+	paths := Paths{BinDir: filepath.Join(dir, "bin"), ConfDir: filepath.Join(dir, "conf"), LogDir: filepath.Join(dir, "logs"), CertDir: filepath.Join(dir, "certs"), DataDir: dir}
+	if err := os.MkdirAll(paths.BinDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	binary, err := os.ReadFile("/fixture-sing-box")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(paths.BinDir, "sing-box"), binary, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sd := NewSystemd()
+	driver := NewSingBox(paths, sd)
+	t.Cleanup(func() {
+		_ = sd.StopDisable(ctx, singboxUnit)
+		_ = os.Remove(filepath.Join(sd.UnitDir, singboxUnit))
+		_ = sd.DaemonReload(ctx)
+	})
+	ds := &agentproto.DesiredState{Tuning: agentproto.Tuning{MemoryMaxMB: 256, GoMemLimitMB: 64}}
+	nodes := []agentproto.NodeSpec{}
+	for i := int64(1); i <= 6; i++ {
+		nodes = append(nodes, agentproto.NodeSpec{NodeID: i, ListenPort: 21000 + int(i), Protocol: "ss", Core: "singbox", Params: map[string]any{"method": "aes-128-gcm", "password": "isolated-fixture"}})
+	}
+	if err = sd.EnsureProxyBudget(ctx, ds.Tuning); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || !changed {
+		t.Fatal("first apply", changed, err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if !sd.IsActive(ctx, singboxUnit) {
+		t.Fatal("shared service exited")
+	}
+	before, err := sd.AccountingSnapshot(ctx, []string{singboxUnit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || changed {
+		t.Fatal("idempotent apply restarted", changed, err)
+	}
+	nodes[0].Params["method"] = "invalid-fixture-cipher"
+	if _, err = driver.Apply(ctx, ds, nodes); err == nil {
+		t.Fatal("bad candidate accepted")
+	}
+	after, err := sd.AccountingSnapshot(ctx, []string{singboxUnit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[singboxUnit].Epoch != after[singboxUnit].Epoch {
+		t.Fatal("invalid candidate interrupted working process")
+	}
+	nodes[0].Params["method"] = "aes-128-gcm"
+	// A listener collision passes config validation but fails service startup.
+	listener, err := net.Listen("tcp", "0.0.0.0:21999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	nodes[0].ListenPort = 21999
+	if _, err = driver.Apply(ctx, ds, nodes); err == nil {
+		t.Fatal("activation failure not detected")
+	}
+	if !sd.IsActive(ctx, singboxUnit) {
+		t.Fatal("previous service not restored")
+	}
+}
+
+func TestSnellMeterSurvivesRestart(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getenv("CTLVPS_SYSTEMD_TEST") != "1" {
+		t.Skip("disposable systemd container only")
+	}
+	t.Setenv("TMPDIR", "/opt")
+	dir := t.TempDir()
+	ctx := context.Background()
+	sd := NewSystemd()
+	n := agentproto.NodeSpec{NodeID: 123, ListenPort: 21998, Core: "snell"}
+	unit := SnellUnit(n.ListenPort)
+	t.Cleanup(func() {
+		_ = sd.StopUnits(ctx, []string{unit, SnellSlice(n.NodeID)})
+		_ = os.Remove(filepath.Join(sd.UnitDir, unit))
+		_ = os.RemoveAll(filepath.Join(sd.UnitDir, unit+".d"))
+		_ = os.Remove(filepath.Join(sd.UnitDir, SnellSlice(n.NodeID)))
+		_ = sd.DaemonReload(ctx)
+	})
+	// The accounting boundary is a kernel cgroup; this fixture exercises it
+	// without substituting an unofficial implementation of the Snell protocol.
+	script := filepath.Join(dir, "echo.py")
+	err := os.WriteFile(script, []byte("import socket\ns=socket.socket();s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1);s.bind(('127.0.0.1',21998));s.listen()\nwhile True:\n c,a=s.accept()\n with c:\n  while True:\n   d=c.recv(65536)\n   if not d:break\n   c.sendall(d)\n"), 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sd.WriteUnit(unit, ServiceUnit("fixture Snell accounting", "/usr/bin/python3 "+script, agentproto.Tuning{}, "IPAccounting=yes")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = sd.EnsureSnellMeter(ctx, n); err != nil {
+		t.Fatal(err)
+	}
+	if err = sd.StartUnits(ctx, []string{unit}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	before, err := sd.AccountingSnapshot(ctx, []string{SnellSlice(n.NodeID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("tcp", "127.0.0.1:21998")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := bytes.Repeat([]byte("x"), 4096)
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	if _, err = c.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err = io.ReadFull(c, got); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	if err = sd.StopUnits(ctx, []string{unit}); err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := sd.AccountingSnapshot(ctx, []string{SnellSlice(n.NodeID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sd.StartUnits(ctx, []string{unit}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := sd.AccountingSnapshot(ctx, []string{SnellSlice(n.NodeID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := SnellSlice(n.NodeID)
+	if !before[key].Valid || stopped[key].Epoch != before[key].Epoch || after[key].Epoch != before[key].Epoch {
+		t.Fatal("slice epoch changed across child restart")
+	}
+	if stopped[key].Rx-before[key].Rx < int64(len(payload)) || stopped[key].Tx-before[key].Tx < int64(len(payload)) {
+		t.Fatal("traffic not accounted")
+	}
+	if after[key].Rx < stopped[key].Rx || after[key].Tx < stopped[key].Tx {
+		t.Fatal("restart lost traffic")
 	}
 }

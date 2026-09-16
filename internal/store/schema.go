@@ -324,4 +324,22 @@ CREATE TABLE maintenance_jobs (
 );
 CREATE UNIQUE INDEX idx_maintenance_active ON maintenance_jobs(server_id) WHERE status IN ('queued','running');
 `,
+	// v7: credential-free accounting identities outlive node deletion so final
+	// agent reports still reach the original node and share ledgers.
+	`
+CREATE TABLE node_meter_identities (
+ node_id INTEGER PRIMARY KEY,
+ server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+ listen_port INTEGER NOT NULL,
+ core TEXT NOT NULL,
+ share_id INTEGER REFERENCES shares(id) ON DELETE SET NULL
+);
+INSERT INTO node_meter_identities SELECT id,server_id,listen_port,core,share_id FROM nodes WHERE server_id IS NOT NULL;
+CREATE TRIGGER node_meter_insert AFTER INSERT ON nodes WHEN NEW.server_id IS NOT NULL BEGIN
+ INSERT OR REPLACE INTO node_meter_identities VALUES(NEW.id,NEW.server_id,NEW.listen_port,NEW.core,NEW.share_id);
+END;
+CREATE TRIGGER node_meter_update AFTER UPDATE ON nodes WHEN NEW.server_id IS NOT NULL BEGIN
+ INSERT OR REPLACE INTO node_meter_identities VALUES(NEW.id,NEW.server_id,NEW.listen_port,NEW.core,NEW.share_id);
+END;
+`,
 }

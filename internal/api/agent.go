@@ -126,15 +126,16 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	res, err := a.Traffic.Ingest(ctx, ac.Server, hb)
 	if err != nil {
 		a.Logger.Warn("traffic ingest", "server", ac.Server.Name, "err", err)
+		return err
 	} else if len(res.Shares) > 0 {
-		if err := a.Shares.ApplyDeltas(ctx, res.Shares); err != nil {
+		if err := a.Shares.EvaluateDeltas(ctx, res.Shares); err != nil {
 			a.Logger.Warn("share deltas", "err", err)
 		}
 	}
 	a.checkServerQuota(ctx, ac.Server)
 	a.checkDiagnostics(ctx, ac.Server, hb.Diagnostics)
 
-	resp := agentproto.HeartbeatResponse{ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
+	resp := agentproto.HeartbeatResponse{MeteringVersion: 1, ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
 	if ds, err := a.Store.LatestDesiredState(ctx, ac.Server.ID); err == nil {
 		resp.DesiredRevision, resp.DesiredHash = ds.Revision, ds.Hash
 		if d, err := desired.Load(ds); err == nil {

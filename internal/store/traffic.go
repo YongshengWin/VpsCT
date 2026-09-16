@@ -207,3 +207,74 @@ func (s *Store) PruneTraffic(ctx context.Context, sampleRetention, hourlyRetenti
 	_, err := s.db.ExecContext(ctx, `DELETE FROM traffic_hourly WHERE bucket < ?`, now.Add(-hourlyRetention).Truncate(time.Hour).Format(time.RFC3339))
 	return err
 }
+
+// TrafficSummary is a measured window, not an inferred usage estimate.
+type TrafficSummary struct {
+	Inbound     int64  `json:"inbound"`
+	Outbound    int64  `json:"outbound"`
+	Total       int64  `json:"total"`
+	Days        int    `json:"days"`
+	HasData     bool   `json:"has_data"`
+	FirstSample string `json:"first_sample,omitempty"`
+	LastSample  string `json:"last_sample,omitempty"`
+}
+
+// NodeTrafficSummaries uses two grouped queries, avoiding a query per node.
+func (s *Store) NodeTrafficSummaries(ctx context.Context, days int) (map[int64]TrafficSummary, error) {
+	out := map[int64]TrafficSummary{}
+	since := s.Now().UTC().AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+	rows, err := s.db.QueryContext(ctx, `SELECT subject_id,SUM(up),SUM(down) FROM traffic_daily WHERE subject='node' AND bucket>=? GROUP BY subject_id`, since.Format("2006-01-02"))
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var id, rx, tx int64
+		if err = rows.Scan(&id, &rx, &tx); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		out[id] = TrafficSummary{Inbound: rx, Outbound: tx, Total: rx + tx, Days: days, HasData: true}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	rows, err = s.db.QueryContext(ctx, `SELECT node_id,MIN(ts),MAX(ts) FROM traffic_samples WHERE node_id IS NOT NULL AND ts>=? GROUP BY node_id`, fmtTime(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var first, last string
+		if err = rows.Scan(&id, &first, &last); err != nil {
+			return nil, err
+		}
+		v := out[id]
+		v.Days, v.HasData, v.FirstSample, v.LastSample = days, true, first, last
+		out[id] = v
+	}
+	return out, rows.Err()
+}
+
+// MeterNodes returns identities including removed nodes, without credentials.
+func (s *Store) MeterNodes(ctx context.Context, serverID int64) ([]domain.Node, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT node_id,listen_port,core,share_id FROM node_meter_identities WHERE server_id=?", serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Node
+	for rows.Next() {
+		var n domain.Node
+		var share sql.NullInt64
+		if err := rows.Scan(&n.ID, &n.ListenPort, &n.Core, &share); err != nil {
+			return nil, err
+		}
+		n.ServerID = &serverID
+		n.ShareID = intPtr(share)
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}

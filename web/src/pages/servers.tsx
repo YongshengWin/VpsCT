@@ -190,9 +190,21 @@ export function ServerDetailPage() {
   const toast = useToast();
   const { meta } = useAuth();
   const q = useQuery({ queryKey: ["servers", id], queryFn: () => get<Server>(`/api/v1/servers/${id}`), refetchInterval: 10000 });
-  const traffic = useQuery({ queryKey: ["servers", id, "traffic"], queryFn: () => get<Series>(`/api/v1/servers/${id}/traffic?days=30`) });
-  const samples = useQuery({ queryKey: ["servers", id, "samples"], queryFn: () => get<{ ts: string; rx_rate: number; tx_rate: number }[]>(`/api/v1/servers/${id}/samples?hours=24`), refetchInterval: 60000 });
+  const [trafficDays, setTrafficDays] = React.useState(30);
+  const [trafficSelection, setTrafficSelection] = React.useState({ serverID: id, nodeID: "server" });
   const nodes = useQuery({ queryKey: ["nodes", { server_id: id }], queryFn: () => get<Node[]>(`/api/v1/nodes?server_id=${id}&include_revoked=1`) });
+  const trafficNode = trafficSelection.serverID === id
+    ? nodes.data?.find((n) => String(n.id) === trafficSelection.nodeID)
+    : undefined;
+  const trafficSubject = trafficNode ? String(trafficNode.id) : "server";
+  const traffic = useQuery({
+    queryKey: ["servers", id, "traffic", trafficSubject, trafficDays],
+    queryFn: () => get<Series>(trafficNode
+      ? `/api/v1/nodes/${trafficNode.id}/traffic?days=${trafficDays}`
+      : `/api/v1/servers/${id}/traffic?days=${trafficDays}`),
+    refetchInterval: 30000,
+  });
+  const samples = useQuery({ queryKey: ["servers", id, "samples"], queryFn: () => get<{ ts: string; rx_rate: number; tx_rate: number }[]>(`/api/v1/servers/${id}/samples?hours=24`), refetchInterval: 60000 });
   const desired = useQuery({ queryKey: ["servers", id, "desired"], queryFn: () => get<Revision[]>(`/api/v1/servers/${id}/desired?limit=5`) });
   const [edit, setEdit] = React.useState(false);
   const [deploy, setDeploy] = React.useState(false);
@@ -252,7 +264,8 @@ export function ServerDetailPage() {
 
       <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} />
 
-      {s.agent?.apply_error && (
+      {s.diagnostics?.metering_error && <div className="mb-4 rounded-md border border-red-500/40 p-3 text-sm text-destructive">节点流量采集异常：{s.diagnostics.metering_error}。当前用量可能未更新。</div>}
+ {s.agent?.apply_error && (
         <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
       )}
       {s.agent && s.agent_update && !s.agent_update.supported && (
@@ -275,8 +288,28 @@ export function ServerDetailPage() {
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader><CardTitle>近 30 天流量（柱为入站/出站）</CardTitle></CardHeader>
-          <CardContent><TrafficBars points={traffic.data?.points ?? []} /></CardContent>
+          <CardHeader>
+            <CardTitle>服务器流量</CardTitle>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <Select aria-label="流量统计对象" value={trafficSubject} onChange={(e) => setTrafficSelection({ serverID: id, nodeID: e.target.value })}>
+                <option value="server">整台服务器</option>
+                {(nodes.data ?? []).map((n) => <option key={n.id} value={String(n.id)}>{n.name} · {PROTOCOL_LABELS[n.protocol] ?? n.protocol}{n.revoked ? "（已撤销）" : ""}</option>)}
+              </Select>
+              <Select aria-label="服务器流量时间范围" value={trafficDays} onChange={(e) => setTrafficDays(Number(e.target.value))}>
+                {[7, 30, 90].map((days) => <option key={days} value={days}>近 {days} 天</option>)}
+              </Select>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {traffic.isLoading ? <p className="text-sm text-muted-foreground">正在加载流量…</p>
+              : traffic.isError ? <p className="text-destructive">流量加载失败</p>
+              : traffic.data?.has_data ? <><TrafficIO inbound={traffic.data.total_up} outbound={traffic.data.total_down} /><TrafficBars points={traffic.data.points} /></>
+              : <p className="text-sm text-muted-foreground">暂无用量记录</p>}
+            <p className="text-xs text-muted-foreground">{trafficNode
+              ? "当前只显示所选节点的入站和出站流量。仅汇总已采集记录。"
+              : "服务器按网卡收发计量，包含 SSH、系统更新等流量，与节点合计不必相等。仅汇总已采集记录。"}</p>
+            {nodes.isError && <p className="mt-2 text-xs text-destructive">节点列表加载失败，暂时只能查看整台服务器。</p>}
+          </CardContent>
         </Card>
         <Card>
           <CardHeader><CardTitle>本期配额</CardTitle></CardHeader>
@@ -317,7 +350,7 @@ export function ServerDetailPage() {
             <Empty title="尚未部署节点" description="点击「部署节点」在这台服务器上创建 VLESS Reality、Hysteria2、Snell 等入口。" action={<Button onClick={() => setDeploy(true)}>部署节点</Button>} />
           ) : (
             <Table>
-              <thead><tr className="border-b"><Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>归属</Th><Th>状态</Th><Th></Th></tr></thead>
+              <thead><tr className="border-b"><Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>归属</Th><Th>近 30 天用量</Th><Th>状态</Th><Th></Th></tr></thead>
               <tbody>{nodes.data.map((n) => <NodeRow key={n.id} n={n} onOpen={() => setNodeDetail(n)} />)}</tbody>
             </Table>
           )}

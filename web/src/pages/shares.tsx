@@ -306,7 +306,7 @@ export function ShareDetailPage() {
           <CardContent>
             {!s.nodes?.length ? <p className="text-sm text-muted-foreground">无</p> : (
               <Table>
-                <thead><tr className="border-b"><Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>归属</Th><Th>状态</Th><Th></Th></tr></thead>
+                <thead><tr className="border-b"><Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>归属</Th><Th>近 30 天用量</Th><Th>状态</Th><Th></Th></tr></thead>
                 <tbody>{s.nodes.map((n) => <NodeRow key={n.id} n={n} onOpen={() => setNodeDetail(n)} />)}</tbody>
               </Table>
             )}
