@@ -16,10 +16,11 @@
 
 **开启 Cloudflare 橙云时**：面板域名应使用 **完全（严格） / Full (strict)** 加密模式；“灵活 / Flexible”会与 Caddy 的 HTTPS 跳转形成循环，导致“重定向次数过多”。同一主域下还有其他站点时，建议只为面板子域添加配置规则。使用“仅 DNS”（灰云）时无需此设置，具体步骤见 [Cloudflare 设置与访问排查](docs/operations.md#26-cloudflare-设置与访问排查)。
 
-先完成[独立信任与本地安装器配置](docs/security-migration.md#2-首次建立独立信任)，再在控制端服务器执行：
+在控制端服务器下载官方安装器并执行，无需准备发布签名密钥：
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --domain panel.example.com
+curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --domain panel.example.com
 ```
 
 将 `panel.example.com` 替换为你的面板域名。安装器从 GitHub 官方仓库通过 HTTPS 下载发行包，并检查 SHA256；不需要配置发布签名密钥或签名服务。具体版本以安装器参数为准。
@@ -29,7 +30,8 @@ sudo bash /usr/local/libexec/ctlvps-install.sh --domain panel.example.com
 **使用已有 HTTPS 入口或其他端口**：先将入口转发到本机 `127.0.0.1:8080`，再执行以下命令。这里以 `8443` 为例；使用标准 HTTPS 端口时去掉 `:8443`。这种方式无需为安装器腾出 80、443 端口。
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --site-url https://panel.example.com:8443 --no-proxy
+curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --site-url https://panel.example.com:8443 --no-proxy
 ```
 
 ### 1.2 创建管理员
@@ -46,7 +48,7 @@ sudo cat /opt/ctlvps/data/setup-token
 
 登录面板后，按以下顺序接入每台 VPS：
 
-1. 先在 VPS 完成独立信任配置和可信本地 agent 安装器准备，再打开「服务器 → 添加服务器」，填写名称、地址和流量配额。
+1. 打开「服务器 → 添加服务器」，填写名称、地址和流量配额。
 2. 在服务器详情中生成 agent 安装命令。
 3. 到**这台被管理的 VPS** 上，以 root 执行生成的命令。
 4. 返回面板，确认服务器显示「在线」。
@@ -93,12 +95,13 @@ agent 主动连接控制端，因此 VPS 无需额外开放管理端口。服务
 对于使用安装器部署的控制端，在**控制端服务器**执行以下命令，更新到最新正式版：
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --update
+curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --update --auto-rollback
 ```
 
 更新前会停服备份，并保留账户、配置和分享记录。其他部署方式及失败恢复步骤见 [运维文档](docs/operations.md)。
 
-网页升级入口：**设置 → 系统 → 控制端维护**。安全加固前的版本需先完成独立信任迁移。网页升级失败时仅能回退到本机已验证、满足安全代次底线的版本。
+网页升级入口：**设置 → 系统 → 控制端维护**。v0.1.1 先用上面的新版安装命令升级一次。网页升级失败时恢复停服前的旧程序与数据，恢复文件会再次核对完整性。
 
 ### 4.2 同步 agent 与配置
 

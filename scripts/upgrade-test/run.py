@@ -86,12 +86,12 @@ assert not P('/etc/ctlvps/security.json').exists()
 print('FRESH PASS: new controller installed without signing keys or policy.',flush=True)
 
 # Check the default verifier against the real published official HTTPS catalog.
-legacy_agent=P('/tmp/legacy-agent')
-with tarfile.open(old) as archive:legacy_agent.write_bytes(archive.extractfile(f'agents/ctlvps-agent-linux-{arch}').read())
-run('/usr/local/libexec/ctlvps-verify','verify-release','agent','v0.1.1',str(legacy_agent))
+legacy_agent=P('/tmp/legacy-controller.tar.gz')
+shutil.copyfile(old,legacy_agent)
+run('/usr/local/libexec/ctlvps-verify','verify-release','controller','v0.1.1',str(legacy_agent))
 legacy_agent.write_bytes(legacy_agent.read_bytes()+b'tamper')
-assert run('/usr/local/libexec/ctlvps-verify','verify-release','agent','v0.1.1',str(legacy_agent),check=False).returncode!=0
-print('OFFICIAL HTTPS PASS: published agent accepted; altered bytes rejected without signing keys.',flush=True)
+assert run('/usr/local/libexec/ctlvps-verify','verify-release','controller','v0.1.1',str(legacy_agent),check=False).returncode!=0
+print('OFFICIAL HTTPS PASS: published controller accepted; altered bytes rejected without signing keys.',flush=True)
 
 # Real agent enrollment over test TLS; only fixed GitHub release downloads are
 # mapped to the local candidate assets. No publisher key or metadata exists.

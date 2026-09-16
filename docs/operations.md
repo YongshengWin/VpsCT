@@ -1,6 +1,6 @@
 # 安装、升级与恢复
 
-本安全版本安装前须完成[独立信任配置与兼容迁移](security-migration.md)。旧版下载管道不能用于建立新信任；真实环境迁移需单独安排。
+v0.1.2 默认使用官方 HTTPS 下载与 SHA256 校验，无需准备发布签名密钥、信任根或验证器。可选自定义签名部署见[安全迁移说明](security-migration.md)。
 [返回 README](../README.md)
 
 本文按“选择部署方式 → 完成安装 → 配置与运维 → 更新 → 失败恢复”的顺序组织。除明确标注在被管理 VPS 上执行的步骤外，命令都在控制端服务器运行。
@@ -23,11 +23,10 @@
 
 安装器要求 Debian / Ubuntu、正在运行的 systemd、root 权限，以及 Linux amd64 / arm64。服务器需能访问 GitHub Release 和系统软件源；首次安装要求本机 8080 端口空闲。
 
-先按安全迁移说明配置可信验证器和根。下载指定版本脚本并验证后，再选择 HTTPS 配置方式（将 vX.Y.Z 替换为目标版本）：
+先下载最新官方安装器，再选择 HTTPS 配置方式：
 
 ```bash
-curl -fsSL https://github.com/YongshengWin/VpsCT/releases/download/vX.Y.Z/install.sh -o install.sh
-sudo /usr/local/libexec/ctlvps-verify verify-release installer vX.Y.Z install.sh
+curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install.sh
 ```
 
 `latest` 入口会取得当时最新正式版的脚本。脚本随后下载该版本的程序及校验文件，确保本次安装使用同一版本。保存到本地的脚本不会自行变成新版，之后更新时应重新下载。
@@ -219,10 +218,11 @@ Docker 部署在源码的 `deploy/` 目录使用 `docker compose ps` 和 `docker
 
 ### 5.1 安装器部署的更新
 
-完成本地安装器信任配置后升级：
+重新下载最新安装器后升级：
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --update --version latest
+curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --update --auto-rollback
 ```
 
 升级保留站点配置，不同时传入域名或 HTTPS 模式参数。需要升级到指定版本时，使用对应 Release 的脚本。已有本地脚本也支持 `--version latest`，但它只改变程序下载版本，不会更新脚本本身，因此推荐上面的命令。

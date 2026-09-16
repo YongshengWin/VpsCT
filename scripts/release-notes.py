@@ -21,18 +21,20 @@ print(f'''# VpsCT {version}
 
 ## 1. 安装控制端
 
-先按[安全迁移说明](https://github.com/{repo}/blob/{version}/docs/security-migration.md)独立配置验证器、信任根和可信本地安装器。本页命令安装 **{version}**。始终安装最新正式版的通用命令见 [README](https://github.com/{repo}#11-安装面板)。
+**本版不需要发布签名密钥、信任根或预置验证器。** 本页命令安装 **{version}**。始终安装最新正式版的通用命令见 [README](https://github.com/{repo}#11-安装面板)。
 
 支持 Debian / Ubuntu、Linux amd64 / arm64。以下默认安装方式会自动配置 HTTPS，需要域名解析正确，且 80/443 端口空闲、可从公网访问。
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --version {version} --domain panel.example.com
+curl -fLsS --proto '=https' --proto-redir '=https' {base}/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --version {version} --domain panel.example.com
 ```
 
 已有 HTTPS 入口可使用下面的方式，无需为安装器腾出 80/443 端口。入口需自行配置证书并转发到本机 `127.0.0.1:8080`；使用其他 HTTPS 端口时，在站点地址中填写对应端口：
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --version {version} --site-url https://panel.example.com --no-proxy
+curl -fLsS --proto '=https' --proto-redir '=https' {base}/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --version {version} --site-url https://panel.example.com --no-proxy
 ```
 
 首次创建管理员前，在服务器上读取 `/opt/ctlvps/data/setup-token`；令牌不出现在公开日志中。
@@ -42,11 +44,12 @@ sudo bash /usr/local/libexec/ctlvps-install.sh --version {version} --site-url ht
 安装器管理的现有安装：
 
 ```bash
-sudo bash /usr/local/libexec/ctlvps-install.sh --version {version} --update
+curl -fLsS --proto '=https' --proto-redir '=https' {base}/install.sh -o install-vpsct.sh &&
+sudo bash install-vpsct.sh --version {version} --update --auto-rollback
 ```
 
 升级会短暂停止控制端并备份数据。该停服操作不会停止 VPS 上已运行的服务；新版 agent 分发文件可能触发各 VPS 的自动同步和重启。
-完成本版安装后，可在「设置 → 系统 → 控制端维护」检查和升级后续版本。网页升级会在启动失败时尝试恢复旧程序和升级前数据。旧版必须先经过独立可信渠道迁移；不再接收未验签自动更新。自动回退不能越过安全代次底线。
+完成本版安装后，可在「设置 → 系统 → 控制端维护」检查和升级后续版本。网页升级会在启动失败时尝试恢复旧程序和升级前数据。v0.1.1 可用上面的新版安装器命令升级，无需额外签名配置。默认采用 HTTPS 与 SHA256 校验，不提供独立发布签名或签名撤销保障。
 手动安装与 Docker 部署请遵循 [运维说明](https://github.com/{repo}/blob/{version}/docs/operations.md)。
 
 ## 3. 卸载
