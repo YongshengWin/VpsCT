@@ -264,7 +264,7 @@ export function ServerDetailPage() {
 
       <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} />
 
-      {s.agent && <div className="mb-4 rounded-md border p-3 text-sm">安全状态：{s.agent_status === "pending" ? "尚未接入 agent" : !s.diagnostics?.security_version ? "旧版 agent，尚未迁移独立验签" : !s.diagnostics.security_policy ? "本机信任策略未配置，程序与配置变更已关闭" : s.diagnostics.security_paused ? "本机已暂停配置变更" : "独立验签与本机策略已启用"}</div>}
+      {s.agent && <div className="mb-4 rounded-md border p-3 text-sm">安全状态：{s.agent_status === "pending" ? "尚未接入 agent" : !s.diagnostics?.security_version ? "旧版 agent，尚未启用新版安全策略" : !s.diagnostics.security_policy ? "本机安全策略加载失败，程序与配置变更已关闭" : s.diagnostics.security_paused ? "本机已暂停配置变更" : "更新文件校验与本机安全策略已启用"}</div>}
       {s.diagnostics?.metering_error && <div className="mb-4 rounded-md border border-red-500/40 p-3 text-sm text-destructive">节点流量采集异常：{s.diagnostics.metering_error}。当前用量可能未更新。</div>}
  {s.agent?.apply_error && (
         <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
