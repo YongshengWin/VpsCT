@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ctlvps-agent installer. Usage:
-#   curl -fsSL https://panel.example.com/install-agent.sh | sudo bash -s -- --server https://panel.example.com --token <enroll-token>
+#   curl -fsSL https://github.com/YongshengWin/VpsCT/releases/latest/download/install-agent.sh | sudo bash -s -- --server https://panel.example.com --token <enroll-token>
 set -euo pipefail
 
 SERVER=""
@@ -67,12 +67,20 @@ WORK=$(mktemp -d)
 trap 'rm -rf -- "$WORK"' EXIT
 RELEASE_BASE="https://github.com/YongshengWin/VpsCT/releases/download/$RELEASE_VERSION"
 download_agent() {
-  local asset="ctlvps-agent-linux-$ARCH" expected
+  local asset="ctlvps-agent-linux-$ARCH" helper="ctlvps-verify-linux-$ARCH" expected helper_stage
   TMP="$WORK/$asset"
   curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$asset" -o "$TMP"
   curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 --max-filesize 1048576 "$RELEASE_BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
   expected=$(awk -v name="$asset" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$TMP" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'agent SHA256 mismatch' >&2; exit 1; }
+  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$helper" -o "$WORK/$helper"
+  expected=$(awk -v name="$helper" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
+  [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$WORK/$helper" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'recovery helper SHA256 mismatch' >&2; exit 1; }
+  install -d -m 0755 /usr/local/libexec
+  helper_stage=$(mktemp /usr/local/libexec/.ctlvps-verify.XXXXXXXX)
+  install -m 0755 "$WORK/$helper" "$helper_stage"
+  mv -Tf -- "$helper_stage" /usr/local/libexec/ctlvps-verify
+
 }
 
 if [[ "$UPDATE" -eq 1 ]]; then
@@ -82,11 +90,21 @@ if [[ "$UPDATE" -eq 1 ]]; then
   fi
   echo "==> updating ctlvps-agent (linux-$ARCH)"
   download_agent
-  install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
-  rm -f "$TMP"
-  systemctl restart ctlvps-agent
-  sleep 2
-  systemctl --no-pager --lines=5 status ctlvps-agent || true
+  [[ -f "$BIN_DIR/ctlvps-agent" && ! -L "$BIN_DIR/ctlvps-agent" ]] || { echo 'existing agent must be a regular file' >&2; exit 1; }
+  cp -- "$BIN_DIR/ctlvps-agent" "$WORK/agent.previous"
+  agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
+  install -m 0755 "$TMP" "$agent_stage"
+  if ! "$agent_stage" version; then rm -f -- "$agent_stage"; exit 1; fi
+  mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
+  if ! systemctl restart ctlvps-agent || ! sleep 2 || ! systemctl is-active --quiet ctlvps-agent; then
+    agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
+    install -m 0755 "$WORK/agent.previous" "$agent_stage"
+    mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
+    systemctl restart ctlvps-agent
+    echo 'agent update failed; previous binary restored' >&2
+    exit 1
+  fi
+  systemctl --no-pager --lines=5 status ctlvps-agent
   echo "==> agent updated. logs: journalctl -u ctlvps-agent -f"
   exit 0
 fi

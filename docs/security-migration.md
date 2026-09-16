@@ -33,7 +33,7 @@ ctlvps-sign --mode rotate --previous-keys /offline/old-keys --keys /offline/new-
 
 轮换文件由新旧根共同签名，发布目录必须保留历代编号根。根默认一年，targets/snapshot 最多 31 天，timestamp 最多 7 天；在到期前重新签发并原子发布完整元数据，即使没有新版本也需要续期。元数据版本必须全局单调增加，不能重用或重置。过期会阻止新安装/更新，不主动终止现有代理。
 
-`make release VERSION=vX.Y.Z REPOSITORY=OWNER/VpsCT SECURITY_EPOCH=N` 生成双架构附件及 `signing-manifest.json`。版本、架构、组件、长度、哈希和安全代次写入 TUF targets；哈希清单本身不替代签名。第三方内核必须从上游核对来源、版本与哈希后，作为 `sing-box` / `snell-server` 组件加入同一受审查清单。**不要签署控制端提交的任意文件。** 发布清单保留仍受支持的目标；删除目标阻止新的在线安装。
+`make release VERSION=vX.Y.Z REPOSITORY=OWNER/VpsCT SECURITY_EPOCH=N` 生成双架构附件及 `SHA256SUMS`。选择可选签名模式的维护者需另行准备并审核 `signing-manifest.json`；默认发行流程不生成或使用该文件。版本、架构、组件、长度、哈希和安全代次写入 TUF targets；哈希清单本身不替代签名。第三方内核必须从上游核对来源、版本与哈希后，作为 `sing-box` / `snell-server` 组件加入同一受审查清单。**不要签署控制端提交的任意文件。** 发布清单保留仍受支持的目标；删除目标阻止新的在线安装。
 
 GitHub `release-signing` 环境需配置 `TUF_ROOT_JSON`、累计撤销策略 `TUF_SECURITY_POLICY_JSON`、正整数 `SECURITY_EPOCH`，以及三个非 root 角色密钥秘密。工作流仅生成草稿附件，不自动发布活跃元数据仓库。发布审批、根公钥指纹交付、内核目录和元数据续期负责人必须由维护者确定。
 
