@@ -1,10 +1,13 @@
 package nft
 
 import (
+	"context"
 	"crypto/sha256"
 	"ctlvps/internal/agentproto"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -64,5 +67,61 @@ func TestIngressRejectsOtherManagersAndBadInputs(t *testing.T) {
 	}
 	if _, e := IngressRules(json.RawMessage(`invalid`), nodes); e == nil {
 		t.Fatal("invalid snapshot accepted")
+	}
+}
+
+func TestCompatibilitySSHProtectionDoesNotBlockNodePorts(t *testing.T) {
+	chain := &ingressEntry{Family: "ip", Table: "filter", Name: "INPUT", Policy: "accept"}
+	var rule ingressEntry
+	if err := json.Unmarshal([]byte(`{"expr":[{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"tcp"}},{"xt":{"type":"match","name":"multiport"}},{"counter":{"packets":1,"bytes":1}},{"jump":{"target":"f2b-sshd"}}]}`), &rule); err != nil {
+		t.Fatal(err)
+	}
+	listing := "-P INPUT ACCEPT\n-A INPUT -p tcp -m multiport --dports 22 -j f2b-sshd\n"
+	ports := map[string]map[int]bool{"tcp": {443: true}, "udp": {22: true}}
+	if !compatInputDisjoint(chain, []*ingressEntry{&rule}, ports, listing) {
+		t.Fatal("unrelated SSH rule rejected")
+	}
+	for _, bad := range []string{"", strings.Replace(listing, "--dports 22", "--dports 22,443", 1), strings.Replace(listing, "--dports 22", "--dports 22:443", 1), strings.Replace(listing, "f2b-sshd", "another-chain", 1), strings.Replace(listing, "ACCEPT", "DROP", 1), listing + "-A INPUT -j DROP\n", strings.Replace(listing, "--dports 22", "--dports invalid", 1)} {
+		if compatInputDisjoint(chain, []*ingressEntry{&rule}, ports, bad) {
+			t.Fatalf("unsafe listing accepted: %q", bad)
+		}
+	}
+	extra := `,{"chain":{"family":"ip","table":"filter","name":"INPUT","hook":"input","policy":"accept"}},{"rule":{"family":"ip","table":"filter","chain":"INPUT","expr":[{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"tcp"}},{"xt":{"type":"match","name":"multiport"}},{"counter":{}},{"jump":{"target":"f2b-sshd"}}]}},{"chain":{"family":"ip","table":"filter","name":"f2b-sshd"}},{"rule":{"family":"ip","table":"filter","chain":"f2b-sshd","expr":[{"reject":null}]}}`
+	nodes := []agentproto.NodeSpec{{Protocol: "vless", ListenPort: 443}}
+	if _, err := IngressRules(ingressSnapshot(extra), nodes); err == nil {
+		t.Fatal("opaque xt rule accepted without proof")
+	}
+	got, err := ingressRules(ingressSnapshot(extra), nodes, map[string]string{"ip": listing})
+	if err != nil || !strings.Contains(got, "tcp dport { 443 }") || strings.Contains(got, "f2b") || strings.Contains(got, "rule ip filter") {
+		t.Fatalf("unexpected changes %q %v", got, err)
+	}
+	nodes[0].ListenPort = 22
+	if _, err := ingressRules(ingressSnapshot(extra), nodes, map[string]string{"ip": listing}); err == nil {
+		t.Fatal("overlapping SSH protection ignored")
+	}
+	rule.Expr = append(rule.Expr, map[string]json.RawMessage{"drop": json.RawMessage(`null`)})
+	if compatInputDisjoint(chain, []*ingressEntry{&rule}, ports, listing) {
+		t.Fatal("nft extra action ignored")
+	}
+}
+
+func TestEnsureIngressUsesOnlyNftCompatibilityBackend(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	snapshot := `{"nftables":[{"chain":{"family":"ip","table":"filter","name":"INPUT","hook":"input","policy":"accept"}},{"rule":{"family":"ip","table":"filter","chain":"INPUT","expr":[{"match":{"op":"==","left":{"meta":{"key":"l4proto"}},"right":"tcp"}},{"xt":{"type":"match","name":"multiport"}},{"counter":{}},{"jump":{"target":"f2b-sshd"}}]}}]}`
+	nftBin := filepath.Join(dir, "nft")
+	if e := os.WriteFile(nftBin, []byte("#!/bin/sh\necho '"+snapshot+"'\n"), 0700); e != nil {
+		t.Fatal(e)
+	}
+	m := &Manager{Bin: nftBin}
+	for _, backend := range []string{"nf_tables", "legacy"} {
+		script := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'iptables (" + backend + ")'; else echo '-P INPUT ACCEPT'; echo '-A INPUT -p tcp -m multiport --dports 22 -j f2b-sshd'; fi\n"
+		if e := os.WriteFile(filepath.Join(dir, "iptables"), []byte(script), 0700); e != nil {
+			t.Fatal(e)
+		}
+		err := m.EnsureIngress(context.Background(), []agentproto.NodeSpec{{Protocol: "vless", ListenPort: 443}})
+		if (err == nil) != (backend == "nf_tables") {
+			t.Fatalf("backend %s: %v", backend, err)
+		}
 	}
 }
