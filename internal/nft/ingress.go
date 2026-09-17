@@ -4,31 +4,41 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/boundedexec"
 )
 
 const ingressComment = "ctlvps-node-ingress"
 
 type ingressEntry struct {
-	Family  string `json:"family"`
-	Table   string `json:"table"`
-	Name    string `json:"name"`
-	Chain   string `json:"chain"`
-	Hook    string `json:"hook"`
-	Policy  string `json:"policy"`
-	Comment string `json:"comment"`
-	Handle  uint64 `json:"handle"`
+	Family  string                       `json:"family"`
+	Table   string                       `json:"table"`
+	Name    string                       `json:"name"`
+	Chain   string                       `json:"chain"`
+	Hook    string                       `json:"hook"`
+	Policy  string                       `json:"policy"`
+	Comment string                       `json:"comment"`
+	Handle  uint64                       `json:"handle"`
+	Expr    []map[string]json.RawMessage `json:"expr"`
 }
+
+var errForeignIngress = errors.New("检测到其他入站防火墙规则，请手动放行节点端口；自动开放仅支持原生 inet filter input")
 
 // IngressRules modifies only our tagged rules in the administrator's input
 // chain. A separate accept base chain cannot override an existing drop chain.
 // Other firewall managers are deliberately not rewritten.
+
 func IngressRules(snapshot []byte, nodes []agentproto.NodeSpec) (string, error) {
+	return ingressRules(snapshot, nodes, nil)
+}
+
+func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[string]string) (string, error) {
 	var doc struct {
 		Nftables []struct {
 			Chain *ingressEntry `json:"chain"`
@@ -72,14 +82,16 @@ func IngressRules(snapshot []byte, nodes []agentproto.NodeSpec) (string, error) 
 			}
 			// Empty permissive compatibility chains are harmless. Never claim to
 			// override another manager's policy or its jumps/rejects.
-			constrained := c.Policy == "drop"
+			constrained := c.Policy != "accept"
+			var chainRules []*ingressEntry
 			for _, r := range doc.Nftables {
 				if r.Rule != nil && r.Rule.Family == c.Family && r.Rule.Table == c.Table && r.Rule.Chain == c.Name {
 					constrained = true
+					chainRules = append(chainRules, r.Rule)
 				}
 			}
-			if constrained && (len(ports["tcp"])+len(ports["udp"]) > 0) {
-				return "", fmt.Errorf("检测到其他入站防火墙规则，请手动放行节点端口；自动开放仅支持原生 inet filter input")
+			if constrained && (len(ports["tcp"])+len(ports["udp"]) > 0) && !compatInputDisjoint(c, chainRules, ports, compat[c.Family]) {
+				return "", errForeignIngress
 			}
 		}
 		if r := e.Rule; r != nil && r.Family == "inet" && r.Table == "filter" && r.Chain == "input" {
@@ -143,6 +155,20 @@ func (m *Manager) EnsureIngress(ctx context.Context, nodes []agentproto.NodeSpec
 		return err
 	}
 	script, err := IngressRules(snapshot, nodes)
+	if errors.Is(err, errForeignIngress) {
+		compat := map[string]string{}
+		for family, bin := range map[string]string{"ip": "iptables", "ip6": "ip6tables"} {
+			version, _, e := boundedexec.Run(ctx, "", 4096, bin, "--version")
+			if e != nil || !strings.Contains(string(version), "(nf_tables)") {
+				continue // A legacy backend is a different firewall, not corroborating evidence.
+			}
+			out, _, e := boundedexec.Run(ctx, "", 1<<20, bin, "-S", "INPUT")
+			if e == nil {
+				compat[family] = string(out)
+			}
+		}
+		script, err = ingressRules(snapshot, nodes, compat)
+	}
 	if err != nil || script == "" {
 		return err
 	}

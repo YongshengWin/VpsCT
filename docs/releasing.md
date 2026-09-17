@@ -37,16 +37,16 @@ bash scripts/check.sh
 在项目根目录执行，替换实际仓库归属和版本：
 
 ```bash
-make release VERSION=v0.1.3 REPOSITORY=YongshengWin/VpsCT
+make release VERSION=v0.1.4 REPOSITORY=YongshengWin/VpsCT
 ```
 
-产物位于 `release/v0.1.3/`：
+产物位于 `release/v0.1.4/`：
 
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.3-linux-amd64.tar.gz`、`ctlvps-v0.1.3-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、完整说明文档与许可文件 |
+| `ctlvps-v0.1.4-linux-amd64.tar.gz`、`ctlvps-v0.1.4-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、完整说明文档与许可文件 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
@@ -59,7 +59,7 @@ README 的安装与更新命令使用 `releases/latest/download/install.sh`，�
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-release_dir=release/v0.1.3 # 替换为刚用当前源码构建的待发布版本目录
+release_dir=release/v0.1.4 # 替换为刚用当前源码构建的待发布版本目录
 bash scripts/test-install-container.sh "$release_dir"
 bash scripts/test-uninstall-container.sh
 bash scripts/test-maintenance-container.sh "$release_dir"
@@ -71,8 +71,8 @@ bash scripts/test-docker.sh
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
 ```bash
-sudo bash install.sh --assets-dir /path/to/release/v0.1.3 \
-  --version v0.1.3 --domain panel.example.com
+sudo bash install.sh --assets-dir /path/to/release/v0.1.4 \
+  --version v0.1.4 --domain panel.example.com
 ```
 
 这里使用发行目录内生成的 `install.sh`，目录同时包含对应架构压缩包和 `SHA256SUMS`。该模式仍需系统软件源提供依赖。实际验证过哪些系统和架构，就在验收记录中写明哪些；交叉编译不能替代实机安装。
@@ -80,6 +80,8 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.3 \
 ## 3. 创建并检查 Release 草稿
 
 最终提交通过检查后，由维护者授权创建并推送版本标签。`Release draft` 工作流会先运行 CI，再构建附件并创建草稿。
+
+维护者明确选择本地发布时，也可从最终干净提交执行必要检查与 `make release`，上传同一提交构建的附件及 SHA256SUMS；保留检查日志，并完成同样的草稿与公开下载核验。GitHub 工作流保留作为独立验证，不覆盖已存在附件。
 
 维护者检查草稿时，依次确认：
 
@@ -92,7 +94,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.3 \
 
 ## 4. 公开发行并验证下载
 
-维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.3-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
+维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.4-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
 
 发布后从未登录 GitHub 的环境检查：
 
