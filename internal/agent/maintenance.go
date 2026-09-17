@@ -63,10 +63,9 @@ func (a *Agent) maintenanceAction() string {
 	}
 	m := maintenance.NewManager()
 	m.Recover()
-	for _, j := range m.List() {
-		if j.Role == "agent" && j.Active() {
-			return j.Action
-		}
+	action, err := m.ActiveAction("agent")
+	if err != nil {
+		return "pending"
 	}
-	return ""
+	return action
 }

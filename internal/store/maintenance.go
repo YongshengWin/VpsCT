@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"time"
@@ -12,23 +13,24 @@ import (
 
 type MaintenanceJob struct {
 	maintenance.Job
-	ServerID    int64  `json:"server_id"`
-	ReportToken string `json:"-"`
-	ReportHash  string `json:"-"`
-	AgentSHA    string `json:"-"`
+	DeleteServer bool   `json:"delete_server"`
+	ServerID     int64  `json:"server_id"`
+	ReportToken  string `json:"-"`
+	ReportHash   string `json:"-"`
+	AgentSHA     string `json:"-"`
 }
 
 func (s *Store) CreateMaintenance(ctx context.Context, j MaintenanceJob) error {
 	r, _ := json.Marshal(j.Request)
 	result, _ := json.Marshal(j.Job)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO maintenance_jobs(id,server_id,request,status,result,report_token,report_hash,agent_sha,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, j.ID, j.ServerID, string(r), j.Status, string(result), s.seal("maintenance_jobs.report_token", j.ReportToken), auth.HashToken(j.ReportToken), j.AgentSHA, fmtTime(j.CreatedAt), fmtTime(j.UpdatedAt))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO maintenance_jobs(id,server_id,request,status,result,report_token,report_hash,agent_sha,created_at,updated_at,delete_server) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, j.ID, j.ServerID, string(r), j.Status, string(result), s.seal("maintenance_jobs.report_token", j.ReportToken), auth.HashToken(j.ReportToken), j.AgentSHA, fmtTime(j.CreatedAt), fmtTime(j.UpdatedAt), j.DeleteServer)
 	return err
 }
 
 func (s *Store) scanMaintenance(row interface{ Scan(...any) error }) (MaintenanceJob, error) {
 	var j MaintenanceJob
 	var result, status string
-	err := row.Scan(&j.ServerID, &result, &status, s.scanSecret("maintenance_jobs.report_token", &j.ReportToken), &j.ReportHash, &j.AgentSHA)
+	err := row.Scan(&j.ServerID, &result, &status, s.scanSecret("maintenance_jobs.report_token", &j.ReportToken), &j.ReportHash, &j.AgentSHA, &j.DeleteServer)
 	if isNoRows(err) {
 		return j, ErrNotFound
 	}
@@ -41,11 +43,11 @@ func (s *Store) scanMaintenance(row interface{ Scan(...any) error }) (Maintenanc
 }
 
 func (s *Store) GetMaintenance(ctx context.Context, id string) (MaintenanceJob, error) {
-	return s.scanMaintenance(s.db.QueryRowContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha FROM maintenance_jobs WHERE id=?`, id))
+	return s.scanMaintenance(s.db.QueryRowContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha,delete_server FROM maintenance_jobs WHERE id=?`, id))
 }
 
 func (s *Store) ListMaintenance(ctx context.Context, serverID int64) ([]MaintenanceJob, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha FROM maintenance_jobs WHERE server_id=? ORDER BY created_at DESC LIMIT 20`, serverID)
+	rows, err := s.db.QueryContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha,delete_server FROM maintenance_jobs WHERE server_id=? ORDER BY created_at DESC LIMIT 20`, serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,18 +72,23 @@ func (s *Store) SaveMaintenance(ctx context.Context, j MaintenanceJob, previous 
 	if !j.Active() {
 		token = ""
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE maintenance_jobs SET status=?,result=?,report_token=?,updated_at=? WHERE id=? AND status=?`, j.Status, string(b), s.seal("maintenance_jobs.report_token", token), fmtTime(j.UpdatedAt), j.ID, previous)
-	if err != nil {
-		return err
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n != 1 {
-		return errors.New("维护任务状态已变化")
-	}
-	return nil
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		r, err := tx.ExecContext(ctx, `UPDATE maintenance_jobs SET status=?,result=?,report_token=?,updated_at=? WHERE id=? AND status=?`, j.Status, string(b), s.seal("maintenance_jobs.report_token", token), fmtTime(j.UpdatedAt), j.ID, previous)
+		if err != nil {
+			return err
+		}
+		n, err := r.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return errors.New("维护任务状态已变化")
+		}
+		if j.DeleteServer && j.Role == "agent" && j.Action == "uninstall" && j.Status == "succeeded" {
+			return deleteServerTx(ctx, tx, j.ServerID)
+		}
+		return nil
+	})
 }
 
 func (s *Store) ExpireMaintenance(ctx context.Context, serverID int64) error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentnet"
 	"ctlvps/internal/safehttp"
 	"encoding/json"
@@ -96,8 +97,15 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		return fmt.Errorf("%s %s: HTTP %d", method, path, resp.StatusCode)
 	}
 	if out != nil {
-		b, e := safehttp.ReadBounded(resp.Body, 8<<20)
+		limit := int64(256 << 10)
+		if path == agentproto.PathDesired {
+			limit = agentbudget.ConfigBytes
+		}
+		b, e := safehttp.ReadBounded(resp.Body, limit)
 		if e != nil {
+			return e
+		}
+		if e = safehttp.CheckJSONBudget(b); e != nil {
 			return e
 		}
 		return json.Unmarshal(b, out)

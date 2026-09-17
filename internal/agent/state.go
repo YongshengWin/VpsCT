@@ -4,6 +4,7 @@ package agent
 
 import (
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/safehttp"
 	"encoding/json"
 	"errors"
 	"os"
@@ -13,12 +14,14 @@ import (
 
 // State is persisted in <stateDir>/state.json.
 type MeterIdentity struct {
-	NodeID int64  `json:"node_id"`
-	Port   int    `json:"port"`
-	Core   string `json:"core"`
+	Generation string `json:"generation,omitempty"`
+	NodeID     int64  `json:"node_id"`
+	Port       int    `json:"port"`
+	Core       string `json:"core"`
 }
 
 type State struct {
+	Retirement        *Retirement           `json:"retirement,omitempty"`
 	LegacySettled     bool                  `json:"legacy_settled,omitempty"`
 	PendingSettlement *agentproto.Heartbeat `json:"pending_settlement,omitempty"`
 	MeterNodes        []MeterIdentity       `json:"meter_nodes,omitempty"`
@@ -42,8 +45,16 @@ func StatePath(dir string) string { return filepath.Join(dir, "state.json") }
 
 // LoadState reads the state file.
 func LoadState(dir string) (*State, error) {
-	b, err := os.ReadFile(StatePath(dir))
+	f, err := os.Open(StatePath(dir))
 	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	b, err := safehttp.ReadBounded(f, 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	if err = safehttp.CheckJSONBudget(b); err != nil {
 		return nil, err
 	}
 	var s State
@@ -89,4 +100,27 @@ func (s *State) Save(dir string) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+// Retained identities include unsettled retired nodes. Never discard them to
+// satisfy a budget: block new identities until safe settlement is available.
+const maxMeterIdentities = 2048
+
+func (s *State) rememberMeters(nodes []agentproto.NodeSpec) error {
+	known := make(map[int64]bool, len(s.MeterNodes))
+	for _, n := range s.MeterNodes {
+		known[n.NodeID] = true
+	}
+	additions := []MeterIdentity{}
+	for _, n := range nodes {
+		if !known[n.NodeID] {
+			known[n.NodeID] = true
+			additions = append(additions, MeterIdentity{NodeID: n.NodeID, Port: n.ListenPort, Core: n.Core, Generation: nonce()})
+		}
+	}
+	if len(additions) > 0 && len(s.MeterNodes)+len(additions) > maxMeterIdentities {
+		return errors.New("retained meter identity budget exhausted; settle retired nodes before adding new identities")
+	}
+	s.MeterNodes = append(s.MeterNodes, additions...)
+	return nil
 }

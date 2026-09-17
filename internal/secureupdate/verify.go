@@ -3,12 +3,15 @@
 package secureupdate
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -154,12 +157,18 @@ func (t contextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 func Verify(ctx context.Context, component, version string, data []byte) error {
+	return VerifyReader(ctx, component, version, bytes.NewReader(data))
+}
+
+// VerifyReader verifies a caller-owned immutable staging file without loading
+// its contents into the heap. The caller keeps it private until installation.
+func VerifyReader(ctx context.Context, component, version string, data io.ReadSeeker) error {
 	p, e := LoadPolicy()
 	if e != nil {
 		return e
 	}
 	if p.ChecksumOnly {
-		return verifyChecksum(ctx, component, version, data)
+		return verifyChecksumReader(ctx, component, version, data)
 	}
 	root, e := protected(p.RootFile)
 	if e != nil {
@@ -172,14 +181,18 @@ func Verify(ctx context.Context, component, version string, data []byte) error {
 		return e
 	}
 	v := Verifier{Policy: p, Root: root, Dir: StateDir}
-	return v.Verify(ctx, component, version, runtime.GOARCH, data)
+	return v.VerifyReader(ctx, component, version, runtime.GOARCH, data)
 }
 
 // Verify authenticates TUF metadata, checks component identity and persists the
 // anti-rollback security epoch before returning permission to execute bytes.
 func (v *Verifier) Verify(ctx context.Context, component, version, arch string, data []byte) error {
-	if len(data) > 256<<20 || len(data) == 0 {
-		return errors.New("更新文件大小无效")
+	return v.VerifyReader(ctx, component, version, arch, bytes.NewReader(data))
+}
+func (v *Verifier) VerifyReader(ctx context.Context, component, version, arch string, data io.ReadSeeker) error {
+	size, hashes, e := artifactHashes(data)
+	if e != nil {
+		return e
 	}
 	if component != "agent" && component != "controller" && component != "sing-box" && component != "snell-server" && component != "installer" && component != "verifier" {
 		return errors.New("未知更新组件")
@@ -242,13 +255,18 @@ func (v *Verifier) Verify(ctx context.Context, component, version, arch string, 
 	if e != nil {
 		return e
 	}
-	sum := sha256.Sum256(data)
-	target, e := u.GetTargetInfo("sha256/" + hex.EncodeToString(sum[:]))
+	digest := hex.EncodeToString(hashes["sha256"])
+	target, e := u.GetTargetInfo("sha256/" + digest)
 	if e != nil {
 		return errors.New("文件不在受信发布目录中")
 	}
-	if e = target.VerifyLengthHashes(data); e != nil {
-		return errors.New("受信文件校验失败")
+	if target.Length != size || len(target.Hashes) == 0 {
+		return errors.New("受信文件长度或哈希缺失")
+	}
+	for algorithm, want := range target.Hashes {
+		if !bytes.Equal(hashes[algorithm], want) || hashes[algorithm] == nil {
+			return errors.New("受信文件校验失败")
+		}
 	}
 	var id Identity
 	if target.Custom == nil || json.Unmarshal(*target.Custom, &id) != nil {
@@ -257,11 +275,11 @@ func (v *Verifier) Verify(ctx context.Context, component, version, arch string, 
 	if id.Product != "VpsCT" || id.Component != component || (id.Arch != arch && !(id.Arch == "all" && id.Component == "installer")) || (version != "" && id.Version != version) || id.Version == "" || id.Epoch < 1 {
 		return errors.New("发布组件、架构或版本不匹配")
 	}
-	if e = releasePolicy.check(component, hex.EncodeToString(sum[:]), id.Epoch); e != nil {
+	if e = releasePolicy.check(component, digest, id.Epoch); e != nil {
 		return e
 	}
 	if component == "controller" {
-		if e = recordArchive(v.Dir, hex.EncodeToString(sum[:]), data); e != nil {
+		if e = recordArchiveReader(v.Dir, digest, data); e != nil {
 			return e
 		}
 	}
@@ -286,7 +304,7 @@ func (v *Verifier) Verify(ctx context.Context, component, version, arch string, 
 	if e != nil {
 		return e
 	}
-	if e = writeState(filepath.Join(v.Dir, "verified", hex.EncodeToString(sum[:])+".json"), receipt); e != nil {
+	if e = writeState(filepath.Join(v.Dir, "verified", digest+".json"), receipt); e != nil {
 		return e
 	}
 	floors[component] = max(floor, id.Epoch)
@@ -321,6 +339,23 @@ func (v *Verifier) Verify(ctx context.Context, component, version, arch string, 
 	return d.Sync()
 }
 
+// Hash both supported TUF algorithms in one bounded pass. Reject unknown
+// target algorithms rather than silently weakening verification.
+func artifactHashes(data io.ReadSeeker) (int64, map[string][]byte, error) {
+	if _, err := data.Seek(0, io.SeekStart); err != nil {
+		return 0, nil, err
+	}
+	h256, h512 := sha256.New(), sha512.New()
+	n, err := safehttp.CopyBounded(io.MultiWriter(h256, h512), data, 256<<20)
+	if err != nil {
+		return 0, nil, err
+	}
+	if n == 0 {
+		return 0, nil, errors.New("invalid release size")
+	}
+	return n, map[string][]byte{"sha256": h256.Sum(nil), "sha512": h512.Sum(nil)}, nil
+}
+
 // Entry exposes release integrity and recovery operations. The installer
 // authenticates its helper through the official HTTPS checksum catalog first.
 func Entry(args []string) (bool, error) {
@@ -330,11 +365,7 @@ func Entry(args []string) (bool, error) {
 			return true, e
 		}
 		defer f.Close()
-		data, e := safehttp.ReadBounded(f, 256<<20)
-		if e != nil {
-			return true, e
-		}
-		return true, acceptChecksum(context.Background(), args[1], args[2], args[3], data)
+		return true, acceptChecksumReader(context.Background(), args[1], args[2], args[3], f)
 	}
 	if handled, err := recoveryEntry(args); handled {
 		return true, err
@@ -357,17 +388,13 @@ func Entry(args []string) (bool, error) {
 		return true, e
 	}
 	defer f.Close()
-	b, e := safehttp.ReadBounded(f, 256<<20)
-	if e != nil {
-		return true, e
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if e = Verify(ctx, args[1], args[2], b); e != nil {
+	if e = VerifyReader(ctx, args[1], args[2], f); e != nil {
 		return true, e
 	}
 	if args[1] == "controller" {
-		return true, ValidateArchive(b)
+		return true, validateArchiveReader(f)
 	}
 	return true, nil
 }

@@ -27,11 +27,12 @@ type ShareDelta struct {
 
 // Result summarises one ingested heartbeat.
 type Result struct {
-	ServerUp   int64
-	ServerDown int64
-	NodeDeltas map[int64][2]int64
-	Shares     []ShareDelta
-	Reset      bool // baseline was (re)established, no deltas produced
+	FinalMeterAck string
+	ServerUp      int64
+	ServerDown    int64
+	NodeDeltas    map[int64][2]int64
+	Shares        []ShareDelta
+	Reset         bool // baseline was (re)established, no deltas produced
 }
 
 // Ingestor applies heartbeats to the store.
@@ -47,6 +48,17 @@ func New(st *store.Store) *Ingestor {
 
 // Ingest processes a heartbeat for the given server.
 func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentproto.Heartbeat) (Result, error) {
+	if hb.FinalMeters != nil {
+		if err := hb.FinalMeters.Validate(); err != nil {
+			return Result{}, err
+		}
+		if len(hb.Ports) != 0 {
+			return Result{}, errors.New("final snapshot must not mix live counters")
+		}
+		hb.Ports = hb.FinalMeters.Counters
+		hb.TS = hb.FinalMeters.TS
+		hb.Metrics = agentproto.Metrics{}
+	}
 	now := i.Now()
 	ts := hb.TS
 	if ts.IsZero() || ts.After(now.Add(5*time.Minute)) {
@@ -78,6 +90,22 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 		epoch = "default"
 	}
 	err = i.Store.Tx(ctx, func(tx *sql.Tx) error {
+		if hb.FinalMeters != nil {
+			var exists int
+			err := tx.QueryRowContext(ctx, "SELECT 1 FROM meter_settlements WHERE server_id=? AND batch_id=?", server.ID, hb.FinalMeters.ID).Scan(&exists)
+			if err == nil {
+				res.FinalMeterAck = hb.FinalMeters.ID
+				return nil
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			for _, pc := range hb.Ports {
+				if _, ok := byID[pc.NodeID]; !ok {
+					return errors.New("unknown final meter identity")
+				}
+			}
+		}
 		add := func(subject string, id int64, rx, txBytes int64) error {
 			for _, bucket := range []struct{ table, key string }{{"traffic_hourly", ts.UTC().Truncate(time.Hour).Format(time.RFC3339)}, {"traffic_daily", ts.UTC().Format("2006-01-02")}} {
 				_, err := tx.ExecContext(ctx, "INSERT INTO "+bucket.table+"(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?) ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up,down=down+excluded.down", bucket.key, subject, id, rx, txBytes)
@@ -99,9 +127,19 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 				return 0, 0, false, err
 			}
 			// Stale/replayed reports never rewind the accounting baseline.
+			baselineTS := ts
 			if found {
 				if last, e := time.Parse(time.RFC3339Nano, updated); e == nil && ts.Before(last) {
-					return 0, 0, false, nil
+					if hb.FinalMeters == nil {
+						return 0, 0, false, nil
+					}
+					// A frozen final snapshot may follow a wall-clock correction.
+					// Accept only monotonic counters of the same generation; never
+					// ACK and silently discard unsettled bytes as a stale heartbeat.
+					if oldEpoch != ep || rx < oldRx || txBytes < oldTx {
+						return 0, 0, false, errors.New("final meter conflicts with newer baseline")
+					}
+					baselineTS = last
 				}
 			}
 			dr, dt, ok := int64(0), int64(0), false
@@ -118,7 +156,7 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			} else if fromZero || (found && (rx < oldRx || txBytes < oldTx)) {
 				dr, dt, ok = rx, txBytes, true
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO counter_state(server_id,counter_key,epoch,last_rx,last_tx,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(server_id,counter_key) DO UPDATE SET epoch=excluded.epoch,last_rx=excluded.last_rx,last_tx=excluded.last_tx,updated_at=excluded.updated_at`, server.ID, key, ep, rx, txBytes, ts.UTC().Format(time.RFC3339Nano))
+			_, err = tx.ExecContext(ctx, `INSERT INTO counter_state(server_id,counter_key,epoch,last_rx,last_tx,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(server_id,counter_key) DO UPDATE SET epoch=excluded.epoch,last_rx=excluded.last_rx,last_tx=excluded.last_tx,updated_at=excluded.updated_at`, server.ID, key, ep, rx, txBytes, baselineTS.UTC().Format(time.RFC3339Nano))
 			return dr, dt, ok, err
 		}
 		sample := func(node any, rx, txBytes int64) error {
@@ -228,8 +266,17 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			}
 			res.Shares = append(res.Shares, *sh)
 		}
+		if hb.FinalMeters != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO meter_settlements(server_id,batch_id,created_at) VALUES(?,?,?)", server.ID, hb.FinalMeters.ID, now.UTC().Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+			res.FinalMeterAck = hb.FinalMeters.ID
+		}
 		return nil
 	})
+	if err != nil {
+		res.FinalMeterAck = ""
+	}
 	return res, err
 }
 

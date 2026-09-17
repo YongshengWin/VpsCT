@@ -21,6 +21,8 @@ fixture() {
     printf '#!/bin/sh\nexec /bin/sleep infinity\n' > "$executable"
     chmod 0755 "$executable"
   done
+  mkdir -p /usr/local/libexec
+  cp /src/uninstall.sh /usr/local/libexec/ctlvps-agent-uninstall.sh
   cp /src/uninstall.sh /opt/ctlvps/releases/test/uninstall.sh
   ln -s releases/test /opt/ctlvps/current
   ln -s current/ctlvpsd /opt/ctlvps/ctlvpsd
@@ -59,6 +61,13 @@ PY
   nft delete table inet keep_fixture 2>/dev/null || true
   nft add table inet ctlvps
   nft add table inet keep_fixture
+  nft delete table inet filter 2>/dev/null || true
+  nft -f - <<'NFT'
+add table inet filter
+add chain inet filter input { type filter hook input priority 0; policy accept; }
+add rule inet filter input tcp dport 22 accept comment "keep-ssh"
+add rule inet filter input tcp dport 23456 accept comment "ctlvps-node-ingress:tcp:test"
+NFT
 }
 
 fixture
@@ -85,7 +94,15 @@ uninstall --controller --purge --yes
 assert test ! -e /opt/ctlvps/data
 assert test -f /var/lib/ctlvps-agent/state.json
 assert nft list table inet ctlvps
+assert test -f /usr/local/libexec/ctlvps-agent-uninstall.sh
 done_case 'controller uninstall, later purge, and agent coexistence'
+bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --purge --dry-run > /tmp/standalone-preview
+assert systemctl is-active --quiet ctlvps-agent
+bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --purge --yes > /tmp/standalone-cleanup
+assert test ! -e /usr/local/bin/ctlvps-agent
+assert test ! -e /var/lib/ctlvps-agent
+assert test ! -e /usr/local/libexec/ctlvps-agent-uninstall.sh
+done_case 'standalone agent cleanup without controller or panel access'
 
 fixture
 uninstall --agent --yes
@@ -97,11 +114,15 @@ assert systemctl is-active --quiet ctlvpsd
 if systemctl is-active --quiet ctlvps-singbox@21001; then exit 1; fi
 if nft list table inet ctlvps 2>/dev/null; then exit 1; fi
 assert nft list table inet keep_fixture
-uninstall --agent --purge --yes
+assert test -f /usr/local/libexec/ctlvps-agent-uninstall.sh
+bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --purge --yes > /tmp/standalone-uninstall-output
+assert test ! -e /usr/local/libexec/ctlvps-agent-uninstall.sh
 assert test ! -e /var/lib/ctlvps-agent
 assert test ! -e /etc/ctlvps/sing-box
 assert test -f /opt/ctlvps/data/ctlvps.db
-done_case 'agent stops both cores, preserves controller and unrelated nft table'
+assert bash -c 'nft list chain inet filter input | grep -q keep-ssh'
+if nft list chain inet filter input | grep -q ctlvps-node-ingress; then exit 1; fi
+done_case 'agent stops both cores, preserves controller and unrelated nft table and ingress rules'
 
 fixture
 uninstall --all --purge --remove-caddy --yes

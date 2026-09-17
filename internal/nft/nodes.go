@@ -61,11 +61,11 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 	}
 	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, MarkPrefix)
 	for _, n := range nodes {
-		if n.Core != "singbox" {
+		if n.Core != "singbox" || n.Retired {
 			continue
 		}
 		mark, _ := NodeMark(n.NodeID)
-		action := ""
+		action := " return"
 		if n.Blocked {
 			action = " drop"
 		}
@@ -73,8 +73,12 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 		if n.Blocked {
 			fmt.Fprintf(&b, "add rule inet %s output ct mark 0x%08x drop\n", NodeTable, mark)
 		}
-		fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark 0x%08x counter name n%d_tx\n", NodeTable, mark, n.NodeID)
+		fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark 0x%08x counter name n%d_tx return\n", NodeTable, mark, n.NodeID)
 	}
+	// Unknown/retired marks cannot escape once their per-node rules disappear.
+	// These two constant rules replace an ever-growing set of retired drop rules.
+	fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct mark & 0x%08x == 0x%08x drop\n", NodeTable, MarkMask, MarkPrefix)
+	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark & 0x%08x == 0x%08x drop\n", NodeTable, MarkMask, MarkPrefix)
 	return b.String(), nil
 }
 
@@ -185,4 +189,42 @@ func checkMarkRoutes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// PruneNodes atomically removes references before deleting acknowledged
+// counters. Replaying after a crash preserves all active counters.
+func (m *Manager) PruneNodes(ctx context.Context, remaining []agentproto.NodeSpec, ids []int64) error {
+	rules, err := NodeRules(remaining)
+	if err != nil {
+		return err
+	}
+	existing, err := m.ReadNodes(ctx)
+	if err != nil {
+		// After a host reboot the kernel table is gone. Rebuild the retained
+		// rules; acknowledged old counters have already disappeared with it.
+		if m.NodesExist(ctx) {
+			return err
+		}
+	}
+	wanted := map[int64]bool{}
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	for _, n := range remaining {
+		if wanted[n.NodeID] {
+			return fmt.Errorf("cannot prune a retained meter")
+		}
+	}
+	var b strings.Builder
+	b.WriteString(rules)
+	for _, c := range existing {
+		if wanted[c.NodeID] {
+			fmt.Fprintf(&b, "delete counter inet %s n%d_rx\ndelete counter inet %s n%d_tx\n", NodeTable, c.NodeID, NodeTable, c.NodeID)
+		}
+	}
+	if _, err = m.run(ctx, b.String(), "--check", "-f", "-"); err != nil {
+		return err
+	}
+	_, err = m.run(ctx, b.String(), "-f", "-")
+	return err
 }

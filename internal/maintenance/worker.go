@@ -162,11 +162,16 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	if err := downloadAgent(ctx, s.DownloadURL, s.SHA256, newPath); err != nil {
 		return "failed", "下载或 SHA256 校验失败，原 agent 未更换", err
 	}
-	payload, err := os.ReadFile(newPath)
+	payload, err := os.Open(newPath)
 	if err != nil {
 		return "failed", "无法读取新程序", err
 	}
-	if err = secureupdate.Verify(ctx, "agent", "", payload); err != nil {
+	defer payload.Close()
+	info, err := payload.Stat()
+	if err != nil {
+		return "failed", "无法读取新程序大小", err
+	}
+	if err = secureupdate.VerifyReader(ctx, "agent", "", payload); err != nil {
 		return "failed", "官方发行校验失败，原程序未更换", err
 	}
 	if err := command(ctx, log, newPath, "version"); err != nil {
@@ -175,13 +180,13 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	if info, err := os.Lstat(target); err != nil || !info.Mode().IsRegular() {
 		return "failed", "agent 安装路径不是默认普通文件", errors.New("nonstandard agent path")
 	}
-	if err = diskbudget.Check(filepath.Dir(oldPath), int64(len(payload))+8<<20, 16); err != nil {
+	if err = diskbudget.Check(filepath.Dir(oldPath), info.Size()+8<<20, 16); err != nil {
 		return "failed", "维护目录空间不足，原 agent 保持运行", err
 	}
 	if err := copyFile(target, oldPath, 0700); err != nil {
 		return "failed", "备份 agent 失败，原程序未更换", err
 	}
-	reservation, err := diskbudget.Reserve(filepath.Dir(target), int64(len(payload))*2)
+	reservation, err := diskbudget.Reserve(filepath.Dir(target), info.Size()*2)
 	if err != nil {
 		return "failed", "程序分区无法预留更新与恢复空间，原 agent 保持运行", err
 	}
@@ -315,19 +320,21 @@ func downloadAgent(ctx context.Context, rawURL, want, path string) error {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || !shaPattern.MatchString(want) {
 		return errors.New("invalid agent download")
 	}
-	data, err := downloadAgentBytes(ctx, rawURL)
-	if err != nil {
-		return err
-	}
-	if err = diskbudget.Check(filepath.Dir(path), int64(len(data)), 4); err != nil {
+	if err = diskbudget.Check(filepath.Dir(path), 128<<20, 4); err != nil {
 		return err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0700)
 	if err != nil {
 		return err
 	}
+	ok := false
+	defer func() {
+		if !ok {
+			os.Remove(path)
+		}
+	}()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), bytes.NewReader(data))
+	n, err := downloadAgentTo(ctx, rawURL, io.MultiWriter(f, h))
 	if err == nil {
 		err = f.Sync()
 	}
@@ -341,6 +348,7 @@ func downloadAgent(ctx context.Context, rawURL, want, path string) error {
 	if n > 128<<20 || !strings.EqualFold(hex.EncodeToString(h.Sum(nil)), want) {
 		return errors.New("agent checksum mismatch")
 	}
+	ok = true
 	return nil
 }
 
@@ -376,6 +384,6 @@ func report(s Spec, j Job) error {
 	return nil
 }
 
-var downloadAgentBytes = func(ctx context.Context, raw string) ([]byte, error) {
-	return agentnet.Download(ctx, raw, 128<<20, true)
+var downloadAgentTo = func(ctx context.Context, raw string, dst io.Writer) (int64, error) {
+	return agentnet.DownloadTo(ctx, raw, 128<<20, true, dst)
 }

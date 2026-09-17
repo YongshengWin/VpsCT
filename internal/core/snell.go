@@ -85,6 +85,7 @@ func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []
 		}
 	}
 	changed := false
+	restartBinary := activationPending(d.bin())
 	launcher, err := proxyLauncher()
 	if err != nil {
 		return false, err
@@ -156,7 +157,7 @@ func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []
 		if err != nil {
 			return changed, rollback(err)
 		}
-		if c || unitChanged || meterChanged || !d.Systemd.IsActive(ctx, u) {
+		if c || unitChanged || meterChanged || restartBinary || !d.Systemd.IsActive(ctx, u) {
 			if err := d.Systemd.DaemonReload(ctx); err != nil {
 				return changed, rollback(err)
 			}
@@ -202,6 +203,9 @@ func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []
 				_ = os.Remove(filepath.Join(d.confDir(), e.Name()))
 			}
 		}
+	}
+	if err := completeActivation(d.bin()); err != nil {
+		return changed, err
 	}
 	return changed, nil
 }

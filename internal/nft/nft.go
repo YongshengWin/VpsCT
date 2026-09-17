@@ -9,7 +9,6 @@
 package nft
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"strings"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/boundedexec"
 )
 
 // Table name.
@@ -38,17 +38,11 @@ func (m *Manager) Available(ctx context.Context) bool {
 }
 
 func (m *Manager) run(ctx context.Context, stdin string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, m.Bin, args...)
-	if stdin != "" {
-		cmd.Stdin = strings.NewReader(stdin)
+	out, stderr, err := boundedexec.Run(ctx, stdin, 4<<20, m.Bin, args...)
+	if err != nil {
+		return nil, fmt.Errorf("nft: %w: %s", err, strings.TrimSpace(stderr))
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &errb
-	if err := cmd.Run(); err != nil {
-		return out.Bytes(), fmt.Errorf("nft %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
-	}
-	return out.Bytes(), nil
+	return out, nil
 }
 
 // Ensure converges the table to count exactly the given ports. Existing

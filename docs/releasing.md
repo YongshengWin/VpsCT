@@ -37,29 +37,29 @@ bash scripts/check.sh
 在项目根目录执行，替换实际仓库归属和版本：
 
 ```bash
-make release VERSION=v0.1.2 REPOSITORY=YongshengWin/VpsCT
+make release VERSION=v0.1.3 REPOSITORY=YongshengWin/VpsCT
 ```
 
-产物位于 `release/v0.1.2/`：
+产物位于 `release/v0.1.3/`：
 
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.2-linux-amd64.tar.gz`、`ctlvps-v0.1.2-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、完整说明文档与许可文件 |
+| `ctlvps-v0.1.3-linux-amd64.tar.gz`、`ctlvps-v0.1.3-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、完整说明文档与许可文件 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
 README 的安装与更新命令使用 `releases/latest/download/install.sh`，发布新正式版后无需修改版本号。每份 Release 附件内仍记录自身版本，确保一次安装的程序和校验文件一致；Release 页面中的命令用于安装该页对应的版本。
 
-2026-09-15，经维护者明确要求，`v0.1.0` 原有附件替换为包含网页维护及卸载器的构建，同时同步源码标签、校验清单和发行说明。通常发布仍使用新版本号；覆盖已发布版本只在维护者明确要求时执行，并先保留原附件以供恢复。校验文件完整性不等于验证发布者身份。v0.1.2 默认发布无需签名密钥或签名环境；构建生成 SHA256SUMS。TUF 工具仅保留供显式配置的自定义部署使用，不是正式发行前提。
+2026-09-15，经维护者明确要求，`v0.1.0` 原有附件替换为包含网页维护及卸载器的构建，同时同步源码标签、校验清单和发行说明。通常发布仍使用新版本号；覆盖已发布版本只在维护者明确要求时执行，并先保留原附件以供恢复。校验文件完整性不等于验证发布者身份。当前版本默认发布无需签名密钥或签名环境；构建生成 SHA256SUMS。TUF 工具仅保留供显式配置的自定义部署使用，不是正式发行前提。
 
 ### 2.3 安装、升级与恢复验收
 
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-release_dir=release/v0.1.2 # 替换为刚用当前源码构建的待发布版本目录
+release_dir=release/v0.1.3 # 替换为刚用当前源码构建的待发布版本目录
 bash scripts/test-install-container.sh "$release_dir"
 bash scripts/test-uninstall-container.sh
 bash scripts/test-maintenance-container.sh "$release_dir"
@@ -71,8 +71,8 @@ bash scripts/test-docker.sh
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
 ```bash
-sudo bash install.sh --assets-dir /path/to/release/v0.1.2 \
-  --version v0.1.2 --domain panel.example.com
+sudo bash install.sh --assets-dir /path/to/release/v0.1.3 \
+  --version v0.1.3 --domain panel.example.com
 ```
 
 这里使用发行目录内生成的 `install.sh`，目录同时包含对应架构压缩包和 `SHA256SUMS`。该模式仍需系统软件源提供依赖。实际验证过哪些系统和架构，就在验收记录中写明哪些；交叉编译不能替代实机安装。
@@ -92,7 +92,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.2 \
 
 ## 4. 公开发行并验证下载
 
-维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.2-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
+维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.3-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
 
 发布后从未登录 GitHub 的环境检查：
 

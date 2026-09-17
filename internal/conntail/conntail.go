@@ -5,6 +5,7 @@ package conntail
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 )
 
@@ -29,7 +31,7 @@ type parsedLine struct {
 
 func parseLine(line string, now time.Time) (parsedLine, bool) {
 	m := lineRe.FindStringSubmatch(line)
-	if m == nil {
+	if m == nil || len(m[1]) > 32 {
 		return parsedLine{}, false
 	}
 	id, err := strconv.ParseInt(m[3], 10, 64)
@@ -37,7 +39,7 @@ func parseLine(line string, now time.Time) (parsedLine, bool) {
 		return parsedLine{}, false
 	}
 	host, port := splitAddr(m[6])
-	if host == "" {
+	if host == "" || len(host) > 1024 {
 		return parsedLine{}, false
 	}
 	network := "tcp"
@@ -81,6 +83,8 @@ func Parse(line string, now time.Time) (agentproto.ConnEvent, bool) {
 
 // Tailer follows a file and buffers parsed events.
 type Tailer struct {
+	Queue          *Tailer // optional common event queue; pairing remains local
+	fixed          bool
 	Path           string
 	MaxLogBytes    int64 // truncate the log once it grows beyond this (sing-box opens with O_APPEND)
 	MaxEvents      int   // ring buffer size
@@ -90,13 +94,15 @@ type Tailer struct {
 	// Only node ids present here are recorded (nil = all).
 	Allowed func(nodeID int64) bool
 
-	mu      sync.Mutex
-	buf     []agentproto.ConnEvent
-	dropped int64
-	offset  int64
-	inode   uint64
-	byID    map[string]half // node:connID — same-id from/to
-	lastSrc map[int64]fromHint
+	head, count int
+	skipping    bool // discard an oversized line through its newline
+	mu          sync.Mutex
+	buf         []agentproto.ConnEvent
+	dropped     int64
+	offset      int64
+	inode       uint64
+	byID        map[string]half // node:connID — same-id from/to
+	lastSrc     map[int64]fromHint
 }
 
 type fromHint struct {
@@ -136,17 +142,50 @@ func (t *Tailer) Run(ctx context.Context) {
 }
 
 func (t *Tailer) poll() {
+	const maxLine = 16 << 10
+	const maxPoll = 1 << 20
+	enabled := t.Enabled == nil || t.Enabled()
+	if !enabled {
+		t.clearQueue()
+		t.mu.Lock()
+		clear(t.byID)
+		clear(t.lastSrc)
+		t.mu.Unlock()
+	}
 	st, err := os.Stat(t.Path)
 	if err != nil {
+		t.expire(time.Now())
 		return
 	}
 	if ino := inodeOf(st); ino != t.inode || st.Size() < t.offset {
 		t.inode = ino
 		t.offset = 0
+		t.skipping = false
+		t.mu.Lock()
+		clear(t.byID)
+		clear(t.lastSrc)
+		t.mu.Unlock()
 	}
-	if st.Size() == t.offset {
+	if !enabled {
+		t.offset = st.Size()
+		t.skipping = false
 		t.maybeTruncate(st.Size())
 		return
+	}
+	if st.Size() == t.offset {
+		t.expire(time.Now())
+		t.maybeTruncate(st.Size())
+		return
+	}
+	// Connection history is best-effort; skip an old backlog rather than
+	// letting sustained writes keep this file permanently beyond its disk cap.
+	if st.Size()-t.offset > maxPoll {
+		t.offset = st.Size() - maxPoll
+		t.skipping = true
+		t.mu.Lock()
+		clear(t.byID)
+		clear(t.lastSrc)
+		t.mu.Unlock()
 	}
 	f, err := os.Open(t.Path)
 	if err != nil {
@@ -156,25 +195,42 @@ func (t *Tailer) poll() {
 	if _, err := f.Seek(t.offset, io.SeekStart); err != nil {
 		return
 	}
-	r := bufio.NewReaderSize(f, 256<<10)
+	// Snapshot a finite amount of work: a continuously growing file cannot
+	// monopolize the reader. ReadSlice never allocates an unbounded line.
+	r := bufio.NewReaderSize(io.LimitReader(f, min(st.Size()-t.offset, maxPoll)), maxLine)
 	now := time.Now()
-	enabled := t.Enabled == nil || t.Enabled()
 	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			// partial line: leave it for next poll
-			break
-		}
-		t.offset += int64(len(line))
-		if !enabled {
+		line, err := r.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			t.offset += int64(len(line))
+			t.skipping = true
 			continue
 		}
-		p, ok := parseLine(strings.TrimRight(line, "\r\n"), now)
+		if t.skipping {
+			t.offset += int64(len(line))
+			if err == nil {
+				t.skipping = false
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if err != nil {
+			break
+		} // retry a bounded partial line next poll
+		t.offset += int64(len(line))
+		p, ok := parseLine(strings.TrimRight(string(line), "\r\n"), now)
 		if !ok || (t.Allowed != nil && !t.Allowed(p.ev.NodeID)) {
 			continue
 		}
+		// Parsed substrings must not retain the entire original log line.
+		p.connID = strings.Clone(p.connID)
+		p.ev.SrcHost = strings.Clone(p.ev.SrcHost)
+		p.ev.DestHost = strings.Clone(p.ev.DestHost)
 		t.ingest(p, now)
 	}
+	t.expire(now)
 	t.flushStale(now)
 	t.maybeTruncate(st.Size())
 }
@@ -249,8 +305,26 @@ func (t *Tailer) flushStale(now time.Time) {
 	}
 }
 
+func (t *Tailer) expire(now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for k, h := range t.byID {
+		if now.Sub(h.at) > 2*time.Minute {
+			if h.hasDest {
+				t.pushLocked(h.ev)
+			}
+			delete(t.byID, k)
+		}
+	}
+	for k, h := range t.lastSrc {
+		if now.Sub(h.at) > 2*time.Minute {
+			delete(t.lastSrc, k)
+		}
+	}
+}
+
 func (t *Tailer) gcLocked(now time.Time) {
-	if len(t.byID) < 4096 && len(t.lastSrc) < 4096 {
+	if len(t.byID) < agentbudget.PairEntriesPerTail && len(t.lastSrc) < agentbudget.PairEntriesPerTail {
 		return
 	}
 	cutoff := now.Add(-2 * time.Minute)
@@ -267,10 +341,10 @@ func (t *Tailer) gcLocked(now time.Time) {
 			delete(t.lastSrc, id)
 		}
 	}
-	if len(t.byID) >= 4096 {
+	if len(t.byID) >= agentbudget.PairEntriesPerTail {
 		t.byID = map[string]half{}
 	}
-	if len(t.lastSrc) >= 4096 {
+	if len(t.lastSrc) >= agentbudget.PairEntriesPerTail {
 		t.lastSrc = map[int64]fromHint{}
 	}
 }
@@ -278,54 +352,100 @@ func (t *Tailer) gcLocked(now time.Time) {
 func eventBytes(ev agentproto.ConnEvent) int64 {
 	return int64(128 + len(ev.SrcHost) + len(ev.DestHost))
 }
-func (t *Tailer) trimLocked() {
-	limit := t.MaxEvents
-	if limit < 1 {
-		limit = 1
+
+// The ring grows lazily, never beyond the event ceiling. Taking or retrying
+// a batch does not copy the backlog, and vacated slots release their strings.
+func (t *Tailer) roomLocked() {
+	if t.count < len(t.buf) {
+		return
 	}
-	for len(t.buf) > 0 && (len(t.buf) > limit || (t.MaxBufferBytes > 0 && t.bufferedBytes > t.MaxBufferBytes)) {
-		t.bufferedBytes -= eventBytes(t.buf[0])
-		t.buf[0] = agentproto.ConnEvent{}
-		t.buf = t.buf[1:]
-		t.dropped++
+	size := min(max(16, len(t.buf)*2), max(1, t.MaxEvents))
+	b := make([]agentproto.ConnEvent, size)
+	for i := 0; i < t.count; i++ {
+		b[i] = t.buf[(t.head+i)%len(t.buf)]
 	}
+	t.buf = b
+	t.head = 0
+}
+func (t *Tailer) popLocked() agentproto.ConnEvent {
+	ev := t.buf[t.head]
+	t.buf[t.head] = agentproto.ConnEvent{}
+	t.head = (t.head + 1) % len(t.buf)
+	t.count--
+	t.bufferedBytes -= eventBytes(ev)
+	return ev
 }
 func (t *Tailer) pushLocked(ev agentproto.ConnEvent) {
-	t.buf = append(t.buf, ev)
-	t.bufferedBytes += eventBytes(ev)
-	t.trimLocked()
+	if t.Queue != nil {
+		t.Queue.mu.Lock()
+		defer t.Queue.mu.Unlock()
+		t.Queue.pushLocked(ev)
+		return
+	}
+	size := eventBytes(ev)
+	if t.MaxBufferBytes > 0 && size > t.MaxBufferBytes {
+		t.dropped++
+		return
+	}
+	for t.count > 0 && (t.count >= max(1, t.MaxEvents) || (t.MaxBufferBytes > 0 && t.bufferedBytes+size > t.MaxBufferBytes)) {
+		t.popLocked()
+		t.dropped++
+	}
+	t.roomLocked()
+	t.buf[(t.head+t.count)%len(t.buf)] = ev
+	t.count++
+	t.bufferedBytes += size
 }
 
-// Take removes up to n events from the buffer.
+// Take removes up to n events, releasing only the consumed ring slots.
 func (t *Tailer) Take(n int) []agentproto.ConnEvent {
+	if t.Queue != nil {
+		return t.Queue.Take(n)
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if n > len(t.buf) {
-		n = len(t.buf)
-	}
+	n = max(0, min(n, t.count))
 	out := make([]agentproto.ConnEvent, n)
-	copy(out, t.buf[:n])
-	for _, ev := range out {
-		t.bufferedBytes -= eventBytes(ev)
+	for i := range out {
+		out[i] = t.popLocked()
 	}
-	t.buf = append([]agentproto.ConnEvent(nil), t.buf[n:]...)
+	if t.count == 0 && !t.fixed {
+		t.buf = nil
+		t.head = 0
+	}
 	return out
 }
 
-// Requeue puts events back at the front (after a failed upload).
+// Requeue preserves order and keeps the newest events when retrying a full
+// queue. It never allocates a second copy of the backlog.
 func (t *Tailer) Requeue(evs []agentproto.ConnEvent) {
+	if t.Queue != nil {
+		t.Queue.Requeue(evs)
+		return
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.buf = append(append([]agentproto.ConnEvent(nil), evs...), t.buf...)
-	for _, ev := range evs {
-		t.bufferedBytes += eventBytes(ev)
+	for i := len(evs) - 1; i >= 0; i-- {
+		ev := evs[i]
+		size := eventBytes(ev)
+		if t.count >= max(1, t.MaxEvents) || (t.MaxBufferBytes > 0 && t.bufferedBytes+size > t.MaxBufferBytes) {
+			t.dropped += int64(i + 1)
+			break
+		}
+		t.roomLocked()
+		t.head = (t.head + len(t.buf) - 1) % len(t.buf)
+		t.buf[t.head] = ev
+		t.count++
+		t.bufferedBytes += size
 	}
-	t.trimLocked()
 }
 
 // Pending returns the buffered count and the number of dropped events.
 func (t *Tailer) Pending() (int, int64) {
+	if t.Queue != nil {
+		return t.Queue.Pending()
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.buf), t.dropped
+	return t.count, t.dropped
 }

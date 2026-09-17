@@ -124,32 +124,35 @@ type Diagnostics struct {
 
 // Heartbeat is sent every poll interval.
 type Heartbeat struct {
-	Version         string        `json:"version"`
-	BinarySHA256    string        `json:"binary_sha256,omitempty"`
-	Epoch           string        `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
-	TS              time.Time     `json:"ts"`
-	PublicIPv4      string        `json:"public_ipv4"`
-	PublicIPv6      string        `json:"public_ipv6"`
-	Metrics         Metrics       `json:"metrics"`
-	Ports           []PortCounter `json:"ports"`
-	AppliedRevision int64         `json:"applied_revision"`
-	AppliedHash     string        `json:"applied_hash"`
-	ApplyStatus     string        `json:"apply_status"` // applied|failed|pending
-	ApplyError      string        `json:"apply_error,omitempty"`
-	Diagnostics     Diagnostics   `json:"diagnostics"`
+	FinalMeters     *MeterSettlement `json:"final_meters,omitempty"`
+	Version         string           `json:"version"`
+	BinarySHA256    string           `json:"binary_sha256,omitempty"`
+	Epoch           string           `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
+	TS              time.Time        `json:"ts"`
+	PublicIPv4      string           `json:"public_ipv4"`
+	PublicIPv6      string           `json:"public_ipv6"`
+	Metrics         Metrics          `json:"metrics"`
+	Ports           []PortCounter    `json:"ports"`
+	AppliedRevision int64            `json:"applied_revision"`
+	AppliedHash     string           `json:"applied_hash"`
+	ApplyStatus     string           `json:"apply_status"` // applied|failed|pending
+	ApplyError      string           `json:"apply_error,omitempty"`
+	Diagnostics     Diagnostics      `json:"diagnostics"`
 }
 
 // HeartbeatResponse tells the agent what to do next.
 type HeartbeatResponse struct {
-	MeteringVersion int                 `json:"metering_version,omitempty"`
-	Maintenance     *MaintenanceCommand `json:"maintenance,omitempty"`
-	ServerTime      time.Time           `json:"server_time"`
-	DesiredRevision int64               `json:"desired_revision"`
-	DesiredHash     string              `json:"desired_hash"`
-	PollIntervalSec int                 `json:"poll_interval_sec"`
-	ConnlogEnabled  bool                `json:"connlog_enabled"`
-	CounterReset    bool                `json:"counter_reset"` // server lost baseline; agent may reset
-	AgentUpdate     *AgentUpdateSpec    `json:"agent_update,omitempty"`
+	FinalMeterVersion int                 `json:"final_meter_version,omitempty"`
+	FinalMeterAck     string              `json:"final_meter_ack,omitempty"`
+	MeteringVersion   int                 `json:"metering_version,omitempty"`
+	Maintenance       *MaintenanceCommand `json:"maintenance,omitempty"`
+	ServerTime        time.Time           `json:"server_time"`
+	DesiredRevision   int64               `json:"desired_revision"`
+	DesiredHash       string              `json:"desired_hash"`
+	PollIntervalSec   int                 `json:"poll_interval_sec"`
+	ConnlogEnabled    bool                `json:"connlog_enabled"`
+	CounterReset      bool                `json:"counter_reset"` // server lost baseline; agent may reset
+	AgentUpdate       *AgentUpdateSpec    `json:"agent_update,omitempty"`
 }
 
 type MaintenanceCommand struct {

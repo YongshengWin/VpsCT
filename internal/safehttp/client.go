@@ -128,6 +128,27 @@ func ReadBounded(r io.Reader, max int64) ([]byte, error) {
 	return b, nil
 }
 
+// CopyBounded streams at most max bytes; an extra byte is checked without
+// ever writing it to the destination. Callers discard partial output on error.
+func CopyBounded(dst io.Writer, src io.Reader, max int64) (int64, error) {
+	if max < 0 {
+		return 0, ErrSize
+	}
+	n, err := io.CopyBuffer(dst, io.LimitReader(src, max), make([]byte, 32<<10))
+	if err != nil {
+		return n, err
+	}
+	var extra [1]byte
+	k, err := io.ReadFull(src, extra[:])
+	if k > 0 {
+		return n, ErrSize
+	}
+	if err == io.EOF {
+		return n, nil
+	}
+	return n, err
+}
+
 // Gate bounds concurrent work without an unbounded waiter queue.
 type Gate struct {
 	once  sync.Once

@@ -16,6 +16,7 @@ import (
 	"ctlvps/internal/agent"
 	"ctlvps/internal/agentnet"
 	"ctlvps/internal/buildinfo"
+	"ctlvps/internal/core"
 	"ctlvps/internal/maintenance"
 	"ctlvps/internal/proxyguard"
 	"ctlvps/internal/proxysandbox"
@@ -35,6 +36,16 @@ usage:
 }
 
 func main() {
+	for _, entry := range []func([]string) (bool, error){core.InstallEntry, agent.UpdateEntry} {
+		if handled, err := entry(os.Args[1:]); handled {
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+
 	if handled, err := proxyguard.Entry(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

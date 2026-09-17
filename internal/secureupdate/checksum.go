@@ -1,12 +1,13 @@
 package secureupdate
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,8 +28,12 @@ func defaultPolicy() Policy {
 // Checksum mode trusts the publisher's HTTPS endpoint. It does not claim
 // independent signature authentication or signed revocation/epoch guarantees.
 func verifyChecksum(ctx context.Context, component, version string, data []byte) error {
-	if len(data) == 0 || len(data) > 256<<20 {
-		return errors.New("invalid release size")
+	return verifyChecksumReader(ctx, component, version, bytes.NewReader(data))
+}
+func verifyChecksumReader(ctx context.Context, component, version string, data io.ReadSeeker) error {
+	_, hashes, err := artifactHashes(data)
+	if err != nil {
+		return err
 	}
 	if version != "" && !releaseTag.MatchString(version) {
 		return errors.New("invalid release version")
@@ -54,11 +59,10 @@ func verifyChecksum(ctx context.Context, component, version string, data []byte)
 	if err != nil {
 		return err
 	}
-	sum := sha256.Sum256(data)
-	if err = matchChecksum(sums, name, hex.EncodeToString(sum[:])); err != nil {
+	if err = matchChecksum(sums, name, hex.EncodeToString(hashes["sha256"])); err != nil {
 		return err
 	}
-	return recordChecksum(StateDir, component, version, data)
+	return recordChecksumReader(StateDir, component, version, data)
 }
 
 func matchChecksum(sums []byte, name, digest string) error {
@@ -79,11 +83,15 @@ func matchChecksum(sums []byte, name, digest string) error {
 }
 
 func recordChecksum(dir, component, version string, data []byte) error {
+	return recordChecksumReader(dir, component, version, bytes.NewReader(data))
+}
+func recordChecksumReader(dir, component, version string, data io.ReadSeeker) error {
 	if component != "agent" && component != "controller" && component != "verifier" {
 		return errors.New("unsupported release component")
 	}
-	if len(data) == 0 || len(data) > 256<<20 {
-		return errors.New("invalid release size")
+	_, hashes, err := artifactHashes(data)
+	if err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "verified"), 0700); err != nil {
 		return err
@@ -91,10 +99,9 @@ func recordChecksum(dir, component, version string, data []byte) error {
 	if err := protectedParents(dir); err != nil {
 		return err
 	}
-	sum := sha256.Sum256(data)
-	digest := hex.EncodeToString(sum[:])
+	digest := hex.EncodeToString(hashes["sha256"])
 	if component == "controller" {
-		if err := recordArchive(dir, digest, data); err != nil {
+		if err := recordArchiveReader(dir, digest, data); err != nil {
 			return err
 		}
 	}
@@ -108,8 +115,14 @@ func recordChecksum(dir, component, version string, data []byte) error {
 // Used by the root installer after checking SHA256SUMS obtained with the archive.
 // This records integrity for rollback; it does not create a publisher signature.
 func acceptChecksum(ctx context.Context, component, version, digest string, data []byte) error {
-	sum := sha256.Sum256(data)
-	if !strings.EqualFold(digest, hex.EncodeToString(sum[:])) {
+	return acceptChecksumReader(ctx, component, version, digest, bytes.NewReader(data))
+}
+func acceptChecksumReader(ctx context.Context, component, version, digest string, data io.ReadSeeker) error {
+	_, hashes, err := artifactHashes(data)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(digest, hex.EncodeToString(hashes["sha256"])) {
 		return fmt.Errorf("release SHA256 mismatch")
 	}
 	p, err := LoadPolicy()
@@ -117,7 +130,7 @@ func acceptChecksum(ctx context.Context, component, version, digest string, data
 		return err
 	}
 	if !p.ChecksumOnly {
-		return Verify(ctx, component, version, data)
+		return VerifyReader(ctx, component, version, data)
 	}
-	return recordChecksum(StateDir, component, version, data)
+	return recordChecksumReader(StateDir, component, version, data)
 }

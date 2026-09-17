@@ -13,6 +13,7 @@ import (
 	"sort"
 	"time"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/secureupdate"
 	"golang.org/x/sys/unix"
 )
@@ -91,12 +92,58 @@ func (m *Manager) List() []Job {
 	return out
 }
 
+// visitJobs keeps constant live memory even when durable idempotency receipts
+// have accumulated for years. false stops without loading the remaining jobs.
+func (m *Manager) visitJobs(visit func(Job) bool) error {
+	dir, err := os.Open(m.Dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	for {
+		entries, err := dir.ReadDir(64)
+		for _, entry := range entries {
+			if !entry.IsDir() || !idPattern.MatchString(entry.Name()) {
+				continue
+			}
+			if j, err := m.Get(entry.Name()); err == nil && !visit(j) {
+				return nil
+			}
+		}
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// ActiveAction is used by the resident agent; it never materializes history.
+func (m *Manager) ActiveAction(role string) (string, error) {
+	action := ""
+	err := m.visitJobs(func(j Job) bool {
+		if j.Active() && (role == "" || j.Role == role) {
+			action = j.Action
+			if action == "" {
+				action = "pending"
+			}
+			return false
+		}
+		return true
+	})
+	return action, err
+}
+
 // Recover reports interrupted jobs after a reboot or a killed worker. It never
 // silently repeats an uninstall. A running transient unit survives daemon restarts.
 func (m *Manager) Recover() {
-	for _, j := range m.List() {
+	_ = m.visitJobs(func(j Job) bool {
 		if !j.Active() || time.Since(j.UpdatedAt) < time.Minute {
-			continue
+			return true
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		active := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit(j.ID)).Run() == nil
@@ -106,7 +153,8 @@ func (m *Manager) Recover() {
 			j.UpdatedAt = time.Now().UTC()
 			_ = writeJSON(m.path(j.ID, "status.json"), j)
 		}
-	}
+		return true
+	})
 }
 
 func unit(id string) string { return "ctlvps-maintenance-job-" + id + ".service" }
@@ -146,10 +194,10 @@ func (m *Manager) Start(s Spec) (Job, error) {
 		}
 		return old, nil
 	}
-	for _, j := range m.List() {
-		if j.Active() {
-			return Job{}, ErrBusy
-		}
+	if action, err := m.ActiveAction(""); err != nil {
+		return Job{}, err
+	} else if action != "" {
+		return Job{}, ErrBusy
 	}
 	if err := m.pruneDiagnostics(); err != nil {
 		return Job{}, err
@@ -181,7 +229,12 @@ func (m *Manager) Start(s Spec) (Job, error) {
 			defer cancel()
 			// A separate service cgroup is essential: stopping the API/agent must
 			// not kill this worker. Its binary lives outside both install trees.
-			err = exec.CommandContext(ctx, "systemd-run", "--quiet", "--collect", "--unit="+unit(s.ID), "--property=Type=exec", "--property=UMask=0077", "--property=RuntimeMaxSec=45min", "--property=TimeoutStopSec=30", worker, "maintenance-worker", s.ID).Run()
+			args := []string{"--quiet", "--collect", "--unit=" + unit(s.ID), "--property=Type=exec", "--property=UMask=0077", "--property=RuntimeMaxSec=45min", "--property=TimeoutStopSec=30"}
+			if s.Role == "agent" {
+				args = append(args, "--property=MemoryAccounting=yes", "--property=MemoryHigh=160M", "--property=MemoryMax=192M", "--property=TasksMax=128", "--setenv=GOMAXPROCS=2", "--setenv=GOMEMLIMIT="+agentbudget.WorkerGoLimit)
+			}
+			args = append(args, worker, "maintenance-worker", s.ID)
+			err = exec.CommandContext(ctx, "systemd-run", args...).Run()
 		}
 	}
 	if err != nil {

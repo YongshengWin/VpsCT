@@ -10,10 +10,6 @@ type LoginResult = { requires_2fa?: boolean; challenge?: string } | null;
 export function LoginPage() {
   const { needsSetup, refresh } = useAuth();
   const { isDark, toggle } = useTheme();
-  const [username, setUsername] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [confirm, setConfirm] = React.useState("");
-  const [setupToken, setSetupToken] = React.useState("");
   const [error, setError] = React.useState("");
   const [loading, setLoading] = React.useState(false);
   // second factor
@@ -32,8 +28,14 @@ export function LoginPage() {
     }
   };
 
-  const submit = (e: React.FormEvent) => {
+  const submit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    // Read what is actually in the inputs, including password-manager autofill.
+    const fields = new FormData(e.currentTarget);
+    const username = String(fields.get("username") ?? "");
+    const password = String(fields.get("password") ?? "");
+    const confirm = String(fields.get("confirm") ?? "");
+    const setupToken = String(fields.get("setup_token") ?? "");
     if (needsSetup && password !== confirm) {
       setError("两次输入的密码不一致");
       return;
@@ -108,18 +110,18 @@ export function LoginPage() {
           <form onSubmit={submit} className="space-y-4">
             {needsSetup && (
               <Field label="初始化令牌" hint="从安装服务器的数据目录读取 setup-token 文件，创建管理员后自动失效。">
-                <Input aria-label="初始化令牌" type="password" autoComplete="off" value={setupToken} onChange={(e) => setSetupToken(e.target.value)} required />
+                <Input name="setup_token" aria-label="初始化令牌" type="password" autoComplete="off" required />
               </Field>
             )}
             <Field label="用户名">
-              <Input autoFocus autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+              <Input name="username" autoFocus autoComplete="username" required />
             </Field>
             <Field label="密码" hint={needsSetup ? "至少 8 位" : undefined}>
-              <Input type="password" autoComplete={needsSetup ? "new-password" : "current-password"} value={password} onChange={(e) => setPassword(e.target.value)} required minLength={needsSetup ? 8 : undefined} />
+              <Input name="password" type="password" autoComplete={needsSetup ? "new-password" : "current-password"} required minLength={needsSetup ? 8 : undefined} />
             </Field>
             {needsSetup && (
               <Field label="确认密码">
-                <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required />
+                <Input name="confirm" type="password" autoComplete="new-password" required />
               </Field>
             )}
             {error && <p className="rounded-xl bg-rose-500/10 px-3 py-2 text-sm text-rose-600 dark:text-rose-300">{error}</p>}

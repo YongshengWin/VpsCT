@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"crypto/rand"
+	"ctlvps/internal/agentbudget"
+	"ctlvps/internal/agentwork"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +42,9 @@ type Agent struct {
 	Tail        *conntail.Tailer
 	PrivateTail *conntail.Tailer
 
-	HoldUpdates bool // locally pin a canary; pauses binary synchronization and web maintenance
+	retirementHost RetirementHost
+	finalMeters    bool
+	HoldUpdates    bool // locally pin a canary; pauses binary synchronization and web maintenance
 
 	stateMu     sync.Mutex // serializes the main loop and connlog state persistence
 	mu          sync.Mutex
@@ -54,6 +59,7 @@ type Agent struct {
 
 // New wires the agent for a state directory.
 func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent {
+	debug.SetMemoryLimit(agentbudget.ResidentGoBytes)
 	paths := core.DefaultPaths(stateDir)
 	sd := core.NewSystemd()
 	a := &Agent{
@@ -63,6 +69,7 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 		Metrics: NewMetricsCollector(),
 		bootID:  BootID(),
 	}
+	a.retirementHost = retirementHost{a}
 	a.Drivers = map[string]core.Driver{
 		"singbox": core.NewSingBox(paths, sd),
 		"snell":   core.NewSnell(paths, sd),
@@ -94,6 +101,9 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 	a.PrivateTail = conntail.New(filepath.Join(paths.LogDir, "sing-box-private.log"))
 	a.PrivateTail.Enabled = a.Tail.Enabled
 	a.PrivateTail.Allowed = a.Tail.Allowed
+	queue := conntail.NewSharedQueue()
+	a.Tail.Queue = queue
+	a.PrivateTail.Queue = queue
 	return a
 }
 
@@ -195,6 +205,12 @@ func (a *Agent) portCounters(ctx context.Context) ([]agentproto.PortCounter, err
 		}
 		for j := range counters {
 			counters[j].Epoch = a.epoch() + ":nft-node-v1"
+			for _, n := range a.State.MeterNodes {
+				if n.NodeID == counters[j].NodeID {
+					counters[j].Epoch = a.meterEpoch(n)
+					break
+				}
+			}
 		}
 		out = append(out, counters...)
 	} else if a.State.MeteringV1 {
@@ -375,6 +391,7 @@ func (a *Agent) prepareMetering(ctx context.Context, ds *agentproto.DesiredState
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
+	retirementErr := a.flushRetirement(ctx)
 	if err := a.flushSettlement(ctx); err != nil {
 		return err
 	}
@@ -382,12 +399,27 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	hb.PublicIPv4, hb.PublicIPv6 = diag.PublicIPs()
 	var meterErr error
 	hb.Ports, meterErr = a.portCounters(ctx)
+	if p := a.State.Retirement; p != nil {
+		pending := map[int64]bool{}
+		for _, n := range p.Nodes {
+			pending[n.NodeID] = true
+		}
+		kept := hb.Ports[:0]
+		for _, c := range hb.Ports {
+			if !pending[c.NodeID] {
+				kept = append(kept, c)
+			}
+		}
+		hb.Ports = kept
+	}
 	if meterErr != nil {
 		hb.Ports = nil
 	}
 	a.mu.Lock()
 	hb.AppliedRevision, hb.AppliedHash, hb.ApplyError = a.State.AppliedRevision, a.State.AppliedHash, a.State.ApplyError
-	if hb.ApplyError != "" {
+	if agentwork.Pending() {
+		hb.ApplyStatus = "pending"
+	} else if hb.ApplyError != "" {
 		hb.ApplyStatus = "failed"
 	} else if hb.AppliedRevision > 0 {
 		hb.ApplyStatus = "applied"
@@ -396,6 +428,9 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	a.mu.Unlock()
 	hb.Diagnostics = a.diagnostics(ctx)
+	if retirementErr != nil {
+		hb.Diagnostics.MeteringError = "final meter settlement pending"
+	}
 	if meterErr != nil {
 		a.State.ApplyError = "node metering unavailable"
 		hb.ApplyError, hb.ApplyStatus = a.State.ApplyError, "failed"
@@ -407,6 +442,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	a.finalMeters = resp.FinalMeterVersion >= 1
 	if !resp.ServerTime.IsZero() {
 		rtt := time.Since(sent)
 		a.mu.Lock()
@@ -418,7 +454,14 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 		a.State.PollIntervalSec = resp.PollIntervalSec
 		_ = a.State.Save(a.StateDir)
 	}
+	if retirementErr != nil {
+		a.Logger.Warn("final settlement pending", "err", retirementErr)
+		return nil
+	}
 	if resp.Maintenance != nil {
+		if agentwork.Pending() {
+			return nil
+		}
 		return a.maintain(ctx, *resp.Maintenance)
 	}
 	if a.maintenanceAction() != "" {
@@ -427,13 +470,29 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	if !a.HoldUpdates && resp.AgentUpdate != nil && resp.AgentUpdate.SHA256 != "" && !strings.EqualFold(resp.AgentUpdate.SHA256, a.selfSHA) {
 		a.Logger.Info("self-update available", "sha", resp.AgentUpdate.SHA256[:min(12, len(resp.AgentUpdate.SHA256))])
 		if err := applySelfUpdate(ctx, a.State.ServerURL, *resp.AgentUpdate); err != nil {
-			a.Logger.Error("self-update failed", "err", err)
+			if !errors.Is(err, agentwork.ErrPending) {
+				a.Logger.Error("self-update failed", "err", err)
+			}
 		} else {
 			a.Logger.Info("self-update installed; exiting for systemd restart")
 			os.Exit(0)
 		}
 	}
-	if resp.DesiredRevision != a.State.AppliedRevision || resp.DesiredHash != a.State.AppliedHash || a.State.ApplyError != "" {
+	if pending, err := a.retirementPending(ctx); err != nil {
+		return err
+	} else if pending {
+		return nil
+	}
+	a.mu.Lock()
+	needInitialApply := a.desired == nil
+	currentDesired := a.desired
+	a.mu.Unlock()
+	if policy, err := secureupdate.LoadPolicy(); currentDesired != nil && err == nil && !policy.PauseConfig && secureupdate.Allow("agent.configure") == nil {
+		if err := a.NFT.EnsureIngress(ctx, currentDesired.Nodes); err != nil {
+			a.State.ApplyError = "节点端口开放失败: " + err.Error()
+		}
+	}
+	if needInitialApply || resp.DesiredRevision != a.State.AppliedRevision || resp.DesiredHash != a.State.AppliedHash || a.State.ApplyError != "" {
 		a.converge(ctx, false)
 	}
 	return nil
@@ -488,7 +547,7 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		d.RecentErrors = sb.RecentErrors(5)
 	}
 	pending, _ := a.Tail.Pending()
-	if a.PrivateTail != nil {
+	if a.PrivateTail != nil && (a.Tail.Queue == nil || a.PrivateTail.Queue != a.Tail.Queue) {
 		p, _ := a.PrivateTail.Pending()
 		pending += p
 	}
@@ -498,6 +557,15 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 
 // converge fetches the desired state and applies it, reporting the result.
 func (a *Agent) converge(ctx context.Context, force bool) {
+	if a.maintenanceAction() != "" {
+		return
+	}
+	if pending, err := a.retirementPending(ctx); err != nil {
+		a.Logger.Warn("meter retirement", "err", err)
+		return
+	} else if pending {
+		return
+	}
 	a.mu.Lock()
 	if a.applying {
 		a.mu.Unlock()
@@ -531,8 +599,9 @@ func (a *Agent) converge(ctx context.Context, force bool) {
 	}
 	maxNodes := policy.MaxNodes
 	if maxNodes <= 0 {
-		maxNodes = 256
+		maxNodes = agentbudget.ActiveNodes
 	}
+	maxNodes = min(maxNodes, agentbudget.ActiveNodes)
 	maxMemory := policy.MaxMemoryMB
 	if maxMemory <= 0 {
 		maxMemory = 512
@@ -575,21 +644,29 @@ func (a *Agent) converge(ctx context.Context, force bool) {
 		}
 	}
 	a.mu.Lock()
-	a.desired = ds
+	hasDesired := a.desired != nil
 	a.mu.Unlock()
-	if !force && ds.Revision == a.State.AppliedRevision && ds.Hash == a.State.AppliedHash && a.State.ApplyError == "" && proxyguard.Ready() == nil {
+	if !force && hasDesired && ds.Revision == a.State.AppliedRevision && ds.Hash == a.State.AppliedHash && a.State.ApplyError == "" && proxyguard.Ready() == nil {
 		return
 	}
 	a.Logger.Info("applying desired state", "revision", ds.Revision, "nodes", len(ds.Nodes))
 	details, err := a.apply(ctx, ds)
 	rep := agentproto.ApplyReport{Revision: ds.Revision, Hash: ds.Hash, Status: "applied", Details: details}
-	a.State.AppliedRevision, a.State.AppliedHash = ds.Revision, ds.Hash
 	if err != nil {
 		rep.Status, rep.Error = "failed", err.Error()
+		if errors.Is(err, agentwork.ErrPending) {
+			rep.Status = "pending"
+		}
 		a.State.ApplyError = err.Error()
-		a.Logger.Error("apply failed", "revision", ds.Revision, "err", err)
+		if !errors.Is(err, agentwork.ErrPending) {
+			a.Logger.Error("apply failed", "revision", ds.Revision, "err", err)
+		}
 	} else {
+		a.State.AppliedRevision, a.State.AppliedHash = ds.Revision, ds.Hash
 		a.State.ApplyError = ""
+		a.mu.Lock()
+		a.desired = ds
+		a.mu.Unlock()
 		a.Logger.Info("applied", "revision", ds.Revision, "details", details)
 	}
 	_ = a.State.Save(a.StateDir)
@@ -606,14 +683,8 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 	note := func(format string, args ...any) { details = append(details, fmt.Sprintf(format, args...)) }
 
 	// Persist meter identities before any process can start producing bytes.
-	known := map[int64]bool{}
-	for _, n := range a.State.MeterNodes {
-		known[n.NodeID] = true
-	}
-	for _, n := range ds.Nodes {
-		if !known[n.NodeID] {
-			a.State.MeterNodes = append(a.State.MeterNodes, MeterIdentity{NodeID: n.NodeID, Port: n.ListenPort, Core: n.Core})
-		}
+	if err := a.State.rememberMeters(ds.Nodes); err != nil {
+		return nil, err
 	}
 	if err := a.State.Save(a.StateDir); err != nil {
 		return details, err
@@ -728,6 +799,11 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 			note("%s: %d node(s) applied", name, live)
 		}
 	}
+	if len(errs) == 0 {
+		if err := a.NFT.EnsureIngress(ctx, ds.Nodes); err != nil {
+			errs = append(errs, fmt.Errorf("节点端口开放失败: %w", err))
+		}
+	}
 	if len(errs) == 0 && a.NFT.Exists(ctx) {
 		if err := a.NFT.Teardown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("remove settled legacy counters: %w", err))
@@ -771,7 +847,7 @@ func (a *Agent) connlogLoop(ctx context.Context) {
 			flush = 30 * time.Second
 		}
 		pending, _ := a.Tail.Pending()
-		if a.PrivateTail != nil {
+		if a.PrivateTail != nil && (a.Tail.Queue == nil || a.PrivateTail.Queue != a.Tail.Queue) {
 			p, _ := a.PrivateTail.Pending()
 			pending += p
 		}
@@ -779,7 +855,7 @@ func (a *Agent) connlogLoop(ctx context.Context) {
 			continue
 		}
 		events := a.Tail.Take(max(1, batch/2))
-		if a.PrivateTail != nil && len(events) < batch {
+		if a.PrivateTail != nil && (a.Tail.Queue == nil || a.PrivateTail.Queue != a.Tail.Queue) && len(events) < batch {
 			events = append(events, a.PrivateTail.Take(batch-len(events))...)
 		}
 		if len(events) < batch {

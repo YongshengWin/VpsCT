@@ -165,3 +165,65 @@ func TestDelayedPriorPeriodOnlyUpdatesHistory(t *testing.T) {
 		t.Fatal("old period history lost", rx, tx, err)
 	}
 }
+
+func TestFinalSettlementAckIsTransactionalAndReplayable(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "final.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := domain.Server{Name: "fixture", Enabled: true, CoreMode: domain.CoreModeStable}
+	if err = st.CreateServer(ctx, &srv); err != nil {
+		t.Fatal(err)
+	}
+	node := domain.Node{Name: "fixture", ServerID: &srv.ID, Source: domain.NodeDeployed, Core: "singbox", Protocol: "vless", ListenPort: 10001}
+	if err = st.CreateNode(ctx, &node); err != nil {
+		t.Fatal(err)
+	}
+	ing := traffic.New(st)
+	batch := agentproto.MeterSettlement{TS: time.Now().UTC(), Counters: []agentproto.PortCounter{{NodeID: node.ID, Source: "nft-node-v1", Epoch: "boot:generation1", FromZero: true, Rx: 100, Tx: 200}}}
+	batch.ID = batch.Digest()
+	hb := agentproto.Heartbeat{FinalMeters: &batch}
+	// Fail precisely at ACK insertion: neither ledger nor baseline may commit.
+	st.DB().Exec(`CREATE TRIGGER fail_ack BEFORE INSERT ON meter_settlements BEGIN SELECT RAISE(ABORT,'fixture failure'); END`)
+	if res, err := ing.Ingest(ctx, srv, hb); err == nil || res.FinalMeterAck != "" {
+		t.Fatal("uncommitted settlement acknowledged")
+	}
+	var count int
+	st.DB().QueryRow("SELECT count(*) FROM counter_state").Scan(&count)
+	if count != 0 {
+		t.Fatal("baseline escaped rollback")
+	}
+	st.DB().Exec("DROP TRIGGER fail_ack")
+	for repeat := 0; repeat < 3; repeat++ {
+		res, err := ing.Ingest(ctx, srv, hb)
+		if err != nil || res.FinalMeterAck != batch.ID {
+			t.Fatal(err)
+		}
+	}
+	rx, tx, err := st.SumTraffic(ctx, store.SubjectNode, node.ID, batch.TS.Add(-time.Hour), batch.TS.Add(time.Hour))
+	if err != nil || rx != 100 || tx != 200 {
+		t.Fatalf("duplicate final charge %d %d %v", rx, tx, err)
+	}
+	batch.Counters[0].Rx++
+	if _, err = ing.Ingest(ctx, srv, hb); err == nil {
+		t.Fatal("mutated batch ID accepted")
+	}
+	// A backwards wall-clock correction must not turn a final snapshot into
+	// a silently ignored stale heartbeat followed by destructive ACK.
+	batch.TS = batch.TS.Add(-time.Minute)
+	batch.ID = batch.Digest()
+	if res, err := ing.Ingest(ctx, srv, hb); err != nil || res.FinalMeterAck != batch.ID {
+		t.Fatalf("clock correction: %+v %v", res, err)
+	}
+	rx, tx, err = st.SumTraffic(ctx, store.SubjectNode, node.ID, batch.TS.Add(-time.Hour), batch.TS.Add(time.Hour))
+	if err != nil || rx != 101 || tx != 200 {
+		t.Fatalf("lost final bytes: %d %d %v", rx, tx, err)
+	}
+	batch.Counters[0].Rx = 99
+	batch.ID = batch.Digest()
+	if res, err := ing.Ingest(ctx, srv, hb); err == nil || res.FinalMeterAck != "" {
+		t.Fatal("conflicting final counter acknowledged")
+	}
+}

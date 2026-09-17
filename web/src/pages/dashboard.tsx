@@ -7,7 +7,7 @@ import { useIsAdmin } from "@/lib/auth";
 import type { Server, Series, Share, Subscription } from "@/lib/types";
 import { cn, fmtBytes } from "@/lib/utils";
 import { nicIO } from "@/components/traffic-ways";
-import { Badge, Card, Empty, Progress, SectionTitle, Spinner } from "@/components/ui";
+import { Badge, Button, Card, Empty, Progress, SectionTitle, Spinner } from "@/components/ui";
 import { TrafficBars } from "@/components/charts";
 import { ShareCard } from "@/pages/shares";
 import { SubscriptionLinks } from "@/pages/subscriptions";
@@ -27,7 +27,11 @@ export function DashboardPage() {
   const admin = useIsAdmin();
   const q = useQuery({ queryKey: ["dashboard"], queryFn: () => get<AdminDash & UserDash>("/api/v1/dashboard"), refetchInterval: 30000 });
   if (q.isLoading) return <Spinner />;
-  if (!q.data) return null;
+  if (!q.data) return <Card role="alert" className="space-y-3 p-6">
+    <h1 className="text-lg font-semibold">总览暂时无法加载</h1>
+    <p className="text-sm text-muted-foreground">{q.error instanceof Error ? q.error.message : "暂时未能获取总览数据，请重试。"}</p>
+    <Button onClick={() => void q.refetch()} loading={q.isFetching}>重新加载</Button>
+  </Card>;
   return admin ? <AdminDashboard d={q.data} /> : <UserDashboard d={q.data} />;
 }
 

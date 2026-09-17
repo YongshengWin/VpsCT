@@ -432,7 +432,7 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 			changed = true
 		}
 	}
-	changed = changed || d.binaryChanged
+	changed = changed || d.binaryChanged || activationPending(d.bin())
 	if !changed {
 		for _, c := range candidates {
 			account := "ctlvps-sb"
@@ -556,6 +556,9 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 				return false, err
 			}
 		}
+	}
+	if err := completeActivation(d.bin()); err != nil {
+		return true, err
 	}
 	d.binaryChanged = false
 	return true, nil

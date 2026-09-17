@@ -62,7 +62,9 @@ sudo bash /opt/ctlvps/uninstall.sh --controller --dry-run
 
 执行卸载时将 `--dry-run` 改为 `--yes`。只卸载 agent 使用 `--agent`，本机两端一起卸载使用 `--all`。默认保留配置与数据；加 `--purge` 会永久删除所选端的数据及默认目录内备份。自动生成的独占 Caddy 站点可加 `--purge --remove-caddy` 清理。详见 [卸载说明](https://github.com/{repo}/blob/{version}/docs/operations.md#7-卸载与清理)。
 
-也可在「设置 → 系统」卸载控制端，或在服务器详情卸载 agent。操作需管理员密码、已启用的两步验证及目标名称确认；网页断开时通过目标服务器的维护日志核实最终结果。
+只有 agent 的 VPS 可使用 `/usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run`（需以 `sudo bash` 执行）。旧版没有此入口时，下载本版 `uninstall.sh` 后执行 `sudo bash uninstall.sh --agent --dry-run`，不需要控制端或重新注册。
+
+也可在「设置 → 系统」卸载控制端，或在服务器详情卸载 agent。删除服务器默认同时卸载，成功后自动删除面板记录；失败或离线时保留记录。操作需管理员密码、已启用的两步验证及目标名称确认；网页断开时通过目标服务器的维护日志核实最终结果。
 
 ## 4. 附件
 

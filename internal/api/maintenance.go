@@ -20,9 +20,10 @@ import (
 
 type maintenanceInput struct {
 	maintenance.Request
-	Password string `json:"password"`
-	Code     string `json:"code"`
-	Confirm  string `json:"confirm"`
+	DeleteServer bool   `json:"delete_server"`
+	Password     string `json:"password"`
+	Code         string `json:"code"`
+	Confirm      string `json:"confirm"`
 }
 
 // MaintenanceClient allows isolated API tests without opening a root service.
@@ -97,7 +98,7 @@ func (a *API) startControllerMaintenance(w http.ResponseWriter, r *http.Request)
 	if err := a.maintenanceAuth(w, r, &in); err != nil {
 		return err
 	}
-	if in.Role != "controller" {
+	if in.Role != "controller" || in.DeleteServer {
 		return httpx.BadRequest("只能维护当前控制端")
 	}
 	if err := in.Validate(); err != nil {
@@ -158,6 +159,9 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 	if err := a.maintenanceAuth(w, r, &in); err != nil {
 		return err
 	}
+	if in.DeleteServer && in.Action != "uninstall" {
+		return httpx.BadRequest("只有卸载 agent 才能同时删除服务器记录")
+	}
 	if in.Role != "agent" {
 		return httpx.BadRequest("只能维护所选服务器的 agent")
 	}
@@ -168,7 +172,7 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 		return httpx.BadRequest("请输入完整服务器名称确认卸载")
 	}
 	if old, err := a.Store.GetMaintenance(r.Context(), in.ID); err == nil {
-		if old.ServerID != id || old.Request != in.Request {
+		if old.ServerID != id || old.Request != in.Request || old.DeleteServer != in.DeleteServer {
 			return httpx.Conflict("任务编号已使用")
 		}
 		httpx.OK(w, old)
@@ -197,14 +201,14 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 		sha = spec.SHA256
 	}
 	_ = a.Store.ExpireMaintenance(r.Context(), id)
-	j := store.MaintenanceJob{Job: maintenance.Job{Request: in.Request, Status: "queued", Stage: "queued", Message: "等待 agent 接收；15 分钟内未接收会自动过期", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: id, ReportToken: auth.RandomToken(32), AgentSHA: sha}
-	if err := a.audit(r, "maintenance.request."+in.Action, fmt.Sprintf("server:%d", id), in.Request); err != nil {
+	j := store.MaintenanceJob{Job: maintenance.Job{Request: in.Request, Status: "queued", Stage: "queued", Message: "等待 agent 接收；15 分钟内未接收会自动过期", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: id, DeleteServer: in.DeleteServer, ReportToken: auth.RandomToken(32), AgentSHA: sha}
+	if err := a.audit(r, "maintenance.request."+in.Action, fmt.Sprintf("server:%d", id), map[string]any{"request": in.Request, "delete_server": in.DeleteServer}); err != nil {
 		return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未启动任务")
 	}
 	if err := a.Store.CreateMaintenance(r.Context(), j); err != nil {
 		return httpx.Conflict("已有维护任务正在执行，请等待当前任务结束")
 	}
-	a.audit(r, "maintenance."+in.Action, fmt.Sprintf("server:%d", id), in.Request)
+	a.audit(r, "maintenance."+in.Action, fmt.Sprintf("server:%d", id), map[string]any{"request": in.Request, "delete_server": in.DeleteServer})
 	httpx.JSON(w, 202, j)
 	return nil
 }
