@@ -152,11 +152,16 @@ func (a *API) currentUser(r *http.Request) (*domain.User, error) {
 	sess, err := a.Store.GetSession(r.Context(), auth.HashToken(c.Value))
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
+			a.Logger.Warn("session lookup failed", "err", err)
 			return nil, httpx.E(503, "auth_unavailable", "身份验证暂时不可用")
 		}
 		return nil, httpx.ErrUnauthorized
 	}
 	u, err := a.Store.GetUser(r.Context(), sess.UserID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.Logger.Warn("session user lookup failed", "err", err)
+		return nil, httpx.E(503, "auth_unavailable", "身份验证暂时不可用")
+	}
 	if err != nil || !u.Enabled {
 		return nil, httpx.ErrUnauthorized
 	}
@@ -333,6 +338,7 @@ func (a *API) routes() {
 	a.handle("POST /api/v1/nodes/import", adminAccess, a.importNodes)
 	a.handle("POST /api/v1/nodes/reorder", adminAccess, a.reorderNodes)
 	a.handle("POST /api/v1/nodes/bulk-delete", adminAccess, a.bulkDeleteNodes)
+	a.handle("POST /api/v1/nodes/bulk-regenerate", adminAccess, a.bulkRegenerateNodes)
 	a.handle("POST /api/v1/nodes/chain", adminAccess, a.setNodeChain)
 	a.handle("GET /api/v1/nodes/{id}", adminAccess, a.getNode)
 	a.handle("PUT /api/v1/nodes/{id}", adminAccess, a.updateNode)

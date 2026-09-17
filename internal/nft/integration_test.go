@@ -1,6 +1,7 @@
 package nft
 
 import (
+	"context"
 	"ctlvps/internal/agentproto"
 	"os"
 	"os/exec"
@@ -36,9 +37,12 @@ func TestKernelNodeAccounting(t *testing.T) {
 	}
 	dir := t.TempDir()
 	nodes := []agentproto.NodeSpec{{NodeID: 1, ListenPort: 21001, Core: "singbox"}, {NodeID: 2, ListenPort: 21002, Core: "singbox"}}
-	for _, name := range []string{"active", "blocked"} {
+	for _, name := range []string{"active", "blocked", "retired"} {
 		if name == "blocked" {
 			nodes[0].Blocked = true
+		}
+		if name == "retired" {
+			nodes[0].Retired = true
 		}
 		rules, err := NodeRules(nodes)
 		if err != nil {
@@ -54,6 +58,34 @@ func TestKernelNodeAccounting(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	t.Log(string(out))
+	m := New()
+	before, err := m.ReadNodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := m.PruneNodes(context.Background(), nodes[1:], []int64{1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := m.ReadNodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 || after[0].NodeID != 2 || after[0].Rx != before[1].Rx || after[0].Tx != before[1].Tx {
+		t.Fatalf("pruning changed active counters: before=%+v after=%+v", before, after)
+	}
+	// Kernel state disappears across a host reboot, while durable ACK survives.
+	if _, err := m.run(context.Background(), "", "delete", "table", "inet", NodeTable); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.PruneNodes(context.Background(), nodes[1:], []int64{1}); err != nil {
+		t.Fatal(err)
+	}
+	after, err = m.ReadNodes(context.Background())
+	if err != nil || len(after) != 1 || after[0].NodeID != 2 || after[0].Rx != 0 || after[0].Tx != 0 {
+		t.Fatalf("reboot cleanup: %+v %v", after, err)
+	}
 }
 
 func TestKernelEgressBoundary(t *testing.T) {

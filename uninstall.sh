@@ -6,6 +6,7 @@ ROLE='' PURGE=0 YES=0 DRY_RUN=0 REMOVE_CADDY=0
 ROOT='' # Only changed by sourced, isolated tests; never read from the environment.
 UNITS=() REMOVE=() KEEP=()
 NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0 CADDY_DOMAIN=''
+NFT_INGRESS_HANDLES=()
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
@@ -66,6 +67,7 @@ safe_path() {
      "$target" =~ ^"$ROOT"/etc/systemd/system/ctlvps-snell@[0-9]+\.service\.d/meter\.conf$ ||
      "$target" == "$ROOT"/run/ctlvps-proxy ||
      "$target" == "$ROOT"/usr/local/bin/ctlvps-agent ||
+     "$target" == "$ROOT"/usr/local/libexec/ctlvps-agent-uninstall.sh ||
      "$target" == "$ROOT"/var/lib/ctlvps-agent || "$target" == "$ROOT"/var/lib/ctlvps-proxy || "$target" == "$ROOT"/var/log/ctlvps ||
      "$target" == "$ROOT"/etc/caddy/Caddyfile ||
      "$target" == "$ROOT"/var/lib/caddy/.local/share/caddy/certificates/* ]] || die '拒绝清理范围外的路径'
@@ -168,6 +170,7 @@ plan_agent() {
   done
   add_remove "$(path /run/ctlvps-proxy)"
   add_remove "$(path /usr/local/bin/ctlvps-agent)"
+  if [[ "$PURGE" -eq 1 ]]; then add_remove "$(path /usr/local/libexec/ctlvps-agent-uninstall.sh)"; fi
   for name in sing-box snell-server; do
     for file in "$name" "$name.version" "$name.trusted" "$name.tmp"; do add_remove "$(path /opt/ctlvps/bin)/$file"; done
   done
@@ -182,6 +185,15 @@ plan_agent() {
       [[ "$table" != ctlvps_nodes ]] || NFT_NODES_PRESENT=1
       [[ "$table" != ctlvps_egress ]] || NFT_EGRESS_PRESENT=1
     done <<< "$listed"
+    local ingress line handle
+    if ingress=$(nft -a list chain inet filter input 2>/dev/null); then
+      while IFS= read -r line; do
+        [[ "$line" == *'comment "ctlvps-node-ingress:'* ]] || continue
+        handle=${line##*# handle }
+        [[ "$handle" =~ ^[0-9]+$ ]] || die '节点端口规则句柄无效'
+        NFT_INGRESS_HANDLES+=("$handle")
+      done <<< "$ingress"
+    fi
   fi
 }
 
@@ -230,6 +242,7 @@ plan_caddy() {
 
 plan() {
   UNITS=() REMOVE=() KEEP=() NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0
+  NFT_INGRESS_HANDLES=()
   agent && plan_agent
   controller && plan_controller
   plan_caddy
@@ -237,6 +250,7 @@ plan() {
   if [[ ${#UNITS[@]} -gt 0 ]]; then printf '停止并禁用：\n'; printf '  %s\n' "${UNITS[@]}"; fi
   printf '删除（不存在的路径将跳过）：\n'; printf '  %s\n' "${REMOVE[@]}"
   if [[ ${#KEEP[@]} -gt 0 ]]; then printf '保留：\n'; printf '  %s\n' "${KEEP[@]}"; fi
+  [[ ${#NFT_INGRESS_HANDLES[@]} == 0 ]] || printf '删除 VpsCT 自动开放的节点端口规则（保留其他入站规则）\n'
   [[ "$NFT_EGRESS_PRESENT" == 0 ]] || printf "删除 nftables 表：inet ctlvps_egress\n"
   [[ "$NFT_NODES_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_nodes（不修改其他表）\n'
   [[ "$NFT_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps（不修改其他表）\n'
@@ -244,7 +258,7 @@ plan() {
 }
 
 execute_plan() {
-  local unit file before
+  local unit file before handle
   # Stop all services successfully before deleting anything. Agent must go first
   # so it cannot recreate core services or re-download their executables.
   for unit in "${UNITS[@]}"; do
@@ -255,6 +269,9 @@ execute_plan() {
       die "$unit 停止过程中发生错误，尚未删除文件"
     fi
     systemctl disable "$unit" || die "禁用 $unit 失败，尚未删除文件"
+  done
+  for handle in "${NFT_INGRESS_HANDLES[@]}"; do
+    nft delete rule inet filter input handle "$handle" || die "清理节点端口规则失败"
   done
   [[ "$NFT_EGRESS_PRESENT" == 0 ]] || nft delete table inet ctlvps_egress || die "清理代理出站表失败"
   [[ "$NFT_NODES_PRESENT" == 0 ]] || nft delete table inet ctlvps_nodes || die '清理节点计量表失败，尚未删除文件'

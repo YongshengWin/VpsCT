@@ -332,8 +332,9 @@ func (a *API) bulkDeleteNodes(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) setNodeChain(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
-		FrontID   int64 `json:"front_id"`
-		LandingID int64 `json:"landing_id"`
+		Name      string `json:"name"`
+		FrontID   int64  `json:"front_id"`
+		LandingID int64  `json:"landing_id"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
@@ -383,13 +384,24 @@ func (a *API) setNodeChain(w http.ResponseWriter, r *http.Request) error {
 	if front.Revoked || landing.Revoked {
 		return httpx.BadRequest("已撤销的节点不能组成链式")
 	}
+	name := strings.TrimSpace(in.Name)
 	if existing, err := a.Store.FindChainNode(r.Context(), front.ID, landing.Server, landing.Port); err == nil {
+		if name != "" && name != existing.Name {
+			existing.Name = name
+			if err := a.Store.UpdateNode(r.Context(), &existing); err != nil {
+				return err
+			}
+			a.audit(r, "node.chain", existing.Name, nil)
+		}
 		httpx.OK(w, a.nodeViews(r, []domain.Node{existing})[0])
 		return nil
 	}
+	if name == "" {
+		name = front.Name + " → " + landing.Name
+	}
 	frontID := front.ID
 	ch := domain.Node{
-		Name:             front.Name + " → " + landing.Name,
+		Name:             name,
 		Protocol:         landing.Protocol,
 		Server:           landing.Server,
 		Port:             landing.Port,
@@ -537,7 +549,7 @@ func (a *API) regenerateNode(w http.ResponseWriter, r *http.Request) error {
 	if err := provision.RegenerateCredentials(&n, s); err != nil {
 		return err
 	}
-	if err := a.Store.UpdateNode(r.Context(), &n); err != nil {
+	if err := a.Store.UpdateNodeCredentials(r.Context(), &n); err != nil {
 		return err
 	}
 	_, _, _ = a.Desired.Publish(r.Context(), s.ID)

@@ -71,7 +71,11 @@ func (s *Store) LatestDesiredState(ctx context.Context, serverID int64) (domain.
 
 // MarkDesiredState records agent feedback on a revision.
 func (s *Store) MarkDesiredState(ctx context.Context, serverID, revision int64, st domain.DesiredStateStatus, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE desired_states SET status=?, error=?, applied_at=? WHERE server_id=? AND revision=?`, st, errMsg, fmtTime(s.Now()), serverID, revision)
+	var appliedAt any
+	if st != domain.DesiredPending {
+		appliedAt = fmtTime(s.Now())
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE desired_states SET status=?, error=?, applied_at=? WHERE server_id=? AND revision=?`, st, errMsg, appliedAt, serverID, revision)
 	return err
 }
 

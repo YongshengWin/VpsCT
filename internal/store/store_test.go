@@ -101,9 +101,8 @@ func TestServerNodeShareFlow(t *testing.T) {
 	if err := s.DeleteServer(ctx, srv.ID); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.GetNode(ctx, n.ID)
-	if err != nil || got.ServerID != nil {
-		t.Fatalf("node should be unbound after server delete: %v %+v", err, got.ServerID)
+	if _, err := s.GetNode(ctx, n.ID); err != ErrNotFound {
+		t.Fatalf("node should be deleted with server: %v", err)
 	}
 }
 
@@ -145,5 +144,51 @@ func TestSettings(t *testing.T) {
 	_ = s.SetSetting(ctx, "x", "9")
 	if v := s.GetSettingInt(ctx, "x", 7); v != 9 {
 		t.Fatal("set")
+	}
+}
+
+func TestDeleteServerRemovesAssociatedNodesAndChains(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	server := domain.Server{Name: "deleted"}
+	other := domain.Server{Name: "retained"}
+	for _, srv := range []*domain.Server{&server, &other} {
+		if err := s.CreateServer(ctx, srv); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add := func(n domain.Node) domain.Node {
+		t.Helper()
+		if err := s.CreateNode(ctx, &n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	deployed := add(domain.Node{Name: "deployed", Source: domain.NodeDeployed, ServerID: &server.ID, Server: "deleted.example", Port: 443, Protocol: "vless"})
+	revoked := add(domain.Node{Name: "revoked", Source: domain.NodeDeployed, ServerID: &server.ID, Revoked: true})
+	bound := add(domain.Node{Name: "bound", Source: domain.NodeManual, ServerID: &server.ID})
+	retained := add(domain.Node{Name: "retained", Source: domain.NodeDeployed, ServerID: &other.ID, Server: "retained.example", Port: 443, Protocol: "vless"})
+	manual := add(domain.Node{Name: "manual", Source: domain.NodeManual, Server: deployed.Server, Port: deployed.Port, Protocol: deployed.Protocol})
+	frontChain := add(domain.Node{Name: "front chain", Source: domain.NodeChain, ChainFrontNodeID: &deployed.ID, Server: retained.Server, Port: retained.Port, Protocol: retained.Protocol})
+	landingChain := add(domain.Node{Name: "landing chain", Source: domain.NodeChain, ChainFrontNodeID: &retained.ID, Server: deployed.Server, Port: deployed.Port, Protocol: deployed.Protocol})
+	safeChain := add(domain.Node{Name: "safe chain", Source: domain.NodeChain, ChainFrontNodeID: &retained.ID, Server: "independent.example", Port: 443, Protocol: "vless"})
+	if err := s.DeleteServer(ctx, server.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []domain.Node{deployed, revoked, bound, frontChain, landingChain} {
+		if _, err := s.GetNode(ctx, n.ID); err != ErrNotFound {
+			t.Fatalf("%s should be deleted: %v", n.Name, err)
+		}
+	}
+	for _, n := range []domain.Node{retained, manual, safeChain} {
+		if _, err := s.GetNode(ctx, n.ID); err != nil {
+			t.Fatalf("%s should survive: %v", n.Name, err)
+		}
+	}
+	if _, err := s.GetAgentByServer(ctx, server.ID); err != ErrNotFound {
+		t.Fatalf("agent should be deleted: %v", err)
+	}
+	if _, err := s.GetServer(ctx, other.ID); err != nil {
+		t.Fatal(err)
 	}
 }

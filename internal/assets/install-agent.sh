@@ -76,10 +76,16 @@ download_agent() {
   curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$helper" -o "$WORK/$helper"
   expected=$(awk -v name="$helper" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$WORK/$helper" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'recovery helper SHA256 mismatch' >&2; exit 1; }
+  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 --max-filesize 1048576 "$RELEASE_BASE/uninstall.sh" -o "$WORK/uninstall.sh"
+  expected=$(awk '$2 == "uninstall.sh" { print $1 }' "$WORK/SHA256SUMS")
+  [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$WORK/uninstall.sh" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'uninstaller SHA256 mismatch' >&2; exit 1; }
   install -d -m 0755 /usr/local/libexec
   helper_stage=$(mktemp /usr/local/libexec/.ctlvps-verify.XXXXXXXX)
   install -m 0755 "$WORK/$helper" "$helper_stage"
   mv -Tf -- "$helper_stage" /usr/local/libexec/ctlvps-verify
+  helper_stage=$(mktemp /usr/local/libexec/.ctlvps-agent-uninstall.XXXXXXXX)
+  install -m 0755 "$WORK/uninstall.sh" "$helper_stage"
+  mv -Tf -- "$helper_stage" /usr/local/libexec/ctlvps-agent-uninstall.sh
 
 }
 
@@ -105,6 +111,7 @@ if [[ "$UPDATE" -eq 1 ]]; then
     exit 1
   fi
   systemctl --no-pager --lines=5 status ctlvps-agent
+  echo "==> uninstall preview: sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run"
   echo "==> agent updated. logs: journalctl -u ctlvps-agent -f"
   exit 0
 fi
@@ -147,8 +154,11 @@ ExecStart=$BIN_DIR/ctlvps-agent run --state $STATE_DIR
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
-Environment=GOMEMLIMIT=96MiB
+Environment=GOMEMLIMIT=64MiB
+MemoryAccounting=yes
+MemoryHigh=160M
 MemoryMax=192M
+TasksMax=128
 Nice=-5
 NoNewPrivileges=true
 ProtectHome=true
@@ -164,3 +174,5 @@ systemctl enable --now ctlvps-agent
 sleep 2
 systemctl --no-pager --lines=5 status ctlvps-agent || true
 echo "==> done. logs: journalctl -u ctlvps-agent -f"
+
+echo "==> uninstall preview: sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run"

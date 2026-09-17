@@ -238,3 +238,54 @@ func TestAgentMaintenanceClaimExpiryAndReports(t *testing.T) {
 		t.Fatal("stale queue executed")
 	}
 }
+
+func TestUninstallThenDeleteServer(t *testing.T) {
+	for _, status := range []string{"succeeded", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			c := newTestAPI(t)
+			c.do("POST", "/api/v1/auth/setup", map[string]any{"setup_token": testSetupToken, "username": "admin", "password": "password123"}, 200)
+			srv := c.do("POST", "/api/v1/servers", map[string]any{"name": "delete-test"}, 201)
+			sid := int64(srv["id"].(float64))
+			path := fmt.Sprintf("/api/v1/servers/%d", sid)
+			in := maintenanceInput{Request: maintenance.Request{ID: maintenance.NewID(), Role: "agent", Action: "uninstall"}, DeleteServer: true, Password: "password123", Confirm: "delete-test"}
+			maintenanceHTTP(t, c, path+"/maintenance", in, c.srv.URL, "", 409) // offline retains record
+			c.do("GET", path, nil, 200)
+			et := c.do("POST", path+"/enroll-token", nil, 200)
+			en := c.do("POST", "/api/agent/v1/enroll", agentproto.EnrollRequest{EnrollToken: et["token"].(string), Version: "test", Arch: "amd64"}, 200)
+			c.agent = en["agent_token"].(string)
+			c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{Version: "test", TS: time.Now(), Epoch: "test", Diagnostics: agentproto.Diagnostics{SecurityVersion: 1, SecurityPolicy: true, Maintenance: 1}}, 200)
+			bad := in
+			bad.Password = "wrong-password"
+			maintenanceHTTP(t, c, path+"/maintenance", bad, c.srv.URL, "", 403)
+			bad = in
+			bad.Action = "update"
+			maintenanceHTTP(t, c, path+"/maintenance", bad, c.srv.URL, "", 400)
+			maintenanceHTTP(t, c, path+"/maintenance", in, c.srv.URL, "", 202)
+			bad = in
+			bad.DeleteServer = false
+			maintenanceHTTP(t, c, path+"/maintenance", bad, c.srv.URL, "", 409)
+			c.do("GET", path, nil, 200)
+			c.do("DELETE", path, nil, 409)
+			j, err := c.api.Store.GetMaintenance(context.Background(), in.ID)
+			if err != nil || !j.DeleteServer {
+				t.Fatalf("deletion intent not persisted: %+v %v", j, err)
+			}
+			report := j.Job
+			report.Status = status
+			jobPath := "/api/maintenance/v1/jobs/" + j.ID
+			maintenanceHTTP(t, c, jobPath+"/claim", map[string]bool{}, "", j.ReportToken, 200)
+			maintenanceHTTP(t, c, jobPath+"/report", report, "", "wrong", 401)
+			maintenanceHTTP(t, c, jobPath+"/report", report, "", j.ReportToken, 200)
+			maintenanceHTTP(t, c, jobPath+"/report", report, "", j.ReportToken, 200)
+			want := 200
+			if status == "succeeded" {
+				want = 404
+			}
+			c.do("GET", path, nil, want)
+			saved, err := c.api.Store.GetMaintenance(context.Background(), j.ID)
+			if err != nil || saved.Status != status {
+				t.Fatalf("receipt lost: %+v %v", saved, err)
+			}
+		})
+	}
+}

@@ -277,11 +277,6 @@ func (a *API) deleteServer(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	// deployed nodes die with the server
-	nodes, _ := a.Store.ListNodes(r.Context(), store.NodeFilter{ServerID: &id, Source: domain.NodeDeployed, IncludeRevoked: true})
-	for _, n := range nodes {
-		_ = a.Store.DeleteNode(r.Context(), n.ID)
-	}
 	if err := a.Store.DeleteServer(r.Context(), id); err != nil {
 		return err
 	}

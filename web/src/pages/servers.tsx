@@ -1,10 +1,11 @@
+import { ConfigStatusNotice, configurationState } from "@/components/config-status";
 import * as React from "react";
 import { MaintenancePanel } from "@/components/maintenance";
 import { ServerActions } from "@/components/server-actions";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle, Wrench } from "lucide-react";
-import { del, get, post, put } from "@/lib/api";
+import { get, post, put } from "@/lib/api";
 import type { Server, Node, Series } from "@/lib/types";
 import { fmtBytes, fmtAgo, fmtDuration, fmtRate, gbToBytes, bytesToGb, parseResetDay, copyText, STATUS_LABELS, PROTOCOL_LABELS, fmtDate, defaultNodeName } from "@/lib/utils";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Confirm, Dialog, Empty, Field, Input, PageHeader, Progress, Select, Spinner, Switch, Table, Td, Th, Tr, Textarea, Code, Pre, Tabs } from "@/components/ui";
@@ -161,7 +162,7 @@ export function ServersPage() {
                   <TrafficIO className="mt-1.5" compact inbound={s.usage?.inbound ?? s.usage?.up} outbound={s.usage?.outbound ?? s.usage?.down} />
                 </div>
                 {(s.desired && !s.desired.in_sync) || s.agent?.apply_error ? (
-                  <p className="mt-2 inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> {s.agent?.apply_error || `配置待同步 (rev ${s.desired?.revision})`}</p>
+                  <p className="mt-2 inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> {configurationState(s)?.title || "等待同步节点设置"}</p>
                 ) : null}
               </Card>
             </Link>
@@ -217,7 +218,7 @@ export function ServerDetailPage() {
   const [maintenanceBusy, setMaintenanceBusy] = React.useState(false);
 
   const enrollM = useMutation({ mutationFn: () => post<{ token: string; install_command: string; expires_at: string }>(`/api/v1/servers/${id}/enroll-token`), onSuccess: setEnroll, onError: (e) => toast.fromError(e) });
-  const republish = useMutation({ mutationFn: () => post(`/api/v1/servers/${id}/republish`), onSuccess: () => { toast.success("已请求重新应用节点配置"); qc.invalidateQueries({ queryKey: ["servers", id] }); }, onError: (e) => toast.fromError(e) });
+  const republish = useMutation({ mutationFn: () => post(`/api/v1/servers/${id}/republish`), onSuccess: () => { toast.success("已重试，等待服务器同步"); qc.setQueryData<Server>(["servers", id], (old) => old?.desired ? { ...old, desired: { ...old.desired, in_sync: false, status: "pending", error: "" }, agent: old.agent ? { ...old.agent, apply_error: "" } : old.agent } : old); qc.invalidateQueries({ queryKey: ["servers", id] }); }, onError: (e) => toast.fromError(e) });
   const checkAgentUpdate = useMutation({
     mutationFn: () => post<{ queued?: boolean; manual?: boolean; message: string; agent_update?: { command?: string } }>(`/api/v1/servers/${id}/update-agent`),
     onSuccess: async (r) => {
@@ -231,7 +232,7 @@ export function ServerDetailPage() {
     },
     onError: (e) => toast.fromError(e),
   });
-  const delM = useMutation({ mutationFn: () => del(`/api/v1/servers/${id}`), onSuccess: () => { toast.success("已删除"); qc.invalidateQueries({ queryKey: ["servers"] }); nav("/servers"); }, onError: (e) => toast.fromError(e) });
+  const onServerDeleted = React.useCallback(() => { toast.success("服务器记录已删除"); void qc.invalidateQueries({ queryKey: ["servers"] }); void qc.invalidateQueries({ queryKey: ["nodes"] }); void qc.invalidateQueries({ queryKey: ["subscriptions"] }); nav("/servers"); }, [qc, nav]);
   const resetTok = useMutation({ mutationFn: () => post(`/api/v1/servers/${id}/reset-token`), onSuccess: () => { toast.success("已吊销 agent 令牌，需重新注册"); setConfirmReset(false); qc.invalidateQueries({ queryKey: ["servers", id] }); } });
 
   if (q.isLoading) return <Spinner />;
@@ -255,20 +256,17 @@ export function ServerDetailPage() {
             <ServerActions items={[
               { label: "agent 维护", icon: <Wrench className="h-4 w-4" />, onClick: () => setMaintenanceOpen(true) },
               ...(s.agent && !s.diagnostics?.maintenance ? [{ label: s.agent_update?.supported ? "检查 agent 更新" : "复制 agent 更新命令", icon: <Copy className="h-4 w-4" />, onClick: () => checkAgentUpdate.mutate(), disabled: checkAgentUpdate.isPending || maintenanceBusy }] : []),
-              { label: "重新应用节点配置", icon: <RefreshCw className="h-4 w-4" />, onClick: () => republish.mutate(), disabled: republish.isPending || maintenanceBusy },
               { label: "删除服务器记录", icon: <Trash2 className="h-4 w-4" />, onClick: () => setConfirmDel(true), disabled: maintenanceBusy, destructive: true },
             ]} />
           </>
         }
       />
 
-      <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} />
+      <MaintenancePanel key={s.id} server={{ id: s.id, name: s.name }} open={maintenanceOpen} onOpen={() => setMaintenanceOpen(true)} onClose={() => setMaintenanceOpen(false)} onBusyChange={setMaintenanceBusy} deleteOpen={confirmDel} onDeleteClose={() => setConfirmDel(false)} onDeleted={onServerDeleted} />
 
       {s.agent && <div className="mb-4 rounded-md border p-3 text-sm">安全状态：{s.agent_status === "pending" ? "尚未接入 agent" : !s.diagnostics?.security_version ? "旧版 agent，尚未启用新版安全策略" : !s.diagnostics.security_policy ? "本机安全策略加载失败，程序与配置变更已关闭" : s.diagnostics.security_paused ? "本机已暂停配置变更" : "更新文件校验与本机安全策略已启用"}</div>}
       {s.diagnostics?.metering_error && <div className="mb-4 rounded-md border border-red-500/40 p-3 text-sm text-destructive">节点流量采集异常：{s.diagnostics.metering_error}。当前用量可能未更新。</div>}
- {s.agent?.apply_error && (
-        <div className="mb-4 rounded-md border border-red-500/40 bg-red-500/5 p-3 text-sm"><AlertTriangle className="mr-1 inline h-4 w-4 text-red-500" /> 配置下发失败：{s.agent.apply_error}</div>
-      )}
+      {!maintenanceBusy && <ConfigStatusNotice server={s} retrying={republish.isPending} disabled={maintenanceBusy} onRetry={() => republish.mutate()} onDetails={() => setTab("diag")} />}
       {s.agent && s.agent_update && !s.agent_update.supported && (
         <div className="mb-4 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
           请先在此 VPS 通过独立可信渠道配置验证器、签名根和本地安装器，再执行「更多」中的迁移命令。完成后只接受受信签名版本；未完成前不会自动更新。
@@ -352,7 +350,7 @@ export function ServerDetailPage() {
           ) : (
             <Table>
               <thead><tr className="border-b"><Th>名称</Th><Th>协议</Th><Th>地址</Th><Th>归属</Th><Th>近 30 天用量</Th><Th>状态</Th><Th></Th></tr></thead>
-              <tbody>{nodes.data.map((n) => <NodeRow key={n.id} n={n} onOpen={() => setNodeDetail(n)} />)}</tbody>
+              <tbody>{nodes.data.map((n) => <NodeRow key={n.id} n={n} onOpen={() => setNodeDetail(n)} configurationHint={!n.revoked && n.enabled ? configurationState(s, republish.isPending)?.title : undefined} />)}</tbody>
             </Table>
           )}
         </div>
@@ -461,7 +459,6 @@ export function ServerDetailPage() {
           </div>
         )}
       </Dialog>
-      <Confirm open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={() => delM.mutate()} loading={delM.isPending} destructive title="删除服务器？" description="将删除该服务器及其部署节点的记录。VPS 上的 agent 将停止收到配置。" />
       <Confirm open={confirmReset} onClose={() => setConfirmReset(false)} onConfirm={() => resetTok.mutate()} destructive title="吊销 agent 令牌？" description="agent 将无法继续通信，需要重新生成安装命令并注册。" />
       <NodeDetailDialog node={nodeDetail} onClose={() => setNodeDetail(null)} />
     </div>

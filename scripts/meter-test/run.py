@@ -93,7 +93,10 @@ else:
     def relay_udp(s,node):
      o=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM);o.setsockopt(socket.SOL_SOCKET,36,0x43000000|node);o.settimeout(2)
      while True:
-      d,a=s.recvfrom(65536);o.sendto(d,('2001:db8:2::2',22000));r,_=o.recvfrom(65536);s.sendto(r,a)
+      d,a=s.recvfrom(65536)
+      try:
+       o.sendto(d,('2001:db8:2::2',22000));r,_=o.recvfrom(65536);s.sendto(r,a)
+      except (PermissionError,TimeoutError):pass
     threading.Thread(target=relay_udp,args=(s,node),daemon=True).start()
 time.sleep(.6)
 def snapshot(table='ctlvps_nodes'):
@@ -157,5 +160,14 @@ for node in (1,2):
 before=snapshot();run('nft','-f',str(rules/'active.nft'));assert snapshot()==before
 run('nft','-f',str(rules/'blocked.nft'))
 transfer(1,blocked=True);transfer(1,udp=True,blocked=True);transfer(2)
+# Retired counters must freeze while other nodes keep carrying traffic.
+run('nft','-f',str(rules/'retired.nft'))
+before=snapshot()
+transfer(1,blocked=True);transfer(1,udp=True,blocked=True);transfer(2)
+after=snapshot()
+for direction in ('rx','tx'):
+ assert after[f'n1_{direction}']==before[f'n1_{direction}'],'retired counter not frozen'
+ assert after[f'n2_{direction}']>before[f'n2_{direction}'],'active node interrupted'
+print('PASS retired counters frozen with active traffic continuing')
 print(('sing-box: ' if binary else 'synthetic: ')+'PASS IPv4/IPv6 TCP/UDP exact kernel byte equality on both legs; per-node isolation; counters survive rule replacement; node-only blocking')
 for p in procs:p.terminate()

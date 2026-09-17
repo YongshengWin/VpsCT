@@ -19,9 +19,11 @@ func TestDownloadChecksBeforeInstall(t *testing.T) {
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	content := "synthetic release bytes"
-	prior := downloadAgentBytes
-	t.Cleanup(func() { downloadAgentBytes = prior })
-	downloadAgentBytes = func(context.Context, string) ([]byte, error) { return []byte(content), nil }
+	prior := downloadAgentTo
+	t.Cleanup(func() { downloadAgentTo = prior })
+	downloadAgentTo = func(_ context.Context, _ string, dst io.Writer) (int64, error) {
+		return io.Copy(dst, strings.NewReader(content))
+	}
 	sum := sha256.Sum256([]byte(content))
 	sha := hex.EncodeToString(sum[:])
 	http.DefaultTransport = transportFunc(func(r *http.Request) (*http.Response, error) {

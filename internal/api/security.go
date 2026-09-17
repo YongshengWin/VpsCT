@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"mime"
 	"net"
 	"net/http"
@@ -150,9 +151,14 @@ func (a *API) security(next http.Handler) http.Handler {
 					max = 1 << 20
 				}
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, max)
 			rc := http.NewResponseController(w)
-			_ = rc.SetReadDeadline(time.Now().Add(20 * time.Second))
+			// A read deadline on a bodyless SSE request expires while net/http
+			// reads ahead, cancelling the entire keep-alive connection. Apply
+			// the body budget only during actual body reads, never while the
+			// handler is streaming or doing database work.
+			r.Body = http.MaxBytesReader(w, &requestBodyDeadline{ReadCloser: r.Body, controller: rc, deadline: time.Now().Add(20 * time.Second)}, max)
+			defer rc.SetReadDeadline(time.Time{})
+			defer rc.SetWriteDeadline(time.Time{})
 			if r.URL.Path != "/api/v1/events" {
 				_ = rc.SetWriteDeadline(time.Now().Add(60 * time.Second))
 			}
@@ -207,4 +213,18 @@ func (a *API) securityEvent(r *http.Request, reason string) {
 	if a.securityLogLimiter.Allow(reason) {
 		a.Logger.Warn("security request rejected", "reason", reason, "route", r.Pattern)
 	}
+}
+
+// requestBodyDeadline bounds the total body-read window without leaving a
+// socket deadline armed after decoding. Keep-alive and SSE share that socket.
+type requestBodyDeadline struct {
+	io.ReadCloser
+	controller *http.ResponseController
+	deadline   time.Time
+}
+
+func (b *requestBodyDeadline) Read(p []byte) (int, error) {
+	_ = b.controller.SetReadDeadline(b.deadline)
+	defer b.controller.SetReadDeadline(time.Time{})
+	return b.ReadCloser.Read(p)
 }

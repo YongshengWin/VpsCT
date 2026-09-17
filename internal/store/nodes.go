@@ -315,3 +315,26 @@ func (s *Store) SplitInlineChains(ctx context.Context) error {
 	}
 	return nil
 }
+
+// UpdateNodeCredentials also refreshes virtual copies of this landing endpoint.
+// Keep identity, ordering and enabled/revoked state unchanged.
+func (s *Store) UpdateNodeCredentials(ctx context.Context, n *domain.Node) error {
+	now := fmtTime(s.Now())
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE nodes SET params=?,server_params=?,core=?,updated_at=? WHERE id=?`,
+			s.seal("nodes.params", string(n.Params)), s.seal("nodes.server_params", string(n.ServerParams)), n.Core, now, n.ID)
+		if err != nil {
+			return err
+		}
+		count, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return ErrNotFound
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE nodes SET params=?,updated_at=? WHERE source=? AND server=? AND port=? AND protocol=?`,
+			s.seal("nodes.params", string(n.Params)), now, domain.NodeChain, n.Server, n.Port, n.Protocol)
+		return err
+	})
+}

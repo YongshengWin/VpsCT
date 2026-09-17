@@ -58,5 +58,18 @@ func TestQuickNodeChain(t *testing.T) {
 		t.Fatalf("original Zouter should still be in the subscription: %s", body)
 	}
 
+	renamed := c.do("POST", "/api/v1/nodes/chain", map[string]any{"front_id": vmiss["id"], "landing_id": zouter["id"], "name": "  自定义链式  "}, 200)
+	if renamed["id"] != out["id"] || renamed["name"] != "自定义链式" {
+		t.Fatalf("rename existing chain: %v", renamed)
+	}
+	unchanged := c.do("POST", "/api/v1/nodes/chain", map[string]any{"front_id": vmiss["id"], "landing_id": zouter["id"]}, 200)
+	if unchanged["name"] != "自定义链式" {
+		t.Fatalf("omitted name should preserve custom name: %v", unchanged)
+	}
+	custom := c.do("POST", "/api/v1/nodes/chain", map[string]any{"front_id": zouter["id"], "landing_id": vmiss["id"], "name": "  返程  "}, 201)
+	if custom["name"] != "返程" {
+		t.Fatalf("custom chain name: %v", custom)
+	}
+
 	c.do("POST", "/api/v1/nodes/chain", map[string]any{"front_id": 0, "landing_id": out["id"]}, 204)
 }

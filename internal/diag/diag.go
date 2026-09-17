@@ -4,6 +4,7 @@ package diag
 
 import (
 	"context"
+	"ctlvps/internal/boundedexec"
 	"net"
 	"os"
 	"os/exec"
@@ -57,7 +58,7 @@ func Collect(ctx context.Context) Host {
 	h.IPv6Reachable = reachable(ctx, "[2606:4700:4700::1111]:443") || reachable(ctx, "[2001:4860:4860::8888]:443")
 	h.Nftables = exec.CommandContext(ctx, "nft", "--version").Run() == nil
 	h.Systemd = exec.CommandContext(ctx, "systemctl", "--version").Run() == nil
-	if out, err := exec.CommandContext(ctx, "journalctl", "-k", "--since", "-24h", "--no-pager", "-o", "cat").Output(); err == nil {
+	if out, _, err := boundedexec.Run(ctx, "", 256<<10, "journalctl", "-k", "--since", "-24h", "--no-pager", "-o", "cat", "--grep", "(?i)out of memory|oom-kill", "--lines", "1000"); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			l := strings.ToLower(line)
 			if strings.Contains(l, "out of memory") || strings.Contains(l, "oom-kill") {

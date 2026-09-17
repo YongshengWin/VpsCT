@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/boundedexec"
 )
 
 // Systemd wraps systemctl.
@@ -28,14 +29,11 @@ func (s *Systemd) Available(ctx context.Context) bool {
 }
 
 func (s *Systemd) ctl(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "systemctl", args...)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	err := cmd.Run()
+	out, stderr, err := boundedexec.Run(ctx, "", 1<<20, "systemctl", args...)
 	if err != nil {
-		return out.String(), fmt.Errorf("systemctl %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
+		return "", fmt.Errorf("systemctl: %w: %s", err, strings.TrimSpace(stderr))
 	}
-	return out.String(), nil
+	return string(out), nil
 }
 
 // WriteUnit writes a unit file; returns true when content changed.
@@ -353,4 +351,63 @@ func (s *Systemd) ControlGroup(ctx context.Context, unit string) (string, error)
 		return "", fmt.Errorf("managed cgroup unavailable")
 	}
 	return g, nil
+}
+
+// EmptySnellMeter refuses to retire a slice while any child still has tasks.
+// Unlike the port-named service, the slice identity cannot be reused by a new
+// node on the same listening port.
+func (s *Systemd) EmptySnellMeter(ctx context.Context, nodeID int64) error {
+	if nodeID <= 0 {
+		return fmt.Errorf("invalid meter ID")
+	}
+	g, err := s.ControlGroup(ctx, SnellSlice(nodeID))
+	if err != nil {
+		return err
+	}
+	if filepath.Clean(g) != g || strings.Contains(g, "..") {
+		return fmt.Errorf("invalid managed cgroup")
+	}
+	raw, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", g, "cgroup.events"))
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(line) == "populated 0" {
+			return nil
+		}
+	}
+	return fmt.Errorf("retired Snell slice still populated")
+}
+func (s *Systemd) FinalSnellReading(ctx context.Context, nodeID int64) (AccountingReading, error) {
+	if err := s.EmptySnellMeter(ctx, nodeID); err != nil {
+		return AccountingReading{}, err
+	}
+	unit := SnellSlice(nodeID)
+	out, err := s.AccountingSnapshot(ctx, []string{unit})
+	if err != nil {
+		return AccountingReading{}, err
+	}
+	r := out[unit]
+	if !r.Valid {
+		return r, fmt.Errorf("final Snell counter unavailable")
+	}
+	return r, nil
+}
+func (s *Systemd) RemoveSnellMeter(ctx context.Context, nodeID int64) error {
+	if nodeID <= 0 {
+		return fmt.Errorf("invalid meter ID")
+	}
+	unit := SnellSlice(nodeID)
+	if s.IsActive(ctx, unit) {
+		if err := s.EmptySnellMeter(ctx, nodeID); err != nil {
+			return err
+		}
+		if err := s.StopUnits(ctx, []string{unit}); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(s.UnitDir, unit)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return s.DaemonReload(ctx)
 }

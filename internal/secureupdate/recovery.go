@@ -27,10 +27,16 @@ type installedFile struct {
 // recordArchive binds the installed files to authenticated archive bytes. The
 // manifest lives in the verifier's root-owned state, never in the release tree.
 func recordArchive(dir, digest string, data []byte) error {
-	if e := ValidateArchive(data); e != nil {
+	return recordArchiveReader(dir, digest, bytes.NewReader(data))
+}
+func recordArchiveReader(dir, digest string, data io.ReadSeeker) error {
+	if e := validateArchiveReader(data); e != nil {
 		return e
 	}
-	z, e := gzip.NewReader(bytes.NewReader(data))
+	if _, e := data.Seek(0, io.SeekStart); e != nil {
+		return e
+	}
+	z, e := gzip.NewReader(data)
 	if e != nil {
 		return e
 	}

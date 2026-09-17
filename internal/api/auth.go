@@ -116,6 +116,10 @@ func (a *API) login(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	u, err := a.Store.GetUserByName(r.Context(), strings.TrimSpace(c.Username))
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		a.Logger.Warn("login user lookup failed", "err", err)
+		return httpx.E(http.StatusServiceUnavailable, "auth_unavailable", "身份验证暂时不可用，请稍后重试")
+	}
 	if err != nil || !auth.VerifyPassword(u.PasswordHash, c.Password) {
 		return httpx.E(http.StatusUnauthorized, "invalid_credentials", "用户名或密码错误")
 	}

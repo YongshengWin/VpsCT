@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,11 +45,19 @@ func (a *API) agentRoute(pattern string, h httpx.Handler) {
 		}
 		ag, err := a.Store.GetAgentByTokenHash(r.Context(), auth.HashToken(tok))
 		if err != nil {
-			return httpx.ErrUnauthorized
+			if errors.Is(err, store.ErrNotFound) {
+				return httpx.ErrUnauthorized
+			}
+			a.Logger.Warn("agent lookup failed", "err", err)
+			return httpx.E(503, "auth_unavailable", "设备身份验证暂时不可用")
 		}
 		srv, err := a.Store.GetServer(r.Context(), ag.ServerID)
 		if err != nil {
-			return httpx.ErrUnauthorized
+			if errors.Is(err, store.ErrNotFound) {
+				return httpx.ErrUnauthorized
+			}
+			a.Logger.Warn("agent server lookup failed", "err", err)
+			return httpx.E(503, "auth_unavailable", "设备身份验证暂时不可用")
 		}
 		ctx := context.WithValue(r.Context(), agentKey, &agentCtx{Agent: ag, Server: srv})
 		return h(w, r.WithContext(ctx))
@@ -100,6 +109,23 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if len(hb.Ports) > 4096 || len(hb.Diagnostics.Cores) > 32 || len(hb.Diagnostics.Certs) > 2048 || len(hb.Diagnostics.Warnings) > 64 || len(hb.Diagnostics.RecentErrors) > 64 || len(hb.ApplyError) > 4096 || len(hb.Version) > 128 || len(hb.Epoch) > 256 {
 		return httpx.BadRequest("设备上报超出限额")
 	}
+	if hb.FinalMeters != nil {
+		if err := hb.FinalMeters.Validate(); err != nil {
+			return httpx.BadRequest("最终计量快照无效")
+		}
+		result, err := a.Traffic.Ingest(r.Context(), ac.Server, hb)
+		if err != nil {
+			return err
+		}
+		if len(result.Shares) > 0 {
+			if err = a.Shares.EvaluateDeltas(r.Context(), result.Shares); err != nil {
+				a.Logger.Warn("final meter quota evaluation", "err", err)
+			}
+		}
+		a.checkServerQuota(r.Context(), ac.Server)
+		httpx.JSON(w, 200, agentproto.HeartbeatResponse{FinalMeterVersion: 1, FinalMeterAck: result.FinalMeterAck, MeteringVersion: 1, ServerTime: a.Store.Now()})
+		return nil
+	}
 	ctx := r.Context()
 	ipv4, ipv6 := hb.PublicIPv4, hb.PublicIPv6
 	if ipv4 == "" && ipv6 == "" {
@@ -143,7 +169,7 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	a.checkServerQuota(ctx, ac.Server)
 	a.checkDiagnostics(ctx, ac.Server, hb.Diagnostics)
 
-	resp := agentproto.HeartbeatResponse{MeteringVersion: 1, ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
+	resp := agentproto.HeartbeatResponse{FinalMeterVersion: 1, MeteringVersion: 1, ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
 	if ds, err := a.Store.LatestDesiredState(ctx, ac.Server.ID); err == nil {
 		resp.DesiredRevision, resp.DesiredHash = ds.Revision, ds.Hash
 		if d, err := desired.Load(ds); err == nil {
@@ -263,14 +289,18 @@ func (a *API) agentApplyReport(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	st := domain.DesiredApplied
-	if rep.Status != "applied" {
+	if rep.Status == "pending" {
+		st = domain.DesiredPending
+	} else if rep.Status != "applied" {
 		st = domain.DesiredFailed
 	}
 	if err := a.Store.MarkDesiredState(r.Context(), ac.Server.ID, rep.Revision, st, rep.Error); err != nil {
 		return err
 	}
-	if err := a.Store.SetAgentApplied(r.Context(), ac.Agent.ID, rep.Revision, rep.Hash, rep.Error); err != nil {
-		return err
+	if st != domain.DesiredPending {
+		if err := a.Store.SetAgentApplied(r.Context(), ac.Agent.ID, rep.Revision, rep.Hash, rep.Error); err != nil {
+			return err
+		}
 	}
 	if st == domain.DesiredFailed && a.Notify != nil {
 		a.Notify.SendDedup(r.Context(), fmt.Sprintf("apply:%d", ac.Server.ID), time.Hour, fmt.Sprintf("🔴 %s 配置下发失败 (rev %d): %s", ac.Server.Name, rep.Revision, rep.Error))

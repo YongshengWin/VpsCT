@@ -227,6 +227,22 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	if !sd.IsActive(ctx, singboxUnit) {
 		t.Fatal("previous service not restored")
 	}
+	// A finished installation survives coordinator restart even when the
+	// desired configuration is unchanged. Every affected core must activate.
+	nodes[0].ListenPort = 21001
+	if err := markActivation(driver.bin()); err != nil {
+		t.Fatal(err)
+	}
+	driver = NewSingBox(paths, sd)
+	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || !changed {
+		t.Fatal("durable activation missed", changed, err)
+	}
+	if activationPending(driver.bin()) {
+		t.Fatal("successful activation marker retained")
+	}
+	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || changed {
+		t.Fatal("activation repeated", changed, err)
+	}
 }
 
 func TestSnellMeterSurvivesRestart(t *testing.T) {
@@ -304,5 +320,26 @@ func TestSnellMeterSurvivesRestart(t *testing.T) {
 	}
 	if after[key].Rx < stopped[key].Rx || after[key].Tx < stopped[key].Tx {
 		t.Fatal("restart lost traffic")
+	}
+	if _, err := sd.FinalSnellReading(ctx, n.NodeID); err == nil {
+		t.Fatal("populated slice accepted for final settlement")
+	}
+	if err := sd.StopUnits(ctx, []string{unit}); err != nil {
+		t.Fatal(err)
+	}
+	final, err := sd.FinalSnellReading(ctx, n.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Rx < stopped[key].Rx || final.Tx < stopped[key].Tx {
+		t.Fatal("final snapshot lost traffic")
+	}
+	for i := 0; i < 2; i++ {
+		if err := sd.RemoveSnellMeter(ctx, n.NodeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if sd.IsActive(ctx, key) {
+		t.Fatal("retired slice still active")
 	}
 }

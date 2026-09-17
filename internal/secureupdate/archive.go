@@ -12,7 +12,13 @@ import (
 
 // ValidateArchive bounds extraction even when an archive is correctly signed.
 func ValidateArchive(data []byte) error {
-	z, e := gzip.NewReader(bytes.NewReader(data))
+	return validateArchiveReader(bytes.NewReader(data))
+}
+func validateArchiveReader(data io.ReadSeeker) error {
+	if _, e := data.Seek(0, io.SeekStart); e != nil {
+		return e
+	}
+	z, e := gzip.NewReader(data)
 	if e != nil {
 		return e
 	}
