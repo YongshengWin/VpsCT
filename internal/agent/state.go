@@ -5,6 +5,7 @@ package agent
 import (
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/safehttp"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -21,10 +22,29 @@ type MeterIdentity struct {
 }
 
 type State struct {
-	Retirement        *Retirement           `json:"retirement,omitempty"`
-	LegacySettled     bool                  `json:"legacy_settled,omitempty"`
-	PendingSettlement *agentproto.Heartbeat `json:"pending_settlement,omitempty"`
-	MeterNodes        []MeterIdentity       `json:"meter_nodes,omitempty"`
+	ListenBindingVersion    int                              `json:"listen_binding_version,omitempty"`
+	ForwardDNSVersion       int                              `json:"forward_dns_version,omitempty"`
+	ForwardPrivateVersion   int                              `json:"forward_private_version,omitempty"`
+	ForwardTransportVersion int                              `json:"forward_transport_version,omitempty"`
+	NetworkForwardVersion   int                              `json:"network_forward_version,omitempty"`
+	ForwardNonce            string                           `json:"forward_nonce,omitempty"`
+	ForwardMeters           []agentproto.ForwardMeterRule    `json:"forward_meters,omitempty"`
+	ForwardPending          *forwardPending                  `json:"forward_pending,omitempty"`
+	ForwardAckRevision      int64                            `json:"forward_ack_revision,omitempty"`
+	NetworkBindingVersion   int                              `json:"network_binding_version,omitempty"`
+	NetworkSSHVersion       int                              `json:"network_ssh_version,omitempty"`
+	NetworkWireGuardVersion int                              `json:"network_wireguard_version,omitempty"`
+	MitaVersion             int                              `json:"mita_version,omitempty"`
+	NetworkEgressVersion    int                              `json:"network_egress_version,omitempty"`
+	NetworkDesiredRevision  int64                            `json:"network_desired_revision,omitempty"`
+	NetworkDesiredHash      string                           `json:"network_desired_hash,omitempty"`
+	NetworkBillingPolicy    *agentproto.NetworkBillingPolicy `json:"network_billing_policy,omitempty"`
+	NetworkBillingRequested *agentproto.NetworkBillingPolicy `json:"network_billing_requested,omitempty"`
+	NetworkBillingPending   *agentproto.NetworkBillingSwitch `json:"network_billing_pending,omitempty"`
+	Retirement              *Retirement                      `json:"retirement,omitempty"`
+	LegacySettled           bool                             `json:"legacy_settled,omitempty"`
+	PendingSettlement       *agentproto.Heartbeat            `json:"pending_settlement,omitempty"`
+	MeterNodes              []MeterIdentity                  `json:"meter_nodes,omitempty"`
 
 	MeteringV1      bool      `json:"metering_v1,omitempty"`
 	ServerURL       string    `json:"server_url"`
@@ -64,7 +84,56 @@ func LoadState(dir string) (*State, error) {
 	if s.ServerURL == "" || s.AgentToken == "" {
 		return nil, errors.New("state file incomplete; run `ctlvps-agent enroll` first")
 	}
+	if s.NetworkDesiredRevision < 0 || (s.NetworkDesiredRevision == 0) != (s.NetworkDesiredHash == "") {
+		return nil, errors.New("network desired-state revision is invalid")
+	}
+	if s.NetworkDesiredRevision > 0 {
+		digest, err := hex.DecodeString(s.NetworkDesiredHash)
+		if err != nil || len(digest) != 32 {
+			return nil, errors.New("network desired-state digest is invalid")
+		}
+		// Pre-release binding agents persisted intent before an explicit
+		// version field existed. They already require the binding contract.
+		if s.NetworkBindingVersion == 0 {
+			s.NetworkBindingVersion = agentproto.NetworkBindingVersion
+		}
+	}
+	if s.NetworkBindingVersion != 0 && s.NetworkBindingVersion != agentproto.NetworkBindingVersion {
+		return nil, errors.New("unsupported persisted network binding version")
+	}
+	for _, version := range []int{s.ListenBindingVersion, s.ForwardDNSVersion, s.ForwardPrivateVersion, s.ForwardTransportVersion} {
+		if version < 0 || version > 1 {
+			return nil, errors.New("unsupported persisted network feature version")
+		}
+	}
+	if s.NetworkEgressVersion != 0 && (s.NetworkEgressVersion != agentproto.NetworkEgressVersion || s.NetworkBindingVersion != agentproto.NetworkBindingVersion) {
+		return nil, errors.New("unsupported persisted network egress version")
+	}
+	if s.NetworkWireGuardVersion != 0 && (s.NetworkWireGuardVersion != agentproto.NetworkWireGuardVersion || s.NetworkEgressVersion != agentproto.NetworkEgressVersion) {
+		return nil, errors.New("unsupported persisted WireGuard version")
+	}
+	if s.MitaVersion != 0 && s.MitaVersion != 1 {
+		return nil, errors.New("unsupported persisted mita capability")
+	}
+	if s.NetworkSSHVersion != 0 && (s.NetworkSSHVersion != agentproto.NetworkSSHVersion || s.NetworkEgressVersion != agentproto.NetworkEgressVersion) {
+		return nil, errors.New("unsupported persisted SSH version")
+	}
+	if s.NetworkForwardVersion != 0 && (s.NetworkForwardVersion != agentproto.NetworkForwardVersion || s.NetworkBindingVersion != agentproto.NetworkBindingVersion) {
+		return nil, errors.New("unsupported persisted forwarding version")
+	}
+	if s.ForwardPending != nil {
+		if err := s.ForwardPending.Receipt.Validate(); err != nil {
+			return nil, err
+		}
+	}
 	return &s, nil
+}
+
+func (s *State) desiredBoundary() (int64, string) {
+	if s.NetworkDesiredRevision >= s.AppliedRevision && s.NetworkDesiredRevision > 0 {
+		return s.NetworkDesiredRevision, s.NetworkDesiredHash
+	}
+	return s.AppliedRevision, s.AppliedHash
 }
 
 // Save writes the state atomically with restrictive permissions.

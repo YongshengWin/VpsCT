@@ -38,6 +38,8 @@ func TestBulkRegenerateNodes(t *testing.T) {
 	revoked := n1
 	revoked.ID = 0
 	revoked.Name = "revoked"
+	// A revoked node retains its own listener reservation until cleanup.
+	revoked.ListenPort, revoked.Port = 55001, 55001
 	revoked.Revoked = true
 	revoked = add(revoked)
 	chain := add(domain.Node{Name: "chain", Source: domain.NodeChain, Server: n1.Server, Port: n1.Port, Protocol: n1.Protocol, Params: n1.Params, ChainFrontNodeID: &n2.ID})

@@ -82,7 +82,7 @@ func fetchTo(ctx context.Context, in downloadRequest, dst io.Writer) (int64, err
 	c := safehttp.New(safehttp.Options{})
 	if in.Controller {
 		u, e := url.Parse(in.URL)
-		if e != nil || u.Scheme != "https" || u.User != nil || !strings.HasPrefix(u.Path, "/dl/agent/linux-") {
+		if e != nil || u.Scheme != "https" || u.User != nil || !(strings.HasPrefix(u.Path, "/dl/agent/linux-") || u.Path == "/dl/core/sing-box/linux-amd64" || u.Path == "/dl/core/sing-box/linux-arm64") {
 			return 0, errors.New("invalid controller download")
 		}
 		c = &http.Client{Timeout: 3 * time.Minute, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 32 << 10}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

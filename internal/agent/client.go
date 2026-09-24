@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/networkconfig"
 )
 
 // Client talks to ctlvpsd.
@@ -73,6 +74,14 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		return err
 	}
 	req.Header.Set("User-Agent", "ctlvps-agent/"+c.Version)
+	if path == agentproto.PathDesired && runtime.GOOS == "linux" {
+		req.Header.Set(agentproto.NetworkBindingHeader, fmt.Sprint(agentproto.NetworkBindingVersion))
+		req.Header.Set(agentproto.NetworkWireGuardHeader, fmt.Sprint(agentproto.NetworkWireGuardVersion))
+		req.Header.Set(networkconfig.MitaHeader, fmt.Sprint(networkconfig.MitaVersion))
+		req.Header.Set(agentproto.NetworkSSHHeader, fmt.Sprint(agentproto.NetworkSSHVersion))
+		req.Header.Set(agentproto.NetworkEgressHeader, fmt.Sprint(agentproto.NetworkEgressVersion))
+		req.Header.Set(agentproto.NetworkForwardHeader, fmt.Sprint(agentproto.NetworkForwardVersion))
+	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 		if gz {

@@ -15,14 +15,11 @@ import (
 // NodeTable is separate from legacy listen-port counters. Marks are reserved
 // for VpsCT and never restored to packet marks (which could affect routing).
 const NodeTable = "ctlvps_nodes"
-const MarkMask uint32 = 0xff000000
-const MarkPrefix uint32 = 0x43000000
+const MarkMask = agentproto.NodeMarkMask
+const MarkPrefix = agentproto.NodeMarkPrefix
 
 func NodeMark(id int64) (uint32, error) {
-	if id <= 0 || id > 0xffffff {
-		return 0, fmt.Errorf("node ID outside accounting mark range: %d", id)
-	}
-	return MarkPrefix | uint32(id), nil
+	return agentproto.NodeMark(id)
 }
 
 // NodeRules is one atomic nft transaction. Named counters survive every rule
@@ -60,6 +57,10 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct direction original meta l4proto { tcp, udp } th dport %d ct mark & 0x%08x != 0x%08x ct mark set 0x%08x\n", NodeTable, n.ListenPort, MarkMask, MarkPrefix, mark)
 	}
 	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, MarkPrefix)
+	// Bootstrap sockets are opened by root for an unprivileged DNS parser.
+	// Proxy-owned sockets may not use this namespace to bypass a pending lease.
+	fmt.Fprintf(&b, "add rule inet %s output meta mark & 0x%08x == 0x%08x meta skuid != 0 drop\n", NodeTable, MarkMask, agentproto.BootstrapMarkPrefix)
+	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, agentproto.BootstrapMarkPrefix)
 	for _, n := range nodes {
 		if n.Core != "singbox" || n.Retired {
 			continue
@@ -74,11 +75,19 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 			fmt.Fprintf(&b, "add rule inet %s output ct mark 0x%08x drop\n", NodeTable, mark)
 		}
 		fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark 0x%08x counter name n%d_tx return\n", NodeTable, mark, n.NodeID)
+		if n.Network != nil && n.Network.HasTransport() {
+			bootstrap, _ := agentproto.BootstrapMark(n.NodeID)
+			fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct mark 0x%08x counter name n%d_rx%s\n", NodeTable, bootstrap, n.NodeID, action)
+			fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark 0x%08x counter name n%d_tx%s\n", NodeTable, bootstrap, n.NodeID, action)
+		}
 	}
 	// Unknown/retired marks cannot escape once their per-node rules disappear.
 	// These two constant rules replace an ever-growing set of retired drop rules.
 	fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct mark & 0x%08x == 0x%08x drop\n", NodeTable, MarkMask, MarkPrefix)
 	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct mark & 0x%08x == 0x%08x drop\n", NodeTable, MarkMask, MarkPrefix)
+	for _, chain := range []string{"input", "output"} {
+		fmt.Fprintf(&b, "add rule inet %s %s ct mark & 0x%08x == 0x%08x drop\n", NodeTable, chain, MarkMask, agentproto.BootstrapMarkPrefix)
+	}
 	return b.String(), nil
 }
 
@@ -157,6 +166,10 @@ func (m *Manager) NodesExist(ctx context.Context) bool {
 
 // A packet mark must not accidentally select an existing policy-routing table.
 func checkMarkRoutes(ctx context.Context) error {
+	return checkMarkPrefixes(ctx, []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix})
+}
+
+func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
 	for _, family := range []string{"-4", "-6"} {
 		raw, err := exec.CommandContext(ctx, "ip", family, "-j", "rule", "show").Output()
 		if err != nil {
@@ -183,8 +196,10 @@ func checkMarkRoutes(ctx context.Context) error {
 					return e
 				}
 			}
-			if (mark^MarkPrefix)&mask&MarkMask == 0 {
-				return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+			for _, prefix := range prefixes {
+				if (mark^prefix)&mask&MarkMask == 0 {
+					return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+				}
 			}
 		}
 	}

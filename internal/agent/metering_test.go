@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/networkconfig"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -90,5 +91,19 @@ esac
 	}
 	if _, err = os.Stat(filepath.Join(dir, "stopped")); err != nil {
 		t.Fatal("successful cutover restarted legacy service")
+	}
+	// Binding fences rely on modern per-node marks. A failed migration must
+	// not restart unmarked legacy services beneath a newly requested binding.
+	if err = os.Remove(filepath.Join(dir, "stopped")); err != nil {
+		t.Fatal(err)
+	}
+	ds.Nodes[0].Network = &agentproto.NodeNetworkSpec{Policy: networkconfig.Node{ListenMode: "all", AdvertiseMode: "inherit", OnUnavailable: "block"}}
+	restore, err = a.prepareMetering(context.Background(), ds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore(false)
+	if _, err = os.Stat(filepath.Join(dir, "stopped")); err != nil {
+		t.Fatal("failed guarded migration revived an unmarked legacy process")
 	}
 }

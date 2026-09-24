@@ -26,12 +26,14 @@ var allMarker = regexp.MustCompile(`^\{\{\s*all(?:\|(.*?))?\s*\}\}$|^__ALL(?:_PR
 // expandAllMarkers replaces {{all}} / {{all|regex}} tokens with generated node names.
 func expandAllMarkers(items, allNames []string) []string {
 	var out []string
+	hasMarker := false
 	for _, item := range items {
 		m := allMarker.FindStringSubmatch(strings.TrimSpace(item))
 		if m == nil {
 			out = append(out, item)
 			continue
 		}
+		hasMarker = true
 		var re *regexp.Regexp
 		if len(m) > 1 && m[1] != "" {
 			re, _ = regexp.Compile(m[1])
@@ -44,6 +46,10 @@ func expandAllMarkers(items, allNames []string) []string {
 		}
 	}
 	if len(out) == 0 {
+		// A missing region must not silently bypass usable subscription nodes.
+		if hasMarker && len(allNames) > 0 {
+			return append([]string(nil), allNames...)
+		}
 		return []string{"DIRECT"}
 	}
 	return out
@@ -51,6 +57,7 @@ func expandAllMarkers(items, allNames []string) []string {
 
 // RenderMihomo produces a Clash/mihomo YAML config.
 func RenderMihomo(b *Bundle) (*Rendered, error) {
+	b, omitted := mihomoCompatibleBundle(b)
 	tpl := builtinMihomoTemplate
 	if b.Template != nil && b.Template.Kind == "mihomo" && strings.TrimSpace(b.Template.Content) != "" {
 		tpl = b.Template.Content
@@ -112,6 +119,37 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 			setMapKey(root, "rule-providers", &rp)
 		}
 	}
+	// Templates may contain explicit references as well as {{all}} markers.
+	if groups := getMapKey(root, "proxy-groups"); groups != nil {
+		for _, group := range groups.Content {
+			if members := getMapKey(group, "proxies"); members != nil && members.Kind == yaml.SequenceNode {
+				kept := members.Content[:0]
+				for _, member := range members.Content {
+					if !omitted[member.Value] {
+						kept = append(kept, member)
+					}
+				}
+				if len(kept) == 0 {
+					kept = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
+				}
+				members.Content = kept
+			}
+		}
+	}
+	if rules := getMapKey(root, "rules"); rules != nil && rules.Kind == yaml.SequenceNode {
+		kept := rules.Content[:0]
+		for _, rule := range rules.Content {
+			parts := strings.Split(rule.Value, ",")
+			i := len(parts) - 1
+			if i > 0 && strings.TrimSpace(parts[i]) == "no-resolve" {
+				i--
+			}
+			if !omitted[strings.TrimSpace(parts[i])] {
+				kept = append(kept, rule)
+			}
+		}
+		rules.Content = kept
+	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
@@ -120,6 +158,47 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 	}
 	enc.Close()
 	return &Rendered{Body: buf.Bytes(), ContentType: "text/yaml; charset=utf-8", Filename: b.Name + ".yaml", Format: FormatMihomo}, nil
+}
+
+// Filter only the rendered copy: the node library and other formats keep their
+// original versions. Version zero/omitted uses mihomo's default.
+func mihomoCompatibleBundle(b *Bundle) (*Bundle, map[string]bool) {
+	omitted := map[string]bool{}
+	all := append([]proxynode.Proxy{}, b.Proxies...)
+	via := map[string]string{}
+	for _, c := range b.Chains {
+		all = append(all, c.Proxy)
+		via[c.Proxy.Name] = c.Via
+	}
+	for _, p := range all {
+		if p.Type == "snell" && (p.Int("version") < 0 || p.Int("version") > 5) {
+			omitted[p.Name] = true
+		}
+	}
+	// Remove dependent chains too, regardless of their ordering.
+	for changed := true; changed; {
+		changed = false
+		for _, p := range all {
+			if !omitted[p.Name] && (omitted[via[p.Name]] || omitted[p.Str("dialer-proxy")]) {
+				omitted[p.Name] = true
+				changed = true
+			}
+		}
+	}
+	out := *b
+	out.Proxies = nil
+	out.Chains = nil
+	for _, p := range b.Proxies {
+		if !omitted[p.Name] {
+			out.Proxies = append(out.Proxies, p)
+		}
+	}
+	for _, c := range b.Chains {
+		if !omitted[c.Proxy.Name] {
+			out.Chains = append(out.Chains, c)
+		}
+	}
+	return &out, omitted
 }
 
 func expandGroupMarkers(groups *yaml.Node, allNames []string) {
@@ -132,6 +211,7 @@ func expandGroupMarkers(groups *yaml.Node, allNames []string) {
 			continue
 		}
 		var expanded []*yaml.Node
+		hasMarker := false
 		for _, item := range list.Content {
 			if item.Kind != yaml.ScalarNode {
 				expanded = append(expanded, item)
@@ -142,6 +222,7 @@ func expandGroupMarkers(groups *yaml.Node, allNames []string) {
 				expanded = append(expanded, item)
 				continue
 			}
+			hasMarker = true
 			var re *regexp.Regexp
 			if len(m) > 1 && m[1] != "" {
 				re, _ = regexp.Compile(m[1])
@@ -154,7 +235,13 @@ func expandGroupMarkers(groups *yaml.Node, allNames []string) {
 			}
 		}
 		if len(expanded) == 0 {
-			expanded = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
+			if hasMarker && len(allNames) > 0 {
+				for _, name := range allNames {
+					expanded = append(expanded, &yaml.Node{Kind: yaml.ScalarNode, Value: name})
+				}
+			} else {
+				expanded = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
+			}
 		}
 		list.Content = expanded
 	}

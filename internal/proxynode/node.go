@@ -11,6 +11,9 @@ import (
 	"strings"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/mieruconfig"
+	"ctlvps/internal/sshconfig"
+	"ctlvps/internal/wgconfig"
 )
 
 // Proxy is an in-memory, Clash-shaped node: name/type/server/port plus a
@@ -81,9 +84,29 @@ func FromClashMap(m map[string]any) (Proxy, error) {
 		case "name", "type", "server", "port":
 			continue
 		}
-		if proxyFields[k] {
+		if p.Type == "ssh" && !sshconfig.Field(k) {
+			return p, fmt.Errorf("SSH 节点包含不支持的字段")
+		}
+		if p.Type == "wireguard" && !wgconfig.Field(k) || p.Type == "mieru" && !mieruconfig.Field(k) {
+			return p, fmt.Errorf("%s 节点包含不支持的字段", p.Type)
+		}
+		if proxyFields[k] || (p.Type == "ssh" && sshconfig.Field(k)) || p.Type == "wireguard" && wgconfig.Field(k) || p.Type == "mieru" && mieruconfig.Field(k) {
 			p.Params[k] = normalizeYAML(v)
 		}
+	}
+	if p.Type == "wireguard" {
+		c, err := wgconfig.Decode(p.Params)
+		if err != nil {
+			return p, err
+		}
+		p.Params = c.Params()
+	}
+	if p.Type == "mieru" {
+		c, err := mieruconfig.Decode(p.Params)
+		if err != nil {
+			return p, err
+		}
+		p.Params = c.Params()
 	}
 	if err := validateProxy(p); err != nil {
 		return p, err

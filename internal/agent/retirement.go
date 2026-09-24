@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/core"
 )
 
 // MeterRule holds only the non-secret accounting configuration needed to
@@ -60,7 +61,7 @@ func (h retirementHost) FinalRead(ctx context.Context, nodes []MeterIdentity) ([
 			c.Epoch = a.meterEpoch(n)
 			c.FromZero = true
 			out = append(out, c)
-		} else if n.Core == "snell" {
+		} else if core.IsStandalone(n.Core) {
 			r, err := a.Systemd.FinalSnellReading(ctx, n.NodeID)
 			if err != nil {
 				return nil, err
@@ -73,6 +74,11 @@ func (h retirementHost) FinalRead(ctx context.Context, nodes []MeterIdentity) ([
 	return out, nil
 }
 func (h retirementHost) Clean(ctx context.Context, p *Retirement) error {
+	release, err := lockConfiguration()
+	if err != nil {
+		return err
+	}
+	defer release()
 	var remaining []agentproto.NodeSpec
 	for _, r := range p.Remaining {
 		remaining = append(remaining, r.spec())
@@ -87,7 +93,7 @@ func (h retirementHost) Clean(ctx context.Context, p *Retirement) error {
 		return err
 	}
 	for _, n := range p.Nodes {
-		if n.Core == "snell" {
+		if core.IsStandalone(n.Core) {
 			if err := h.a.Systemd.RemoveSnellMeter(ctx, n.NodeID); err != nil {
 				return err
 			}

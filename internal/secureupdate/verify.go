@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentnet"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 	"github.com/theupdateframework/go-tuf/v2/metadata/config"
 	"github.com/theupdateframework/go-tuf/v2/metadata/updater"
@@ -33,19 +34,21 @@ const StateDir = "/var/lib/ctlvps-security"
 var ErrUnconfigured = errors.New("本机自定义安全策略不可读或无效，请检查权限和内容")
 
 type Policy struct {
-	ChecksumOnly    bool                   `json:"-"`
-	MaxNodes        int                    `json:"max_nodes,omitempty"`
-	MaxMemoryMB     int                    `json:"max_memory_mb,omitempty"`
-	ACMEDomains     []string               `json:"acme_domains,omitempty"`
-	Schema          int                    `json:"schema"`
-	PrivateMetadata bool                   `json:"private_metadata,omitempty"`
-	PauseConfig     bool                   `json:"pause_config,omitempty"`
-	PrivateNodes    []int64                `json:"private_nodes,omitempty"`
-	MetadataURL     string                 `json:"metadata_url"`
-	RootFile        string                 `json:"root_file"`
-	MinEpoch        map[string]int64       `json:"min_epoch"`
-	Actions         []string               `json:"actions"`
-	Certificates    map[string]Certificate `json:"certificates,omitempty"`
+	ChecksumOnly    bool                           `json:"-"`
+	MaxNodes        int                            `json:"max_nodes,omitempty"`
+	MaxMemoryMB     int                            `json:"max_memory_mb,omitempty"`
+	ACMEDomains     []string                       `json:"acme_domains,omitempty"`
+	Schema          int                            `json:"schema"`
+	PrivateMetadata bool                           `json:"private_metadata,omitempty"`
+	PauseConfig     bool                           `json:"pause_config,omitempty"`
+	PrivateNodes    []int64                        `json:"private_nodes,omitempty"`
+	TransportGrants []networkconfig.TransportGrant `json:"transport_grants,omitempty"`
+	ForwardGrants   []networkconfig.ForwardGrant   `json:"forward_grants,omitempty"`
+	MetadataURL     string                         `json:"metadata_url"`
+	RootFile        string                         `json:"root_file"`
+	MinEpoch        map[string]int64               `json:"min_epoch"`
+	Actions         []string                       `json:"actions"`
+	Certificates    map[string]Certificate         `json:"certificates,omitempty"`
 }
 type Certificate struct {
 	Cert string `json:"cert"`
@@ -106,13 +109,27 @@ func LoadPolicy() (Policy, error) {
 	if e != nil {
 		return p, ErrUnconfigured
 	}
+	return decodePolicy(b)
+}
+
+func decodePolicy(b []byte) (Policy, error) {
+	var p Policy
 	d := json.NewDecoder(strings.NewReader(string(b)))
 	d.DisallowUnknownFields()
-	if e = d.Decode(&p); e != nil {
+	if e := d.Decode(&p); e != nil {
 		return p, e
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return Policy{}, ErrUnconfigured
 	}
 	if p.Schema != 1 {
 		return p, ErrUnconfigured
+	}
+	if err := networkconfig.ValidateTransportGrants(p.TransportGrants); err != nil {
+		return Policy{}, ErrUnconfigured
+	}
+	if err := networkconfig.ValidateForwardGrants(p.ForwardGrants); err != nil {
+		return Policy{}, ErrUnconfigured
 	}
 	if p.MetadataURL == "" && p.RootFile == "" {
 		p.ChecksumOnly = true
@@ -194,7 +211,7 @@ func (v *Verifier) VerifyReader(ctx context.Context, component, version, arch st
 	if e != nil {
 		return e
 	}
-	if component != "agent" && component != "controller" && component != "sing-box" && component != "snell-server" && component != "installer" && component != "verifier" {
+	if component != "agent" && component != "controller" && component != "sing-box" && component != "snell-server" && component != "mita" && component != "installer" && component != "verifier" {
 		return errors.New("未知更新组件")
 	}
 	if e := os.MkdirAll(v.Dir, 0700); e != nil {

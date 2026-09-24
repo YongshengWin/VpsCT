@@ -82,6 +82,17 @@ func (a *API) security(next http.Handler) http.Handler {
 				break
 			}
 		}
+		// A trusted adjacent proxy must overwrite this header, never append
+		// caller-supplied values. Only a single authority is supported.
+		requestHost := r.Host
+		forwardedHosts := r.Header.Values("X-Forwarded-Host")
+		if trusted && a.Config.SiteURL != "" && len(forwardedHosts) > 0 {
+			requestHost = ""
+			if len(forwardedHosts) == 1 {
+				requestHost = forwardedHosts[0]
+			}
+		}
+		r.Header.Del("X-Forwarded-Host")
 		if !trusted {
 			r.Header.Del("X-Forwarded-For")
 			r.Header.Del("X-Real-IP")
@@ -123,10 +134,13 @@ func (a *API) security(next http.Handler) http.Handler {
 			expected = scheme + "://" + r.Host
 		}
 		target, err := url.Parse(expected)
-		if err != nil || target.Host == "" || (!strings.EqualFold(target.Host, r.Host) && r.URL.Path != "/healthz") {
+		if err != nil || target.Host == "" || (!sameSiteHost(target, requestHost) && r.URL.Path != "/healthz") {
 			a.securityEvent(r, "host_denied")
-			httpx.WriteError(w, httpx.E(421, "invalid_host", "请求域名与站点配置不一致"))
+			httpx.WriteError(w, httpx.E(421, "invalid_host", "请求域名与站点配置不一致，请检查 CTLVPS_SITE_URL 与反向代理 Host 设置；Nginx 请使用 proxy_set_header Host $http_host;"))
 			return
+		}
+		if r.URL.Path != "/healthz" {
+			r.Host = requestHost
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") && isWrite(r) {
 			origin, e := url.Parse(r.Header.Get("Origin"))
@@ -206,6 +220,28 @@ func (a *API) security(next http.Handler) http.Handler {
 	})
 }
 func randomID() []byte { b := make([]byte, 12); _, _ = rand.Read(b); return b }
+
+// sameSiteHost compares authorities using the configured public scheme, not
+// the proxy's HTTP transport or an untrusted forwarded-proto header.
+func sameSiteHost(target *url.URL, authority string) bool {
+	if authority == "" || strings.ContainsAny(authority, "/\\@?#%, \t\r\n") || strings.HasSuffix(authority, ":") {
+		return false
+	}
+	u, err := url.Parse(target.Scheme + "://" + authority)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return false
+	}
+	if strings.Contains(u.Hostname(), ":") && !strings.HasPrefix(authority, "[") {
+		return false
+	}
+	if strings.HasPrefix(authority, "[") {
+		ip, err := netip.ParseAddr(u.Hostname())
+		if err != nil || !ip.Is6() {
+			return false
+		}
+	}
+	return safehttp.Origin(u) == safehttp.Origin(target)
+}
 
 // Fixed reason keys and a small budget keep attack logging bounded. Never log
 // raw URLs, origin values, cookies, request bodies or credentials.

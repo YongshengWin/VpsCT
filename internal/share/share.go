@@ -40,6 +40,9 @@ func (m *Manager) event(ctx context.Context, sh domain.Share, kind, detail strin
 
 // Create persists a share, provisions its nodes and subscription.
 func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) {
+	if err := m.Store.ValidateShareNetwork(ctx, sh.Targets); err != nil {
+		return "", err
+	}
 	if strings.TrimSpace(sh.Name) == "" {
 		return "", errors.New("名称不能为空")
 	}
@@ -94,6 +97,9 @@ func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) 
 
 // Update saves edits and reconciles nodes.
 func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
+	if err := m.Store.ValidateShareNetwork(ctx, sh.Targets); err != nil {
+		return err
+	}
 	prev, err := m.Store.GetShare(ctx, sh.ID)
 	if err != nil {
 		return err
@@ -186,7 +192,8 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 			if sh.UserID != nil {
 				node.OwnerUserID = *sh.UserID
 			}
-			if err := m.Store.CreateNode(ctx, &node); err != nil {
+			node.Network = t.Network
+			if err := m.Store.CreateShareNode(ctx, &node); err != nil {
 				return err
 			}
 			affected[t.ServerID] = true

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>请在订阅客户端中使用 · VpsCT</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f5f6f8; --card: #fff; --text: #1a1d24; --muted: #717681; --line: #eceef1; --orange: #f27527; --tint: #fff3e9; --step: #f8f9fb; --peach: #fae7db; --lavender: #ece8f8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; min-height: 100svh; display: grid; place-items: center; padding: 40px 20px; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; -webkit-font-smoothing: antialiased; }
+    body::before { content: ""; position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at 12% 8%, var(--peach), transparent 48%), radial-gradient(ellipse at 90% 95%, var(--lavender), transparent 48%); }
+    .page { position: relative; width: min(100%, 480px); }
+    .brand { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 28px; }
+    .brand-name { font-size: 22px; font-weight: 750; letter-spacing: -.8px; }
+    .brand-name span { color: var(--orange); }
+    .card { padding: 40px 32px 28px; background: var(--card); border: 1px solid var(--line); border-radius: 28px; box-shadow: 0 20px 70px -28px #28203524, 0 2px 8px #28203503; text-align: center; }
+    .symbol { width: 72px; height: 72px; display: grid; place-items: center; margin: 0 auto 25px; border: 1px solid #f275271a; border-radius: 23px; color: var(--orange); background: var(--tint); }
+    .eyebrow { margin: 0 0 10px; color: var(--orange); font-size: 12px; font-weight: 600; letter-spacing: 2px; }
+    h1 { margin: 0; font-size: 25px; font-weight: 650; line-height: 1.5; letter-spacing: -.8px; }
+    .description { margin: 13px 0 28px; color: var(--muted); font-size: 14px; line-height: 1.85; }
+    .steps { margin: 0; padding: 22px 8px; list-style: none; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--line); border-radius: 18px; background: var(--step); }
+    .steps li { position: relative; font-size: 13px; font-weight: 500; }
+    .steps li + li::before { content: ""; position: absolute; left: -3px; top: 11px; width: 5px; height: 5px; border-top: 1px solid var(--muted); border-right: 1px solid var(--muted); transform: rotate(45deg); opacity: .45; }
+    .number { display: grid; place-items: center; width: 28px; height: 28px; margin: 0 auto 11px; border: 1px solid var(--line); border-radius: 50%; background: var(--card); color: var(--muted); font: 12px ui-monospace, monospace; }
+    .note { margin: 22px 0 0; font-size: 12px; line-height: 1.8; color: var(--muted); }
+    footer { margin-top: 24px; color: var(--muted); text-align: center; font-size: 11px; letter-spacing: 1px; }
+    @media (max-width: 380px) { body { padding: 28px 16px; } .card { padding: 32px 20px 24px; border-radius: 24px; } h1 { font-size: 22px; } .description { font-size: 13px; } .steps { padding-inline: 4px; } .steps li { font-size: 12px; } }
+    @media (prefers-color-scheme: dark) { :root { --bg: #101216; --card: #1a1d23; --text: #f3f4f6; --muted: #a1a6b0; --line: #2b2e36; --orange: #fa853d; --tint: #32241d; --step: #16191f; --peach: #2b211d; --lavender: #201e30; } .card { box-shadow: 0 24px 72px -24px #0007; } }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="brand" aria-label="VpsCT">
+      <svg width="34" height="34" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="18" fill="var(--orange)"/><path d="M18 21 L32 47 L46 21" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="50" cy="14" r="4.5" fill="#fff" fill-opacity=".85"/></svg>
+      <span class="brand-name" aria-hidden="true">Vps<span>CT</span></span>
+    </header>
+    <main class="card">
+      <div class="symbol" aria-hidden="true">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      </div>
+      <p class="eyebrow">订阅链接</p>
+      <h1>请在订阅客户端中使用</h1>
+      <p class="description">浏览器不提供配置下载。<br>将此链接添加到客户端，即可获取订阅。</p>
+      <ol class="steps" aria-label="添加订阅的步骤">
+        <li><span class="number" aria-hidden="true">01</span>复制链接</li>
+        <li><span class="number" aria-hidden="true">02</span>打开客户端</li>
+        <li><span class="number" aria-hidden="true">03</span>添加并更新</li>
+      </ol>
+      <p class="note">已添加过订阅？直接在客户端中更新即可。</p>
+    </main>
+    <footer>VpsCT · 让连接更简单</footer>
+  </div>
+</body>
+</html>

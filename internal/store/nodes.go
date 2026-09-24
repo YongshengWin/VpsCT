@@ -3,21 +3,28 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/networkconfig"
 )
 
-const nodeCols = `id, name, protocol, server, port, params, server_params, source, server_id, listen_port, core, share_id, external_sub_id, chain_front_node_id, enabled, owner_user_id, tags, sort_order, revoked, created_at, updated_at`
+const nodeCols = `id, name, protocol, server, port, params, server_params, source, server_id, listen_port, core, share_id, external_sub_id, chain_front_node_id, enabled, owner_user_id, tags, sort_order, revoked, created_at, updated_at,
+ (SELECT policy FROM node_networks WHERE node_id=nodes.id),
+ (SELECT revision FROM node_networks WHERE node_id=nodes.id)`
 
 func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
 	var n domain.Node
 	var params, serverParams, tags, created, updated string
 	var serverID, shareID, extID, chainID sql.NullInt64
 	var enabled, revoked int
+	var network sql.NullString
+	var networkRevision sql.NullInt64
 	if err := sc.Scan(&n.ID, &n.Name, &n.Protocol, &n.Server, &n.Port, s.scanSecret("nodes.params", &params), s.scanSecret("nodes.server_params", &serverParams), &n.Source, &serverID, &n.ListenPort, &n.Core,
-		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated); err != nil {
+		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated, &network, &networkRevision); err != nil {
 		return n, err
 	}
 	n.Params = rawOrEmpty(params)
@@ -31,6 +38,16 @@ func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error
 	n.Tags = jsonList[string](tags)
 	n.CreatedAt = parseTime(created)
 	n.UpdatedAt = parseTime(updated)
+	n.NetworkRevision = networkRevision.Int64
+	if network.Valid && network.String != "null" {
+		n.Network = &networkconfig.Node{}
+		if err := json.Unmarshal([]byte(network.String), n.Network); err != nil {
+			return n, err
+		}
+		if err := n.Network.Validate(); err != nil {
+			return n, err
+		}
+	}
 	return n, nil
 }
 
@@ -53,10 +70,46 @@ func (s *Store) nodeArgs(n *domain.Node) []any {
 
 // CreateNode inserts a node.
 func (s *Store) CreateNode(ctx context.Context, n *domain.Node) error {
+	if n.Network != nil {
+		return s.Tx(ctx, func(tx *sql.Tx) error { return s.createNode(ctx, tx, n) })
+	}
 	return s.createNode(ctx, s.db, n)
 }
 
 func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error {
+	if n.Protocol == domain.ProtocolWireGuard && n.Source == domain.NodeDeployed {
+		if n.ServerID == nil {
+			return errors.New("WireGuard 接入缺少服务器")
+		}
+		var raw string
+		if err := q.QueryRowContext(ctx, `SELECT diagnostics FROM agents WHERE server_id=?`, *n.ServerID).Scan(&raw); err != nil {
+			return err
+		}
+		var capabilities struct {
+			WireGuard int `json:"network_wireguard_version"`
+		}
+		if json.Unmarshal([]byte(raw), &capabilities) != nil || capabilities.WireGuard != 1 {
+			return errors.New("请先升级并等待 agent 上报 WireGuard 能力")
+		}
+		if err := s.checkBindingCoreVersion(ctx, q, domain.CoreSingBox); err != nil {
+			return err
+		}
+	}
+	if n.Core == domain.CoreMita && n.Source == domain.NodeDeployed {
+		if n.ServerID == nil {
+			return errors.New("mita 节点缺少服务器")
+		}
+		var raw string
+		if err := q.QueryRowContext(ctx, `SELECT diagnostics FROM agents WHERE server_id=?`, *n.ServerID).Scan(&raw); err != nil {
+			return err
+		}
+		var capabilities struct {
+			MitaVersion int `json:"mita_version"`
+		}
+		if json.Unmarshal([]byte(raw), &capabilities) != nil || capabilities.MitaVersion != 1 {
+			return errors.New("请先升级并等待 agent 上报 mita 部署能力")
+		}
+	}
 	now := s.Now()
 	args := append(s.nodeArgs(n), fmtTime(now), fmtTime(now))
 	res, err := q.ExecContext(ctx, `INSERT INTO nodes(name,protocol,server,port,params,server_params,source,server_id,listen_port,core,share_id,external_sub_id,chain_front_node_id,enabled,owner_user_id,tags,sort_order,revoked,created_at,updated_at)
@@ -66,6 +119,13 @@ func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error
 	}
 	n.ID, _ = res.LastInsertId()
 	n.CreatedAt, n.UpdatedAt = now, now
+	if n.Network != nil {
+		updated, err := s.setNodeNetwork(ctx, q, n.ID, 0, n.Network, nil)
+		if err != nil {
+			return err
+		}
+		n.NetworkRevision = updated.NetworkRevision
+	}
 	return nil
 }
 
@@ -73,7 +133,9 @@ func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error
 func (s *Store) UpdateNode(ctx context.Context, n *domain.Node) error {
 	now := s.Now()
 	args := append(s.nodeArgs(n), fmtTime(now), n.ID)
-	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=?,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...)
+	// Ordinary edits never write the independently versioned network policy
+	// or its access address, including stale forms and credential rotations.
+	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=CASE WHEN EXISTS(SELECT 1 FROM node_networks WHERE node_id=nodes.id AND policy<>'null') THEN server ELSE ? END,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...)
 	n.UpdatedAt = now
 	return err
 }
@@ -86,7 +148,7 @@ func (s *Store) DeleteNode(ctx context.Context, id int64) error {
 
 // GetNode fetches one node.
 func (s *Store) GetNode(ctx context.Context, id int64) (domain.Node, error) {
-	n, err := s.scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, id))
+	n, err := s.scanNode(s.db.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=? AND source<>'transit'`, id))
 	if isNoRows(err) {
 		return n, ErrNotFound
 	}
@@ -106,7 +168,7 @@ type NodeFilter struct {
 
 // ListNodes returns nodes matching f ordered by sort_order, id.
 func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]domain.Node, error) {
-	var where []string
+	where := []string{"source<>'transit'"}
 	var args []any
 	if f.Source != "" {
 		where = append(where, "source=?")
@@ -224,7 +286,7 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 
 // UsedListenPorts returns ports already allocated on a server.
 func (s *Store) UsedListenPorts(ctx context.Context, serverID int64) (map[int]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT listen_port FROM nodes WHERE server_id=? AND listen_port>0`, serverID)
+	rows, err := s.db.QueryContext(ctx, `SELECT listen_port FROM server_listener_reservations WHERE server_id=?`, serverID)
 	if err != nil {
 		return nil, err
 	}

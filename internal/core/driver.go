@@ -46,5 +46,12 @@ type Driver interface {
 	Stop(ctx context.Context) error
 }
 
+// ResourceDriver extends a shared core without representing forwards as nodes.
+// Both collections must already have local fences and resolved observations.
+type ResourceDriver interface {
+	Driver
+	ApplyResources(context.Context, *agentproto.DesiredState, []agentproto.NodeSpec, []agentproto.ForwardSpec) (bool, error)
+}
+
 // LogPath returns the sing-box log file (used by conntail).
 func (p Paths) LogPath() string { return filepath.Join(p.LogDir, "sing-box.log") }

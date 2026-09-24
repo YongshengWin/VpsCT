@@ -18,6 +18,7 @@ import (
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/core"
 	"ctlvps/internal/diskbudget"
+	"ctlvps/internal/maintenance"
 	"ctlvps/internal/safehttp"
 	"ctlvps/internal/secureupdate"
 	"net/url"
@@ -61,11 +62,11 @@ func resolveUpdateURL(base, u string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(u, "/")
 }
 
-func applySelfUpdate(ctx context.Context, baseURL string, spec agentproto.AgentUpdateSpec) error {
+func applySelfUpdate(ctx context.Context, baseURL string, spec agentproto.AgentUpdateSpec, stateDir string) error {
 	if !agentwork.Available() {
-		return applySelfUpdateInline(ctx, baseURL, spec)
+		return applySelfUpdateInline(ctx, baseURL, spec, stateDir)
 	}
-	b, err := json.Marshal(updateRequest{baseURL, spec})
+	b, err := json.Marshal(updateRequest{baseURL, spec, stateDir})
 	if err != nil {
 		return err
 	}
@@ -73,8 +74,9 @@ func applySelfUpdate(ctx context.Context, baseURL string, spec agentproto.AgentU
 }
 
 type updateRequest struct {
-	BaseURL string
-	Spec    agentproto.AgentUpdateSpec
+	BaseURL  string
+	Spec     agentproto.AgentUpdateSpec
+	StateDir string
 }
 
 func UpdateEntry(args []string) (bool, error) {
@@ -94,9 +96,14 @@ func UpdateEntry(args []string) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
-	return true, applySelfUpdateInline(ctx, r.BaseURL, r.Spec)
+	release, err := maintenance.NewManager().WaitConfigurationLock(ctx)
+	if err != nil {
+		return true, err
+	}
+	defer release()
+	return true, applySelfUpdateInline(ctx, r.BaseURL, r.Spec, r.StateDir)
 }
-func applySelfUpdateInline(ctx context.Context, baseURL string, spec agentproto.AgentUpdateSpec) error {
+func applySelfUpdateInline(ctx context.Context, baseURL string, spec agentproto.AgentUpdateSpec, stateDir ...string) error {
 	if spec.SHA256 == "" || spec.URL == "" {
 		return fmt.Errorf("incomplete update spec")
 	}
@@ -132,7 +139,28 @@ func applySelfUpdateInline(ctx context.Context, baseURL string, spec agentproto.
 	if err = verifyRelease(ctx, "agent", "", data); err != nil {
 		return err
 	}
-	return core.CommitBinary(data, target)
+	if err = data.Chmod(0700); err != nil {
+		return err
+	}
+	if err = data.Sync(); err != nil {
+		return err
+	}
+	if err = data.Close(); err != nil {
+		return err
+	}
+	dir := "/var/lib/ctlvps-agent"
+	if len(stateDir) > 0 && stateDir[0] != "" {
+		dir = stateDir[0]
+	}
+	if err = secureupdate.CheckAgentCompatibility(ctx, data.Name(), StatePath(dir)); err != nil {
+		return err
+	}
+	ready, err := os.Open(data.Name())
+	if err != nil {
+		return err
+	}
+	defer ready.Close()
+	return core.CommitBinary(ready, target)
 }
 
 var downloadSelf = func(ctx context.Context, raw string, dst io.Writer) (int64, error) {

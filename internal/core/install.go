@@ -21,6 +21,7 @@ import (
 
 	"ctlvps/internal/agentnet"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/corecompat"
 	"ctlvps/internal/diskbudget"
 	"ctlvps/internal/safehttp"
 	"ctlvps/internal/secureupdate"
@@ -224,6 +225,9 @@ func FileDigest(f *os.File) (string, error) {
 
 // installBinary downloads, verifies and atomically installs name into binDir.
 func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.CoreVersion) error {
+	if name == "mita" && v.SHA256[runtime.GOARCH] == "" {
+		return errors.New("mita 锁定版本需要当前架构的 SHA-256")
+	}
 	if v.Version == "" || v.URL == "" {
 		return fmt.Errorf("no version pinned for %s", name)
 	}
@@ -231,6 +235,12 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 		return e
 	}
 	url := ExpandURL(v.URL, v.Version)
+	if name == "sing-box" {
+		official := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", v.Version, v.Version, archFor("arch"))
+		if !corecompat.ReleaseVersion(v.Version) || url != official {
+			return errors.New("sing-box must use an official release and its fixed upstream archive URL")
+		}
+	}
 	policy, e := secureupdate.LoadPolicy()
 	if e != nil {
 		return e
@@ -242,6 +252,8 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 			official = fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", v.Version, v.Version, archFor("arch"))
 		case "snell-server":
 			official = fmt.Sprintf("https://dl.nssurge.com/snell/snell-server-v%s-linux-%s.zip", v.Version, archFor("snellarch"))
+		case "mita":
+			official = fmt.Sprintf("https://github.com/enfein/mieru/releases/download/v%s/mita_%s_linux_%s.tar.gz", v.Version, v.Version, archFor("arch"))
 		default:
 			return errors.New("unknown core")
 		}

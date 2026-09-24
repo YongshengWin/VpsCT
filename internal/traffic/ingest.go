@@ -27,12 +27,14 @@ type ShareDelta struct {
 
 // Result summarises one ingested heartbeat.
 type Result struct {
-	FinalMeterAck string
-	ServerUp      int64
-	ServerDown    int64
-	NodeDeltas    map[int64][2]int64
-	Shares        []ShareDelta
-	Reset         bool // baseline was (re)established, no deltas produced
+	ForwardReceiptAck string
+	NetworkBillingAck string
+	FinalMeterAck     string
+	ServerUp          int64
+	ServerDown        int64
+	NodeDeltas        map[int64][2]int64
+	Shares            []ShareDelta
+	Reset             bool // baseline was (re)established, no deltas produced
 }
 
 // Ingestor applies heartbeats to the store.
@@ -48,6 +50,37 @@ func New(st *store.Store) *Ingestor {
 
 // Ingest processes a heartbeat for the given server.
 func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentproto.Heartbeat) (Result, error) {
+	if r := hb.ForwardReceipt; r != nil {
+		if err := r.Validate(); err != nil {
+			return Result{}, err
+		}
+		if len(hb.ForwardCounters) != 0 || len(hb.Ports) != 0 || hb.FinalMeters != nil || hb.NetworkBillingSwitch != nil || hb.NetworkBillingLegacy != nil {
+			return Result{}, errors.New("转发回执不能混入其他计量报告")
+		}
+		hb.ForwardCounters, hb.TS, hb.Metrics = r.Counters, r.TS, agentproto.Metrics{}
+	}
+	if err := agentproto.ValidateForwardCounters(hb.ForwardCounters); err != nil {
+		return Result{}, err
+	}
+	if len(hb.ForwardCounters) > 0 && (hb.FinalMeters != nil || hb.NetworkBillingSwitch != nil) {
+		return Result{}, errors.New("forward counters must not mix node settlement or network billing cutover")
+	}
+	if sw := hb.NetworkBillingSwitch; sw != nil {
+		if err := sw.Validate(); err != nil {
+			return Result{}, err
+		}
+		if hb.FinalMeters != nil || len(hb.Ports) != 0 {
+			return Result{}, errors.New("billing switch must not mix node counters")
+		}
+		hb.TS, hb.Epoch = sw.TS, sw.Legacy.Epoch
+		hb.Metrics = agentproto.Metrics{NetRx: sw.Legacy.Rx, NetTx: sw.Legacy.Tx, Network: sw.Snapshot}
+	} else if hb.NetworkBillingLegacy != nil {
+		if err := hb.NetworkBillingLegacy.Validate(); err != nil {
+			return Result{}, err
+		}
+		hb.Epoch = hb.NetworkBillingLegacy.Epoch
+		hb.Metrics.NetRx, hb.Metrics.NetTx = hb.NetworkBillingLegacy.Rx, hb.NetworkBillingLegacy.Tx
+	}
 	if hb.FinalMeters != nil {
 		if err := hb.FinalMeters.Validate(); err != nil {
 			return Result{}, err
@@ -90,6 +123,18 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 		epoch = "default"
 	}
 	err = i.Store.Tx(ctx, func(tx *sql.Tx) error {
+		var appliedForwards []agentproto.ForwardSpec
+		if r := hb.ForwardReceipt; r != nil {
+			replay, applied, err := i.Store.CheckForwardReceipt(ctx, tx, server.ID, *r)
+			if err != nil {
+				return err
+			}
+			if replay {
+				res.ForwardReceiptAck = r.ID
+				return nil
+			}
+			appliedForwards = applied
+		}
 		if hb.FinalMeters != nil {
 			var exists int
 			err := tx.QueryRowContext(ctx, "SELECT 1 FROM meter_settlements WHERE server_id=? AND batch_id=?", server.ID, hb.FinalMeters.ID).Scan(&exists)
@@ -130,7 +175,7 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			baselineTS := ts
 			if found {
 				if last, e := time.Parse(time.RFC3339Nano, updated); e == nil && ts.Before(last) {
-					if hb.FinalMeters == nil {
+					if hb.FinalMeters == nil && hb.NetworkBillingSwitch == nil && hb.ForwardReceipt == nil {
 						return 0, 0, false, nil
 					}
 					// A frozen final snapshot may follow a wall-clock correction.
@@ -169,22 +214,40 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			}
 			return add(store.SubjectServer, server.ID, 0, 0)
 		}
-		if hb.Metrics.NetRx > 0 || hb.Metrics.NetTx > 0 {
-			rx, txBytes, ok, err := delta("nic", epoch, hb.Metrics.NetRx, hb.Metrics.NetTx, false)
-			if err != nil {
-				return err
-			}
-			if ok {
-				res.ServerUp, res.ServerDown = rx, txBytes
-				if err = add(store.SubjectServer, server.ID, rx, txBytes); err != nil {
+		legacy := func() error {
+			if hb.Metrics.NetRx > 0 || hb.Metrics.NetTx > 0 {
+				rx, txBytes, ok, err := delta("nic", epoch, hb.Metrics.NetRx, hb.Metrics.NetTx, false)
+				if err != nil {
 					return err
 				}
-			} else {
-				res.Reset = true
+				if ok {
+					res.ServerUp, res.ServerDown = rx, txBytes
+					if err = add(store.SubjectServer, server.ID, rx, txBytes); err != nil {
+						return err
+					}
+				} else {
+					res.Reset = true
+				}
 			}
-			if err = sample(nil, hb.Metrics.NetRx, hb.Metrics.NetTx); err != nil {
+			return nil
+		}
+		if hb.FinalMeters == nil && hb.ForwardReceipt == nil {
+			if err := i.ingestNetworkBilling(ctx, tx, server.ID, hb, ts, &res, legacy, add, sample); err != nil {
 				return err
 			}
+			if hb.NetworkBillingSwitch != nil {
+				return nil
+			}
+		}
+		if err := ingestForwardCounters(ctx, tx, server.ID, hb.ForwardCounters, delta, add); err != nil {
+			return err
+		}
+		if r := hb.ForwardReceipt; r != nil {
+			if err := store.CommitForwardReceipt(ctx, tx, server.ID, *r, appliedForwards, now); err != nil {
+				return err
+			}
+			res.ForwardReceiptAck = r.ID
+			return nil
 		}
 		seen := map[string]bool{}
 		shares := map[int64]*ShareDelta{}
@@ -213,6 +276,14 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			rx, txBytes, ok, err := delta(key, ep, pc.Rx, pc.Tx, pc.FromZero)
 			if err != nil {
 				return err
+			}
+			if n.Source == domain.NodeTransit {
+				if ok {
+					if err = add("transit", n.ID, rx, txBytes); err != nil {
+						return err
+					}
+				}
+				continue
 			}
 			if err = sample(n.ID, pc.Rx, pc.Tx); err != nil {
 				return err
@@ -276,6 +347,7 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 	})
 	if err != nil {
 		res.FinalMeterAck = ""
+		res.ForwardReceiptAck = ""
 	}
 	return res, err
 }

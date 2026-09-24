@@ -42,7 +42,7 @@ func (a *API) maintenanceAuth(w http.ResponseWriter, r *http.Request, in *mainte
 	// Browsers supply Origin for JSON POST. Requiring it here also rejects
 	// cross-site forms even if a session cookie happens to be attached.
 	origin, err := url.Parse(r.Header.Get("Origin"))
-	if err != nil || origin.Host != r.Host || (origin.Scheme != "https" && origin.Scheme != "http") || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+	if err != nil || !sameSiteHost(origin, r.Host) || (origin.Scheme != "https" && origin.Scheme != "http") || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		return httpx.ErrForbidden
 	}
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {

@@ -18,9 +18,18 @@ func TestEgressIsBoundToNodeSockets(t *testing.T) {
 		}
 	}
 	for _, line := range strings.Split(s, "\n") {
+		// Root-created bootstrap sockets have a separate mark namespace. Its
+		// dispatcher must enter a UID-guarded chain, never accept by mark alone.
+		if line == "add rule inet ctlvps_egress output meta mark & 0xff000000 { 0x44000000, 0x46000000 } jump ctlvps_bootstrap" {
+			continue
+		}
 		if strings.Contains(line, "meta mark") && (!strings.Contains(line, "socket cgroupv2") || !strings.HasSuffix(line, " drop")) {
 			t.Fatal("mark became authorization", line)
 		}
+	}
+	const bootstrapGuard = "add rule inet ctlvps_egress ctlvps_bootstrap meta skuid != 0 drop\nadd rule inet ctlvps_egress ctlvps_bootstrap fib daddr type local drop\nadd rule inet ctlvps_egress ctlvps_bootstrap drop\n"
+	if !strings.Contains(s, bootstrapGuard) {
+		t.Fatal("nodes without bootstrap DNS must not authorize any bootstrap socket")
 	}
 	if _, e = EgressRules(nodes, nil, nil); e == nil {
 		t.Fatal("missing cgroup accepted")

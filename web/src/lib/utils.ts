@@ -95,6 +95,9 @@ export const PROTOCOL_LABELS: Record<string, string> = {
   ss: "Shadowsocks 2022",
   snell: "Snell",
   vmess: "VMess",
+  ssh: "SSH（TCP）",
+  wireguard: "WireGuard",
+  mieru: "mieru",
   socks5: "SOCKS5",
   http: "HTTP",
 };
@@ -108,6 +111,9 @@ const PROTOCOL_NAME: Record<string, string> = {
   ss: "SS",
   snell: "Snell",
   vmess: "VMess",
+  ssh: "SSH（TCP）",
+  wireguard: "WireGuard",
+  mieru: "mieru",
   socks5: "SOCKS5",
   http: "HTTP",
 };

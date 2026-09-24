@@ -15,7 +15,10 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/corecompat"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/nft"
+	"ctlvps/internal/wgconfig"
 )
 
 // SingBox drives a single sing-box service hosting all sing-box nodes.
@@ -100,7 +103,12 @@ func (d *SingBox) tlsBlock(spec agentproto.NodeSpec, ds *agentproto.DesiredState
 		if email := firstNonEmpty(cert.Email, d.ACMEEmail); email != "" {
 			acme["email"] = email
 		}
-		tls["acme"] = acme
+		if corecompat.ModernConfig(ds.Versions["sing-box"].Version) {
+			acme["type"] = "acme"
+			tls["certificate_provider"] = acme
+		} else {
+			tls["acme"] = acme
+		}
 	default:
 		files, err := d.CertResolver(cert)
 		if err != nil {
@@ -138,6 +146,8 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].NodeID < sorted[j].NodeID })
 	logLevel := "warn"
 	outbounds := []any{}
+	endpoints := []any{}
+	dnsServers := []any{map[string]any{"type": "local", "tag": "local"}}
 	rules := []any{}
 	denied := []string{}
 	for _, n := range sorted {
@@ -150,19 +160,105 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 	}
 	for _, n := range sorted {
 		// Access is enforced by nftables, independently of process lifetime.
+		if err := validateNodeNetwork(n, ds); err != nil {
+			return nil, fmt.Errorf("node %d: %w", n.NodeID, err)
+		}
 		mark, err := nft.NodeMark(n.NodeID)
 		if err != nil {
 			return nil, err
 		}
 		outTag := fmt.Sprintf("node-%d-direct", n.NodeID)
-		outbounds = append(outbounds, map[string]any{"type": "direct", "tag": outTag, "routing_mark": mark})
+		outbound := map[string]any{"type": "direct", "tag": outTag, "routing_mark": mark}
+		dial := map[string]any{"routing_mark": mark}
+		listen := "::"
+		if n.RuntimeNetwork != nil {
+			listen = n.RuntimeNetwork.ListenAddress
+			if n.Network.HasTransport() {
+				transport, _ := n.Network.TransportConfig()
+				cfg, err := networkconfig.EffectiveSOCKS5(transport, ds.IPv4Only)
+				if err != nil {
+					return nil, err
+				}
+				// Use exactly the endpoint checked by the local guard. The
+				// bootstrap resolver must never choose a different address.
+				cfg.Server = n.RuntimeNetwork.SOCKS5.Address
+				var compiled SOCKS5Compilation
+				if n.Network.WireGuard != nil {
+					compiled, err = CompileWireGuard(n.NodeID, n.Network.WireGuard.Config, n.Network.WireGuard.Credentials, cfg, *n.RuntimeNetwork.Direct)
+				} else if n.Network.SSH != nil {
+					compiled, err = CompileSSH(n.NodeID, n.Network.SSH.Config, n.Network.SSH.Credentials, cfg, *n.RuntimeNetwork.Direct)
+				} else if n.Network.SS2022 != nil {
+					if !corecompat.SS2022Outbound(ds.Versions["sing-box"].Version) {
+						return nil, errors.New(corecompat.SS2022Requirement)
+					}
+					compiled, err = CompileResourceSS2022(agentproto.ResourceIdentity{Kind: "node", ID: n.NodeID}, n.Network.SS2022.Config, n.Network.SS2022.Credentials, cfg, *n.RuntimeNetwork.Direct)
+				} else {
+					compiled, err = CompileSOCKS5(n.NodeID, cfg, n.Network.SOCKS5.Credentials, *n.RuntimeNetwork.Direct)
+				}
+				if err != nil {
+					return nil, err
+				}
+				outbound = compiled.Outbound
+				outTag = compiled.Outbound["tag"].(string)
+				dial = map[string]any{"detour": outTag}
+				dnsServers = append(dnsServers, compiled.BootstrapDNS, compiled.DNS)
+				if compiled.TransportOutbound != nil {
+					outbounds = append(outbounds, compiled.TransportOutbound)
+				}
+				if compiled.UDPReject != nil {
+					rules = append(rules, compiled.UDPReject)
+				}
+				if compiled.FamilyReject != nil {
+					rules = append(rules, compiled.FamilyReject)
+				}
+				rules = append(rules, compiled.ResolveRule)
+				if !n.AllowPrivate {
+					rules = append(rules, map[string]any{"inbound": []string{InboundTag(n.NodeID)}, "ip_is_private": true, "action": "reject"})
+				}
+			} else if n.RuntimeNetwork.Direct != nil {
+				compiled, err := CompileDirect(n.NodeID, *n.RuntimeNetwork.Direct)
+				if err != nil {
+					return nil, err
+				}
+				outbound, dial = compiled.Outbound, compiled.Dial
+				dnsServers = append(dnsServers, compiled.DNS)
+				rules = append(rules, compiled.ResolveRule)
+				if compiled.FamilyReject != nil {
+					rules = append(rules, compiled.FamilyReject)
+				}
+				if !n.AllowPrivate {
+					// Recheck after explicit resolution, including DNS answers
+					// which point to private networks.
+					rules = append(rules, map[string]any{"inbound": []string{InboundTag(n.NodeID)}, "ip_is_private": true, "action": "reject"})
+				}
+			}
+		}
+		if n.Network != nil && n.Network.WireGuard != nil {
+			endpoints = append(endpoints, outbound)
+			rules = append(rules, map[string]any{"inbound": []string{outTag}, "action": "reject"})
+		} else {
+			outbounds = append(outbounds, outbound)
+		}
 		rules = append(rules, map[string]any{"inbound": []string{InboundTag(n.NodeID)}, "action": "route", "outbound": outTag})
 		if n.ConnlogEnabled {
 			logLevel = "info"
 		}
 		p := n.Params
-		in := map[string]any{"tag": InboundTag(n.NodeID), "listen": "::", "listen_port": n.ListenPort}
+		in := map[string]any{"tag": InboundTag(n.NodeID), "listen": listen, "listen_port": n.ListenPort}
 		switch n.Protocol {
+		case "wireguard":
+			if n.Network != nil {
+				return nil, errors.New("WireGuard 接入暂不支持再次串接出口")
+			}
+			if ds.NetworkWireGuardVersion != agentproto.NetworkWireGuardVersion || !agentproto.NetworkBindingSupported("singbox", ds.Versions["sing-box"].Version) {
+				return nil, errors.New("WireGuard 接入需要兼容的 agent 与锁定内核")
+			}
+			server, err := wgconfig.DecodeServer(p)
+			if err != nil {
+				return nil, err
+			}
+			endpoints = append(endpoints, server.Endpoint(InboundTag(n.NodeID), n.ListenPort))
+			continue
 		case "vless":
 			in["type"] = "vless"
 			in["users"] = []any{map[string]any{"uuid": str(p, "uuid"), "flow": firstNonEmpty(str(p, "flow"), "xtls-rprx-vision")}}
@@ -170,12 +266,14 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 			if v, ok := p["handshake_port"].(float64); ok && v > 0 {
 				hsPort = int(v)
 			}
+			handshake := copyFields(dial)
+			handshake["server"], handshake["server_port"] = str(p, "handshake_server"), hsPort
 			in["tls"] = map[string]any{
 				"enabled":     true,
 				"server_name": str(p, "handshake_server"),
 				"reality": map[string]any{
 					"enabled":     true,
-					"handshake":   map[string]any{"server": str(p, "handshake_server"), "server_port": hsPort, "routing_mark": mark},
+					"handshake":   handshake,
 					"private_key": str(p, "reality_private_key"),
 					"short_id":    []string{str(p, "reality_short_id")},
 				},
@@ -234,13 +332,19 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 	}
 	cfg := map[string]any{
 		"log":       map[string]any{"level": logLevel, "timestamp": true, "output": d.logPath()},
-		"dns":       map[string]any{"servers": []any{map[string]any{"type": "local", "tag": "local"}}},
+		"dns":       map[string]any{"servers": dnsServers},
 		"inbounds":  inbounds,
 		"outbounds": outbounds,
 		"route": map[string]any{
 			"default_domain_resolver": map[string]any{"server": "local", "strategy": strategy},
 			"rules":                   rules,
 		},
+	}
+	if len(endpoints) > 0 {
+		cfg["endpoints"] = endpoints
+	}
+	if len(dnsServers) > 1 && !corecompat.ModernConfig(ds.Versions["sing-box"].Version) {
+		cfg["dns"].(map[string]any)["independent_cache"] = true
 	}
 	return cfg, nil
 }
@@ -264,6 +368,12 @@ func (d *SingBox) stopAllInstances(ctx context.Context) (bool, error) {
 
 // Apply preflights all permission groups before the first running service stops.
 func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec) (changed bool, applyErr error) {
+	return d.ApplyResources(ctx, ds, nodes, nil)
+}
+
+// ApplyResources receives only locally prepared forwards. They join the public
+// shared service and cannot inherit a node's private-business permission.
+func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec, forwards []agentproto.ForwardSpec) (changed bool, applyErr error) {
 	groups := map[string][]agentproto.NodeSpec{"public": {}, "private": {}}
 	acme := false
 	for _, n := range nodes {
@@ -287,7 +397,11 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 		}
 		return false
 	}
-	twoGroups := hasLive(groups["public"]) && hasLive(groups["private"])
+	liveForwards := false
+	for _, f := range forwards {
+		liveForwards = liveForwards || (!f.Blocked && !f.Retired)
+	}
+	twoGroups := (hasLive(groups["public"]) || liveForwards) && hasLive(groups["private"])
 	// Splitting native ACME storage/challenge listeners is not safe without a
 	// separate compatibility test. Refuse before changing a running service.
 	if acme && twoGroups {
@@ -318,7 +432,7 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 	}
 	candidates := []candidate{}
 	for _, profile := range []string{"public", "private"} {
-		live := false
+		live := profile == "public" && liveForwards
 		for _, n := range groups[profile] {
 			if !n.Blocked {
 				live = true
@@ -388,7 +502,11 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 			}
 			clone.runtimeACME = target
 		}
-		cfg, e := clone.BuildConfig(ds, groups[profile])
+		var managedForwards []agentproto.ForwardSpec
+		if profile == "public" {
+			managedForwards = forwards
+		}
+		cfg, e := clone.BuildResourceConfig(ds, groups[profile], managedForwards)
 		if e != nil {
 			return false, e
 		}

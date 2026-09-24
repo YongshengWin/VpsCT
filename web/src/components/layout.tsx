@@ -23,6 +23,7 @@ import { cn, displayName } from "@/lib/utils";
 import { useAuth, useTheme } from "@/lib/auth";
 import { LogoMark, Wordmark } from "@/components/logo";
 import { Avatar } from "@/components/avatar";
+import { CoreUpgradeNotice } from "@/components/core-upgrade";
 
 interface Item {
   to: string;
@@ -221,6 +222,7 @@ export function Layout() {
 
       <main className="flex-1 px-4 pb-24 pt-6 sm:px-6 sm:pt-8 lg:pb-10">
         <div className="mx-auto w-full max-w-6xl animate-fade-up">
+          {isAdmin && !(loc.pathname === "/settings" && new URLSearchParams(loc.search).get("tab") === "cores") && <CoreUpgradeNotice />}
           <Outlet />
         </div>
       </main>

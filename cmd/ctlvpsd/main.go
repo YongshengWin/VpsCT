@@ -215,6 +215,7 @@ func registerJobs(s *scheduler.Scheduler, st *store.Store, cl *connlog.Store, su
 	}})
 	s.Add(scheduler.Job{Name: "share_tick", Interval: 5 * time.Minute, RunAtStart: true, Fn: shares.Tick})
 	s.Add(scheduler.Job{Name: "desired_refresh", Interval: time.Hour, RunAtStart: true, Fn: des.PublishAll})
+	s.Add(scheduler.Job{Name: "network_operations", Interval: 5 * time.Second, RunAtStart: true, Fn: des.ReconcileNetworkOperations})
 	s.Add(scheduler.Job{Name: "retention", Interval: time.Hour, RunAtStart: true, Fn: func(ctx context.Context) error {
 		sampleH := st.GetSettingInt(ctx, domain.SettingSampleRetention, 48)
 		hourlyD := st.GetSettingInt(ctx, domain.SettingHourlyRetention, 14)

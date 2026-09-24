@@ -16,6 +16,7 @@ import (
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 	"ctlvps/internal/store"
 )
@@ -109,6 +110,49 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if len(hb.Ports) > 4096 || len(hb.Diagnostics.Cores) > 32 || len(hb.Diagnostics.Certs) > 2048 || len(hb.Diagnostics.Warnings) > 64 || len(hb.Diagnostics.RecentErrors) > 64 || len(hb.ApplyError) > 4096 || len(hb.Version) > 128 || len(hb.Epoch) > 256 {
 		return httpx.BadRequest("设备上报超出限额")
 	}
+	if hb.ForwardReceipt != nil {
+		result, err := a.Traffic.Ingest(r.Context(), ac.Server, hb)
+		if err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+		httpx.OK(w, agentproto.HeartbeatResponse{ForwardReceiptAck: result.ForwardReceiptAck, ServerTime: a.Store.Now()})
+		return nil
+	}
+	if err := agentproto.ValidateForwardCounters(hb.ForwardCounters); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
+	if len(hb.ForwardCounters) > 0 && (hb.FinalMeters != nil || hb.NetworkBillingSwitch != nil) {
+		return httpx.BadRequest("转发计数不能混入节点结算或网卡计费切换")
+	}
+	if err := agentproto.ValidateNetwork(hb.Metrics.Network); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
+	if err := agentproto.ValidateNetworkDiagnostics(hb.Diagnostics); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
+	if hb.NetworkBillingRevision < 0 || hb.NetworkBillingRevision > 1<<53 || len(hb.Diagnostics.NetworkBillingError) > 512 {
+		return httpx.BadRequest("计费上报字段无效")
+	}
+	if hb.NetworkBillingLegacy != nil {
+		if err := hb.NetworkBillingLegacy.Validate(); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+	}
+	if hb.NetworkBillingSwitch != nil {
+		if hb.FinalMeters != nil || len(hb.Ports) != 0 {
+			return httpx.BadRequest("计费切换不能混入节点计数")
+		}
+		if err := hb.NetworkBillingSwitch.Validate(); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+		result, err := a.Traffic.Ingest(r.Context(), ac.Server, hb)
+		if err != nil {
+			return err
+		}
+		a.checkServerQuota(r.Context(), ac.Server)
+		httpx.OK(w, agentproto.HeartbeatResponse{NetworkBillingVersion: agentproto.NetworkBillingVersion, NetworkBillingAck: result.NetworkBillingAck, ServerTime: a.Store.Now()})
+		return nil
+	}
 	if hb.FinalMeters != nil {
 		if err := hb.FinalMeters.Validate(); err != nil {
 			return httpx.BadRequest("最终计量快照无效")
@@ -127,6 +171,15 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	ctx := r.Context()
+	if err := a.Store.IngestNetwork(ctx, ac.Server.ID, hb.Metrics.Network); err != nil {
+		// Observation failure must not block the existing quota/heartbeat path.
+		a.Logger.Warn("network observation unavailable", "server_id", ac.Server.ID, "err", err)
+		failed := &agentproto.NetworkSnapshot{Version: agentproto.NetworkVersion, SampledAt: a.Store.Now(), Status: "error", Error: "网卡观测暂不可用，等待恢复", Interfaces: []agentproto.NetworkInterface{}}
+		if errors.Is(err, store.ErrNetworkCapacity) {
+			failed.Error = err.Error()
+		}
+		_ = a.Store.IngestNetwork(ctx, ac.Server.ID, failed)
+	}
 	ipv4, ipv6 := hb.PublicIPv4, hb.PublicIPv6
 	if ipv4 == "" && ipv6 == "" {
 		ip := httpx.ClientIP(r, a.Config.TrustProxy)
@@ -147,14 +200,17 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if hb.AppliedRevision > 0 || hb.ApplyError != "" {
 		_ = a.Store.SetAgentApplied(ctx, ac.Agent.ID, hb.AppliedRevision, hb.AppliedHash, hb.ApplyError)
 	}
+	status := hb.ApplyStatus
+	if hb.ApplyError != "" {
+		status = "failed"
+	}
+	if err := a.Store.RecordNetworkApply(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status); err != nil {
+		return err
+	}
 	// deployed nodes without an explicit public host follow the agent's IP
 	if ac.Server.PublicHost == "" && ipv4 != "" {
-		nodes, _ := a.Store.ListNodes(ctx, store.NodeFilter{ServerID: &ac.Server.ID, Source: domain.NodeDeployed, IncludeRevoked: true})
-		for _, n := range nodes {
-			if n.Server != ipv4 {
-				n.Server = ipv4
-				_ = a.Store.UpdateNode(ctx, &n)
-			}
+		if err := a.Store.UpdateInheritedNodeHosts(ctx, ac.Server.ID, ipv4); err != nil {
+			return err
 		}
 	}
 	res, err := a.Traffic.Ingest(ctx, ac.Server, hb)
@@ -169,7 +225,15 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	a.checkServerQuota(ctx, ac.Server)
 	a.checkDiagnostics(ctx, ac.Server, hb.Diagnostics)
 
-	resp := agentproto.HeartbeatResponse{FinalMeterVersion: 1, MeteringVersion: 1, ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
+	resp := agentproto.HeartbeatResponse{NetworkVersion: agentproto.NetworkVersion, FinalMeterVersion: 1, MeteringVersion: 1, ServerTime: a.Store.Now(), PollIntervalSec: agentproto.DefaultPollIntervalSec}
+	if hb.Diagnostics.NetworkBillingVersion >= agentproto.NetworkBillingVersion {
+		billing, err := a.Store.NetworkBilling(ctx, ac.Server.ID)
+		if err != nil {
+			return err
+		}
+		resp.NetworkBillingVersion = agentproto.NetworkBillingVersion
+		resp.NetworkBillingCurrent, resp.NetworkBillingRequested = &billing.Current, &billing.Requested
+	}
 	if ds, err := a.Store.LatestDesiredState(ctx, ac.Server.ID); err == nil {
 		resp.DesiredRevision, resp.DesiredHash = ds.Revision, ds.Hash
 		if d, err := desired.Load(ds); err == nil {
@@ -201,7 +265,7 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 
 // checkServerQuota alerts (and optionally blocks) when a VPS exceeds its quota.
 func (a *API) checkServerQuota(ctx context.Context, s domain.Server) {
-	if s.QuotaBytes <= 0 || a.Notify == nil {
+	if s.QuotaBytes <= 0 {
 		return
 	}
 	u, err := a.Traffic.ServerUsage(ctx, s)
@@ -209,7 +273,7 @@ func (a *API) checkServerQuota(ctx context.Context, s domain.Server) {
 		return
 	}
 	pct := a.Store.GetSettingInt(ctx, domain.SettingQuotaAlertPct, 80)
-	if u.Percent >= float64(pct) {
+	if a.Notify != nil && u.Percent >= float64(pct) {
 		key := fmt.Sprintf("quota:%d:%s", s.ID, u.PeriodStart.Format("2006-01-02"))
 		if u.OverQuota {
 			key += ":over"
@@ -272,6 +336,83 @@ func (a *API) agentDesired(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 	}
+	version, err := a.Store.NetworkBindingVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	ds, err := desired.Load(rec)
+	if err != nil {
+		return err
+	}
+	version = max(version, ds.NetworkBindingVersion)
+	egressVersion, err := a.Store.NetworkEgressVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	egressVersion = max(egressVersion, ds.NetworkEgressVersion)
+	wgVersion, err := a.Store.NetworkWireGuardVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	wgVersion = max(wgVersion, ds.NetworkWireGuardVersion)
+	mitaVersion, err := a.Store.MitaVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	mitaVersion = max(mitaVersion, ds.MitaVersion)
+	if mitaVersion > 0 && r.Header.Get(networkconfig.MitaHeader) != fmt.Sprint(mitaVersion) {
+		return httpx.E(409, "mita_version", "当前配置或清理需要支持 mita 的 agent")
+	}
+	sshVersion, err := a.Store.NetworkSSHVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	sshVersion = max(sshVersion, ds.NetworkSSHVersion)
+	forwardVersion, err := a.Store.NetworkForwardVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	forwardVersion = max(forwardVersion, ds.NetworkForwardVersion)
+	if len(ds.Forwards) > 0 {
+		forwardVersion = max(forwardVersion, agentproto.NetworkForwardVersion)
+	}
+	if forwardVersion > 0 {
+		version = max(version, agentproto.NetworkBindingVersion)
+	}
+	for _, n := range ds.Nodes {
+		if n.Network != nil {
+			version = max(version, agentproto.NetworkBindingVersion)
+			if n.Network.WireGuard != nil {
+				wgVersion = max(wgVersion, agentproto.NetworkWireGuardVersion)
+			}
+			if n.Network.SSH != nil {
+				sshVersion = max(sshVersion, agentproto.NetworkSSHVersion)
+			}
+			if n.Network.HasTransport() {
+				egressVersion = max(egressVersion, agentproto.NetworkEgressVersion)
+			}
+		}
+	}
+	if version > 0 {
+		if err := a.Store.RequireNoNetworkMaintenance(r.Context(), ac.Server.ID); err != nil {
+			return networkOperationError(err)
+		}
+	}
+	if version > 0 && r.Header.Get(agentproto.NetworkBindingHeader) != fmt.Sprint(version) {
+		return httpx.E(409, "agent_upgrade_required", "此服务器已启用网络绑定，需要支持该配置版本的 agent；请先升级")
+	}
+	if egressVersion > 0 && r.Header.Get(agentproto.NetworkEgressHeader) != fmt.Sprint(egressVersion) {
+		return httpx.E(409, "agent_upgrade_required", "此服务器已启用中转出口，需要支持该配置版本的 agent；请先升级")
+	}
+	if wgVersion > 0 && r.Header.Get(agentproto.NetworkWireGuardHeader) != fmt.Sprint(wgVersion) {
+		return httpx.E(409, "agent_upgrade_required", "WireGuard 中转或清理需要兼容的 agent")
+	}
+	if sshVersion > 0 && r.Header.Get(agentproto.NetworkSSHHeader) != fmt.Sprint(sshVersion) {
+		return httpx.E(409, "agent_upgrade_required", "此服务器已启用 SSH 中转，需要支持该协议的 agent")
+	}
+	if forwardVersion > 0 && r.Header.Get(agentproto.NetworkForwardHeader) != fmt.Sprint(forwardVersion) {
+		return httpx.E(409, "agent_upgrade_required", "此服务器存在固定转发或清理任务，需要支持该配置版本的 agent")
+	}
 	if q := r.URL.Query().Get("if_not_revision"); q != "" && q == fmt.Sprint(rec.Revision) {
 		w.WriteHeader(http.StatusNotModified)
 		return nil
@@ -301,6 +442,13 @@ func (a *API) agentApplyReport(w http.ResponseWriter, r *http.Request) error {
 		if err := a.Store.SetAgentApplied(r.Context(), ac.Agent.ID, rep.Revision, rep.Hash, rep.Error); err != nil {
 			return err
 		}
+	}
+	status := rep.Status
+	if rep.Error != "" {
+		status = "failed"
+	}
+	if err := a.Store.RecordNetworkApply(r.Context(), ac.Server.ID, rep.Revision, rep.Hash, status); err != nil {
+		return err
 	}
 	if st == domain.DesiredFailed && a.Notify != nil {
 		a.Notify.SendDedup(r.Context(), fmt.Sprintf("apply:%d", ac.Server.ID), time.Hour, fmt.Sprintf("🔴 %s 配置下发失败 (rev %d): %s", ac.Server.Name, rep.Revision, rep.Error))

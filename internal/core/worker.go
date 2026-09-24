@@ -4,6 +4,7 @@ import (
 	"context"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/agentwork"
+	"ctlvps/internal/maintenance"
 	"ctlvps/internal/safehttp"
 	"encoding/json"
 	"errors"
@@ -42,10 +43,15 @@ func InstallEntry(args []string) (bool, error) {
 	if err = json.Unmarshal(b, &r); err != nil {
 		return true, err
 	}
-	if (r.Name != "sing-box" && r.Name != "snell-server") || !filepath.IsAbs(r.BinDir) || filepath.Clean(r.BinDir) != r.BinDir {
+	if (r.Name != "sing-box" && r.Name != "snell-server" && r.Name != "mita") || !filepath.IsAbs(r.BinDir) || filepath.Clean(r.BinDir) != r.BinDir {
 		return true, errors.New("invalid install request")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
+	release, err := maintenance.NewManager().WaitConfigurationLock(ctx)
+	if err != nil {
+		return true, err
+	}
+	defer release()
 	return true, installBinaryInline(ctx, r.BinDir, r.Name, r.Version)
 }

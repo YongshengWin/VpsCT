@@ -55,6 +55,37 @@ sudo bash install.sh --site-url https://panel.example.com --no-proxy
 
 将该站点的后端指向 `127.0.0.1:8080`，保留 Host，正确传递访问者地址，并允许 SSE 长连接。公网访问应经过这个可信入口。
 
+Nginx / 宝塔请在该站点实际生效的反向代理 `location` 中配置如下内容；已有同名指令时替换原行，不要重复添加。TLS 证书仍由现有 HTTPS 站点配置管理。
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+}
+```
+
+保存后检查 Nginx 配置并重载。`CTLVPS_SITE_URL` 必须是浏览器实际访问的公网 HTTPS 地址，不能填后端 `http://127.0.0.1:8080`。非默认公网端口需要包含在站点地址中；HTTPS 的省略端口与 `:443` 等价。
+
+如果代理必须改写 Host，可以通过 `X-Forwarded-Host` 传递原始域名，但控制端只接受 `CTLVPS_TRUSTED_PROXIES` 中实际相邻代理发送的单一值，且该值仍须匹配 `CTLVPS_SITE_URL`。代理必须像上例一样**覆盖**这个头，不能透传客户端提供的值或追加列表。来自非可信地址的该头会被忽略；可信代理提供空值、多值或错误域名时会被拒绝。未配置站点地址的本地开发不使用该头。
+
+脚本部署已信任本机回环代理；Docker 内看到的相邻代理地址可能是网桥网关，需按实际连接配置精确 CIDR，不能直接照抄回环地址或放开所有来源。修改脚本部署的 `/etc/ctlvps/ctlvpsd.env` 后重启 `ctlvpsd`；修改 Compose 环境变量后，在 `deploy` 目录执行 `docker compose up -d --force-recreate ctlvpsd`。
+
+遇到 `421 invalid_host` 时，先核对站点配置与上述 Host 设置。在服务器本机运行以下命令（将示例域名替换为实际域名，非默认公网端口也需带上）：
+
+```bash
+curl -i http://127.0.0.1:8080/ -H 'Host: panel.example.com'
+```
+
+如果本机请求不再报 `invalid_host`，而公网访问仍报错，继续检查代理链路的 Host / X-Forwarded-Host 配置。`/healthz` 跳过 Host 不匹配检查，不能用于验证域名配置。未保留 Host、也未传递可信转发域名的旧代理配置仍需按上例调整。
+
 `--domain` 和 `--site-url ... --no-proxy` 是两种安装模式，选择其中一种。
 
 ### 2.4 验证安装并创建管理员
@@ -174,9 +205,10 @@ docker compose exec ctlvpsd cat /data/setup-token
 |---|---|
 | `CTLVPS_LISTEN` | 控制端监听地址；安装器默认设为 `127.0.0.1:8080` |
 | `CTLVPS_DATA_DIR` | 数据与备份目录 |
-| `CTLVPS_SITE_URL` | 面板公网地址，用于生成安装命令和访问链接 |
+| `CTLVPS_SITE_URL` | 面板公网地址，用于域名与来源校验、生成安装命令和访问链接 |
 | `CTLVPS_AGENT_BIN_DIR` | 提供给 VPS 下载的 agent 文件目录 |
-| `CTLVPS_TRUST_PROXY` | 是否信任 HTTPS 入口传来的访问者地址；仅在后端访问受限且入口可信时启用 |
+| `CTLVPS_TRUSTED_PROXIES` | 实际相邻代理的 CIDR，逗号分隔；限定访问者地址和转发域名等头的信任来源，见第 2.3 节 |
+| `CTLVPS_TRUST_PROXY` | 旧兼容开关；未指定 `CTLVPS_TRUSTED_PROXIES` 时仅信任回环地址 |
 | `CTLVPS_DISABLE_CONNLOG` | 关闭控制端连接日志存储和接收 |
 | `CTLVPS_ONLINE_GEOIP` | 主动开启第三方在线 IP 归属地查询，默认关闭 |
 | `CTLVPS_LOG_LEVEL` / `CTLVPS_LOG_JSON` | 日志级别与格式 |
@@ -215,6 +247,18 @@ Docker 部署在源码的 `deploy/` 目录使用 `docker compose ps` 和 `docker
 ### 4.5 卸载能力
 
 发行附件中的独立卸载器支持控制端、agent 和两端同机的默认 systemd 安装，兼容早期 `v0.1.0`。命令与数据保留规则见 [卸载与清理](#7-卸载与清理)。
+
+### 4.6 多网卡、出口和托管中转
+
+在「服务器 → 节点线路」配置网络。操作顺序、计费口径、托管中转、固定端口映射及故障处理统一见 [网络与中转使用指南](network.md)；私网端点另见 [本机传输授权](network-transport-authorization.md)。节点客户端格式、模板和分享继承见 [节点、订阅与分享](subscriptions.md)。
+
+### 4.7 内核版本与升级确认
+
+VpsCT 只使用官方 sing-box 发行包，不构建或分发修改版。网卡绑定配置支持官方 1.12.14 起的 1.12.x、1.13.x、1.14.x 稳定系列，系列内补丁升级不再锁死单个版本；SS-2022 出口和托管 SS-2022 要求官方 1.14.1 或兼容的 1.14.x。跨入尚未适配的新系列或预发布版本时，有网络资源的配置会拒绝切换。上述范围表示配置兼容策略，不代表每个版本及架构均完成流量验收；当前实际网络基线为 ARM64 官方 1.14.1，AMD64 运行矩阵仍需验收。
+
+到「设置 → 内核版本」选择并保存官方版本，等待 agent 上报安装版本和配置回执。新安装默认锁定官方 sing-box 1.14.1；已有数据库升级时，显式版本选择保持不变，未设置或留空的旧默认值固定保存为 1.12.14。迁移在启动时以事务执行，重复启动不会重新选择版本；读取旧设置失败时停止迁移，不以新默认值覆盖。主动选择默认版本并保存，也会记录当次具体版本，不会因浏览页面、创建草稿或后续升级面板而自动跟随最新内核。官方新版 Linux 默认发行包需要兼容的 glibc 运行环境；本次运行验证使用 Ubuntu 24.04，不支持把该包当成 Alpine 静态二进制直接执行。
+
+管理员页面会按实际兼容状态显示内核升级建议；没有使用 sing-box 的受管服务器时不显示。关闭偏好按管理员账号、当前浏览器和建议版本保存，同一建议不会因面板升级再次弹出。「设置 → 内核版本」始终可查看各服务器的实际版本、等待应用、离线和异常状态，也可重新显示提示。选择推荐版本只修改待保存表单；保存后才下发。只有在线服务器回报匹配的实际版本、最新配置应用回执和正常运行状态后，才标记已确认并隐藏提示；此检查不代替节点连通测试。
 
 ## 5. 更新
 

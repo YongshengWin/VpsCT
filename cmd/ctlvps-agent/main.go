@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	"ctlvps/internal/buildinfo"
 	"ctlvps/internal/core"
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/proxyguard"
 	"ctlvps/internal/proxysandbox"
 	"ctlvps/internal/secureupdate"
@@ -85,6 +87,20 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "capabilities":
+		_ = json.NewEncoder(os.Stdout).Encode(networkconfig.CurrentCapabilities())
+	case "check-update":
+		fs := flag.NewFlagSet("check-update", flag.ExitOnError)
+		candidate := fs.String("candidate", "", "verified candidate binary")
+		state := fs.String("state", defaultState(), "state directory")
+		_ = fs.Parse(os.Args[2:])
+		if *candidate == "" {
+			usage()
+		}
+		if err := secureupdate.CheckAgentCompatibility(context.Background(), *candidate, agent.StatePath(*state)); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	case "version", "--version", "-v":
 		fmt.Println("ctlvps-agent", buildinfo.String())
 	case "enroll":

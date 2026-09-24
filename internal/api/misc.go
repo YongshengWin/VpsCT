@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -169,7 +170,7 @@ var editableSettings = map[string]bool{
 	domain.SettingTelegramToken: true, domain.SettingTelegramChatID: true, domain.SettingTelegramDaily: true, domain.SettingTelegramHour: true,
 	domain.SettingConnlogRetention: true, domain.SettingAggRetention: true, domain.SettingConnlogSelf: true, domain.SettingSampleRetention: true, domain.SettingHourlyRetention: true,
 	domain.SettingAccessRetention: true, domain.SettingAgentOfflineSec: true, domain.SettingQuotaAlertPct: true,
-	domain.SettingSingBoxVersion: true, domain.SettingSnellVersion: true, domain.SettingRateLimitPerMin: true,
+	domain.SettingSingBoxVersion: true, domain.SettingSnellVersion: true, domain.SettingMitaVersion: true, "core.mita_sha256": true, domain.SettingRateLimitPerMin: true,
 	"core.singbox_sha256": true, "core.snell_sha256": true, "quota.action": true, "site.default_template_id": true,
 }
 
@@ -183,7 +184,8 @@ var SettingDefaults = map[string]string{
 }
 
 func (a *API) coreVersions(w http.ResponseWriter, r *http.Request) error {
-	httpx.OK(w, a.cores.Get(r.Context()))
+	catalog := a.cores.Get(r.Context())
+	httpx.OK(w, catalog)
 	return nil
 }
 
@@ -212,6 +214,7 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	changed := []string{}
+	values := map[string]string{}
 	for k, v := range in {
 		if !editableSettings[k] {
 			return httpx.BadRequest("不允许修改的设置: " + k)
@@ -219,13 +222,17 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) error {
 		if k == domain.SettingTelegramToken && strings.Contains(v, "••••") {
 			continue // masked value echoed back
 		}
-		if err := a.Store.SetSetting(r.Context(), k, strings.TrimSpace(v)); err != nil {
-			return err
-		}
+		values[k] = strings.TrimSpace(v)
 		changed = append(changed, k)
 	}
+	if err := a.Store.SetSettings(r.Context(), values); err != nil {
+		if errors.Is(err, store.ErrNetworkCoreVersion) {
+			return httpx.E(409, "network_core_version", err.Error())
+		}
+		return err
+	}
 	for _, k := range changed {
-		if k == domain.SettingSingBoxVersion || k == domain.SettingSnellVersion || k == "core.singbox_sha256" || k == "core.snell_sha256" || k == domain.SettingConnlogSelf {
+		if k == domain.SettingSingBoxVersion || k == domain.SettingSnellVersion || k == domain.SettingMitaVersion || k == "core.mita_sha256" || k == "core.singbox_sha256" || k == "core.snell_sha256" || k == domain.SettingConnlogSelf {
 			_ = a.Desired.PublishAll(r.Context())
 			break
 		}

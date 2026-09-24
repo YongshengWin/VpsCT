@@ -125,7 +125,11 @@ func (s *Service) serverHosts(ctx context.Context) map[int64]string {
 // deployed nodes from the VPS record.
 func ProxyFor(n domain.Node, hosts map[int64]string) proxynode.Proxy {
 	p := proxynode.FromDomain(n)
-	if p.Server == "" && n.ServerID != nil {
+	inherits := n.Network == nil || n.Network.AdvertiseMode == "inherit"
+	if n.Network != nil && inherits && n.ServerID != nil && hosts[*n.ServerID] != "" {
+		p.Server = hosts[*n.ServerID]
+	}
+	if p.Server == "" && n.ServerID != nil && inherits {
 		p.Server = hosts[*n.ServerID]
 	}
 	if p.Port == 0 && n.ListenPort > 0 {
@@ -311,6 +315,9 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 		byID := map[int64]domain.Node{}
 		var standalones []domain.Node
 		for _, n := range nodes {
+			if n.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(n)) {
+				continue
+			}
 			byID[n.ID] = n
 			if n.Source == domain.NodeChain {
 				continue
@@ -350,7 +357,7 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 	frontName, okF := nameByID[frontID]
 	if !okF {
 		fn, err := s.Store.GetNode(ctx, frontID)
-		if err != nil || !fn.Enabled || fn.Revoked {
+		if err != nil || !fn.Enabled || fn.Revoked || (fn.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(fn))) {
 			return
 		}
 		fp := ProxyFor(fn, hosts)
@@ -364,7 +371,7 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 	landing, okL := byID[landingID]
 	if !okL {
 		ln, err := s.Store.GetNode(ctx, landingID)
-		if err != nil || !ln.Enabled || ln.Revoked {
+		if err != nil || !ln.Enabled || ln.Revoked || (ln.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(ln))) {
 			return
 		}
 		landing = ln
@@ -557,6 +564,17 @@ func (s *Service) SyncExternal(ctx context.Context, ext domain.ExternalSubscript
 
 // applyExternal persists a fetched/parsed body.
 func (s *Service) applyExternal(ctx context.Context, ext domain.ExternalSubscription, res *FetchResult) (SyncStats, error) {
+	// Keep the upstream body for inspection, but never turn status banners into
+	// connections. A metadata-only response must not erase working old nodes.
+	filtered := make([]proxynode.Proxy, 0, len(res.Proxies))
+	for _, p := range res.Proxies {
+		if !proxynode.IsSubscriptionInfo(p) {
+			filtered = append(filtered, p)
+		}
+	}
+	copyResult := *res
+	copyResult.Proxies = filtered
+	res = &copyResult
 	if len(res.Proxies) == 0 {
 		msg := "未解析到任何节点"
 		if len(res.ParseErrors) > 0 {

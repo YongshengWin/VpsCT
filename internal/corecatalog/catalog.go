@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ctlvps/internal/desired"
+	"ctlvps/internal/domain"
 )
 
 const cacheTTL = 6 * time.Hour
@@ -39,6 +40,7 @@ type Channel struct {
 type Catalog struct {
 	SingBox Channel `json:"singbox"`
 	Snell   Channel `json:"snell"`
+	Mita    Channel `json:"mita"`
 }
 
 // Fetcher pulls and caches upstream version lists.
@@ -78,6 +80,7 @@ func (f *Fetcher) Get(ctx context.Context) Catalog {
 	out := Catalog{
 		SingBox: f.singBox(ctx),
 		Snell:   f.snell(ctx),
+		Mita:    f.mita(ctx),
 	}
 	f.mu.Lock()
 	f.cache = &out
@@ -172,6 +175,33 @@ func (f *Fetcher) githubReleases(ctx context.Context, repo string) ([]ghRelease,
 	return all, nil
 }
 
+func (f *Fetcher) mita(ctx context.Context) Channel {
+	ch := Channel{Default: domain.DefaultMitaVersion, Source: "github.com/enfein/mieru"}
+	releases, err := f.githubReleases(ctx, "enfein/mieru")
+	if err != nil {
+		ch.Error = err.Error()
+	}
+	for _, r := range releases {
+		if r.Draft || r.Prerelease {
+			continue
+		}
+		v := strings.TrimPrefix(r.TagName, "v")
+		if compareVer(v, domain.DefaultMitaVersion) < 0 {
+			continue
+		}
+		ch.Versions = append(ch.Versions, Version{Version: v, PublishedAt: r.PublishedAt.UTC().Format("2006-01-02")})
+		if len(ch.Versions) >= 12 {
+			break
+		}
+	}
+	ch.Versions = ensureDefault(ch.Versions, ch.Default)
+	if len(ch.Versions) > 0 {
+		ch.Latest = ch.Versions[0].Version
+		ch.Versions[0].Latest = true
+	}
+	return ch
+}
+
 var snellKnown = []string{"5.0.1", "5.0.0", "4.1.1", "4.1.0", "4.0.1"}
 
 func (f *Fetcher) snell(ctx context.Context) Channel {
@@ -246,6 +276,7 @@ func ensureDefault(vers []Version, def string) []Version {
 
 func fallbackSingBox() []Version {
 	return []Version{
+		{Version: "1.14.1"},
 		{Version: "1.14.0"},
 		{Version: "1.13.21"},
 		{Version: desired.DefaultSingBoxVersion},

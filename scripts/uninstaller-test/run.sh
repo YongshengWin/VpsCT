@@ -58,8 +58,14 @@ PY
   systemctl reset-failed
   systemctl enable --now "${units[@]}" >/dev/null 2>&1
   nft delete table inet ctlvps 2>/dev/null || true
+  nft delete table inet ctlvps_network 2>/dev/null || true
+  nft delete table inet ctlvps_forwards 2>/dev/null || true
+  nft delete table inet ctlvps_forward_admission 2>/dev/null || true
   nft delete table inet keep_fixture 2>/dev/null || true
   nft add table inet ctlvps
+  nft add table inet ctlvps_network
+  nft add table inet ctlvps_forwards
+  nft add table inet ctlvps_forward_admission
   nft add table inet keep_fixture
   nft delete table inet filter 2>/dev/null || true
   nft -f - <<'NFT'
@@ -75,6 +81,10 @@ uninstall --all --purge --remove-caddy --dry-run
 for unit in "${units[@]}"; do assert systemctl is-active --quiet "$unit"; done
 assert test -f /opt/ctlvps/data/ctlvps.db
 assert test -f /var/lib/ctlvps-agent/state.json
+assert nft list table inet ctlvps_network
+assert nft list table inet ctlvps_forwards
+assert nft list table inet ctlvps_forward_admission
+assert grep -q 'inet ctlvps_network' /tmp/uninstall-test-output
 done_case 'dry run leaves services and data intact'
 
 reject --all --purge
@@ -94,6 +104,9 @@ uninstall --controller --purge --yes
 assert test ! -e /opt/ctlvps/data
 assert test -f /var/lib/ctlvps-agent/state.json
 assert nft list table inet ctlvps
+assert nft list table inet ctlvps_network
+assert nft list table inet ctlvps_forwards
+assert nft list table inet ctlvps_forward_admission
 assert test -f /usr/local/libexec/ctlvps-agent-uninstall.sh
 done_case 'controller uninstall, later purge, and agent coexistence'
 bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --purge --dry-run > /tmp/standalone-preview
@@ -239,6 +252,9 @@ uninstall --agent --yes
 assert test ! -f /etc/systemd/system/ctlvps-proxy-n2.slice
 assert test ! -f /etc/systemd/system/ctlvps-snell@21002.service.d/meter.conf
 if nft list table inet ctlvps_nodes 2>/dev/null; then exit 1; fi
+if nft list table inet ctlvps_network 2>/dev/null; then exit 1; fi
+if nft list table inet ctlvps_forwards 2>/dev/null; then exit 1; fi
+if nft list table inet ctlvps_forward_admission 2>/dev/null; then exit 1; fi
 assert nft list table inet keep_fixture
 done_case 'shared process meters and generated Snell slice drop-in are removed safely'
 
