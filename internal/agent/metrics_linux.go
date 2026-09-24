@@ -83,10 +83,7 @@ func netCounters(iface string) (rx, tx int64) {
 			continue
 		}
 		name = strings.TrimSpace(name)
-		if name == "lo" || strings.HasPrefix(name, "docker") || strings.HasPrefix(name, "veth") || strings.HasPrefix(name, "br-") || strings.HasPrefix(name, "tun") || strings.HasPrefix(name, "wg") {
-			continue
-		}
-		if iface != "" && name != iface {
+		if !legacyNetworkIncluded(name, iface) {
 			continue
 		}
 		f := strings.Fields(rest)

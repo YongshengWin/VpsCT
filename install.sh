@@ -169,6 +169,12 @@ check_environment() {
   flock -n 9 || die '已有另一个安装器正在运行'
   if [[ "$UPDATE" == 1 ]]; then
     [[ -L "$INSTALL_DIR/current" && -f "$ENV_FILE" && -f "$INSTALL_DIR/REPOSITORY" ]] || die '找不到由安装器管理的现有安装'
+    # A manually replaced entrypoint can make an otherwise successful update
+    # keep running an old binary, even after current has moved to the new release.
+    for entry in ctlvpsd agents; do
+      [[ -L "$INSTALL_DIR/$entry" && "$(readlink "$INSTALL_DIR/$entry")" == "current/$entry" ]] ||
+        die "安装入口 $INSTALL_DIR/$entry 已被替换；恢复 current/$entry 符号链接后再升级"
+    done
     [[ -z "$DOMAIN" && -z "$SITE_URL" && "$NO_PROXY" == 0 ]] || die '升级保留站点配置，请勿同时指定域名或代理选项'
     PREVIOUS=$(readlink -f "$INSTALL_DIR/current")
     [[ "$PREVIOUS" == "$INSTALL_DIR/releases/"* && -x "$PREVIOUS/ctlvpsd" ]] || die '现有版本目录无效'

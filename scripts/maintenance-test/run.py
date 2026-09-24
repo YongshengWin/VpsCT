@@ -269,7 +269,12 @@ P('/var/lib/ctlvps-agent').mkdir(mode=0o700)
 state = {'server_url': 'https://127.0.0.1:9443', 'agent_token': enrolled['agent_token'], 'server_id': sid, 'poll_interval_sec': 1}
 P('/var/lib/ctlvps-agent/state.json').write_text(json.dumps(state))
 P('/var/lib/ctlvps-agent/state.json').chmod(0o600)
-P('/etc/systemd/system/ctlvps-agent.service').write_text('[Service]\nExecStart=/usr/local/bin/ctlvps-agent run --state /var/lib/ctlvps-agent\nRestart=always\nRestartSec=1\n[Install]\nWantedBy=multi-user.target\n')
+# Exercise the real installer's sandbox and resource budgets; a minimal unit
+# would miss permission failures introduced by lifecycle/configuration locks.
+unit_template = P('/src/internal/assets/install-agent.sh').read_text().split('cat > /etc/systemd/system/ctlvps-agent.service <<EOF\n', 1)[1].split('\nEOF', 1)[0]
+unit_template = unit_template.replace('$BIN_DIR', '/usr/local/bin').replace('$STATE_DIR', '/var/lib/ctlvps-agent')
+assert '$' not in unit_template, 'unhandled installer unit expansion'
+P('/etc/systemd/system/ctlvps-agent.service').write_text(unit_template+'\n')
 run('systemctl', 'daemon-reload')
 run('systemctl', 'start', 'ctlvps-agent')
 wait(lambda: request(f'/api/v1/servers/{sid}/maintenance')['available'], 100)
@@ -292,8 +297,24 @@ print('PASS real agent claims, restarts, verifies binary and reports success', f
 
 distribution = root / f'agents/ctlvps-agent-linux-{arch}'
 original_agent = distribution.read_bytes()
+original_capabilities = run(str(distribution), 'capabilities').stdout.strip()
+json.loads(original_capabilities)
 run('systemctl', 'stop', 'ctlvps-agent')
 distribution.write_text('#!/bin/sh\nif [ "${1:-}" = version ]; then echo fixture; exit 0; fi\nexit 1\n')
+run('python3','/src/scripts/security-fixture.py','sign','agent',initial_version,str(distribution))
+job = agent_job('update')
+run('systemctl', 'start', 'ctlvps-agent')
+root_status(job, 'failed')
+wait(lambda: any(j['id'] == job and j['status'] == 'failed' for j in request(f'/api/v1/servers/{sid}/maintenance')['jobs']))
+assert P('/usr/local/bin/ctlvps-agent').read_bytes() == original_agent
+assert active('ctlvps-agent') and active('ctlvpsd')
+print('PASS incompatible agent rejected before replacing the running binary', flush=True)
+
+# A verified candidate that passes compatibility but fails normal startup
+# must reach the rollback path; do not weaken the production preflight.
+run('systemctl', 'stop', 'ctlvps-agent')
+assert "'" not in original_capabilities
+distribution.write_text('#!/bin/sh\nif [ "${1:-}" = version ]; then echo fixture; exit 0; fi\nif [ "${1:-}" = capabilities ]; then cat <<\'CAPABILITIES\'\n' + original_capabilities + '\nCAPABILITIES\nexit 0\nfi\nexit 1\n')
 run('python3','/src/scripts/security-fixture.py','sign','agent',initial_version,str(distribution))
 job = agent_job('update')
 run('systemctl', 'start', 'ctlvps-agent')
@@ -320,4 +341,4 @@ assert not active('ctlvpsd') and not active('ctlvps-maintenance')
 assert not (root / 'data').exists() and not (root / 'releases').exists()
 wait(lambda: not (P('/var/lib/ctlvps-maintenance') / job / 'request.json').exists())
 print('PASS controller purge completes after API and root helper exit', flush=True)
-print('Maintenance integration: 11 scenarios passed', flush=True)
+print('Maintenance integration: 12 scenarios passed', flush=True)

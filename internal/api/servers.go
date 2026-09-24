@@ -252,12 +252,8 @@ func (a *API) updateServer(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	// deployed nodes inherit the public host
-	nodes, _ := a.Store.ListNodes(r.Context(), store.NodeFilter{ServerID: &s.ID, Source: domain.NodeDeployed, IncludeRevoked: true})
-	for _, n := range nodes {
-		if n.Server != s.PublicHost && s.PublicHost != "" {
-			n.Server = s.PublicHost
-			_ = a.Store.UpdateNode(r.Context(), &n)
-		}
+	if err := a.Store.UpdateInheritedNodeHosts(r.Context(), s.ID, s.PublicHost); err != nil {
+		return err
 	}
 	_, _, _ = a.Desired.Publish(r.Context(), s.ID)
 	a.audit(r, "server.update", s.Name, nil)
@@ -495,35 +491,27 @@ func (a *API) serverRepublish(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	ds, err := a.Desired.Build(r.Context(), s)
+	rec, _, err := a.Desired.ForcePublish(r.Context(), id)
 	if err != nil {
-		return err
+		return networkOperationError(err)
 	}
-	ds.GeneratedAt = a.Store.Now()
-	payload, _ := json.Marshal(ds)
-	rec, err := a.Store.CreateDesiredState(r.Context(), id, payload, ds.Hash)
-	if err != nil {
-		return err
-	}
-	ds.Revision = rec.Revision
-	payload, _ = json.Marshal(ds)
-	_ = a.Store.UpdateDesiredPayload(r.Context(), rec.ID, payload)
 	a.audit(r, "server.republish", s.Name, map[string]any{"revision": rec.Revision})
 	httpx.OK(w, map[string]any{"revision": rec.Revision, "hash": rec.Hash})
 	return nil
 }
 
 type deployInput struct {
-	Protocol     string   `json:"protocol"`
-	Name         string   `json:"name"`
-	Port         int      `json:"port"`
-	SNI          string   `json:"sni"`
-	Domain       string   `json:"domain"`
-	Obfs         bool     `json:"obfs"`
-	SnellVersion int      `json:"snell_version"`
-	CertID       string   `json:"cert_id"`
-	CertMode     string   `json:"cert_mode"`
-	Tags         []string `json:"tags"`
+	Protocol       string   `json:"protocol"`
+	Name           string   `json:"name"`
+	Port           int      `json:"port"`
+	SNI            string   `json:"sni"`
+	Domain         string   `json:"domain"`
+	Obfs           bool     `json:"obfs"`
+	SnellVersion   int      `json:"snell_version"`
+	MieruTransport string   `json:"mieru_transport"`
+	CertID         string   `json:"cert_id"`
+	CertMode       string   `json:"cert_mode"`
+	Tags           []string `json:"tags"`
 }
 
 func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
@@ -552,7 +540,7 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	} else if used[port] {
 		return httpx.Conflict(fmt.Sprintf("端口 %d 已被占用", port))
 	}
-	node, err := provision.NewNode(s, "", provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, CertMode: in.CertMode, CertID: in.CertID})
+	node, err := provision.NewNode(s, "", provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, MieruTransport: in.MieruTransport, CertMode: in.CertMode, CertID: in.CertID})
 	if err != nil {
 		return httpx.BadRequest(err.Error())
 	}

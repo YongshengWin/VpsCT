@@ -96,6 +96,10 @@ func proxyIdentity(name string) (uint32, uint32, error) {
 }
 
 func validSnellUser(name string) bool {
+	if strings.HasPrefix(name, "ctlvps-mi") {
+		p, e := strconv.Atoi(strings.TrimPrefix(name, "ctlvps-mi"))
+		return e == nil && p > 0 && p <= 65535 && name == "ctlvps-mi"+strconv.Itoa(p)
+	}
 	if !strings.HasPrefix(name, "ctlvps-sn") {
 		return false
 	}

@@ -197,13 +197,8 @@ func (a *API) public(pattern string, h httpx.Handler) {
 }
 
 func (a *API) audit(r *http.Request, action, target string, detail any) error {
-	u := userFrom(r.Context())
-	e := domain.AuditEvent{Action: action, Target: target, IP: httpx.ClientIP(r, a.Config.TrustProxy)}
-	if u != nil {
-		id := u.ID
-		e.UserID = &id
-		e.Username = u.Username
-	}
+	e := a.auditIdentity(r)
+	e.Action, e.Target = action, target
 	if detail != nil {
 		if b, err := json.Marshal(detail); err == nil {
 			e.Detail = b
@@ -214,6 +209,19 @@ func (a *API) audit(r *http.Request, action, target string, detail any) error {
 		return err
 	}
 	return nil
+}
+
+// auditIdentity also supports operations which persist the mutation and audit
+// in their own transaction instead of a separate best-effort write.
+func (a *API) auditIdentity(r *http.Request) domain.AuditEvent {
+	u := userFrom(r.Context())
+	e := domain.AuditEvent{IP: httpx.ClientIP(r, a.Config.TrustProxy)}
+	if u != nil {
+		id := u.ID
+		e.UserID = &id
+		e.Username = u.Username
+	}
+	return e
 }
 
 func isAdmin(u *domain.User) bool { return u != nil && u.Role == domain.RoleAdmin }
@@ -317,6 +325,38 @@ func (a *API) routes() {
 	a.handle("POST /api/v1/servers/{id}/enroll-token", adminAccess, a.enrollToken)
 	a.handle("POST /api/v1/servers/{id}/reset-token", adminAccess, a.resetAgentToken)
 	a.handle("GET /api/v1/servers/{id}/traffic", adminAccess, a.serverTraffic)
+	a.handle("GET /api/v1/servers/{id}/transits", adminAccess, a.listManagedTransits)
+	a.handle("POST /api/v1/transits/preview", adminAccess, a.previewManagedTransit)
+	a.handle("POST /api/v1/transits", adminAccess, a.createManagedTransit)
+	a.handle("POST /api/v1/transits/{op}/retry", adminAccess, a.retryManagedTransit)
+	a.handle("POST /api/v1/transits/{op}/retire-preview", adminAccess, a.previewTransitRetirement)
+	a.handle("POST /api/v1/transits/{op}/visibility", adminAccess, a.setManagedTransitVisibility)
+	a.handle("DELETE /api/v1/transits/{op}", adminAccess, a.retireManagedTransit)
+	a.handle("GET /api/v1/transits/{op}/traffic", adminAccess, a.transitTraffic)
+	a.handle("GET /api/v1/servers/{id}/network", adminAccess, a.serverNetwork)
+	a.handle("GET /api/v1/servers/{id}/network/capabilities", adminAccess, a.serverNetworkCapabilities)
+	a.handle("GET /api/v1/servers/{id}/egress-profiles", adminAccess, a.listEgressProfiles)
+	a.handle("GET /api/v1/servers/{id}/forwards", adminAccess, a.listPortForwards)
+	a.handle("POST /api/v1/servers/{id}/forwards", adminAccess, a.savePortForward("create"))
+	a.handle("POST /api/v1/servers/{id}/forwards/preview", adminAccess, a.previewPortForward(true))
+	a.handle("POST /api/v1/forwards/{id}/preview", adminAccess, a.previewPortForward(false))
+	a.handle("PUT /api/v1/forwards/{id}", adminAccess, a.savePortForward("update"))
+	a.handle("DELETE /api/v1/forwards/{id}", adminAccess, a.savePortForward("delete"))
+	a.handle("POST /api/v1/servers/{id}/egress-profiles", adminAccess, a.createEgressProfile)
+	a.handle("POST /api/v1/servers/{id}/egress-profiles/preview", adminAccess, a.previewEgressCreate)
+	a.handle("GET /api/v1/egress-profiles/{id}", adminAccess, a.getEgressProfile)
+	a.handle("POST /api/v1/egress-profiles/{id}/preview", adminAccess, a.previewEgressProfile)
+	a.handle("PUT /api/v1/egress-profiles/{id}", adminAccess, a.updateEgressProfile)
+	a.handle("DELETE /api/v1/egress-profiles/{id}", adminAccess, a.deleteEgressProfile)
+	a.handle("GET /api/v1/egress-profiles/{id}/revisions/{revision}", adminAccess, a.getEgressRevision)
+	a.handle("GET /api/v1/servers/{id}/network/billing", adminAccess, a.serverNetworkBilling)
+	a.handle("PUT /api/v1/servers/{id}/network/billing", adminAccess, a.updateNetworkBilling)
+	a.handle("GET /api/v1/servers/{id}/network/operations", adminAccess, a.serverNetworkOperations)
+	a.handle("GET /api/v1/network/operations/{op}", adminAccess, a.getNetworkOperation)
+	a.handle("POST /api/v1/network/operations/{op}/retry", adminAccess, a.retryNetworkOperation)
+	a.handle("GET /api/v1/servers/{id}/interfaces", adminAccess, a.interfaceHistory)
+	a.handle("PUT /api/v1/servers/{id}/interfaces/{iid}/archive", adminAccess, a.archiveInterface)
+	a.handle("GET /api/v1/servers/{id}/interfaces/{iid}/traffic", adminAccess, a.interfaceTraffic)
 	a.handle("GET /api/v1/servers/{id}/samples", adminAccess, a.serverSamples)
 	a.handle("GET /api/v1/servers/{id}/desired", adminAccess, a.serverDesired)
 	a.handle("POST /api/v1/servers/{id}/republish", adminAccess, a.serverRepublish)
@@ -341,6 +381,8 @@ func (a *API) routes() {
 	a.handle("POST /api/v1/nodes/bulk-regenerate", adminAccess, a.bulkRegenerateNodes)
 	a.handle("POST /api/v1/nodes/chain", adminAccess, a.setNodeChain)
 	a.handle("GET /api/v1/nodes/{id}", adminAccess, a.getNode)
+	a.handle("POST /api/v1/nodes/{id}/network/preview", adminAccess, a.previewNodeNetwork)
+	a.handle("PUT /api/v1/nodes/{id}/network", adminAccess, a.updateNodeNetwork)
 	a.handle("PUT /api/v1/nodes/{id}", adminAccess, a.updateNode)
 	a.handle("DELETE /api/v1/nodes/{id}", adminAccess, a.deleteNode)
 	a.handle("GET /api/v1/nodes/{id}/uri", adminAccess, a.nodeURI)
@@ -406,6 +448,7 @@ func (a *API) routes() {
 	a.handle("GET /api/v1/traffic/overview", adminAccess, a.trafficOverview)
 	a.handle("GET /api/v1/settings", adminAccess, a.getSettings)
 	a.handle("GET /api/v1/settings/core-versions", adminAccess, a.coreVersions)
+	a.handle("GET /api/v1/settings/core-upgrade", adminAccess, a.coreUpgradeStatus)
 	a.handle("PUT /api/v1/settings", adminAccess, a.putSettings)
 	a.handle("POST /api/v1/settings/telegram/test", adminAccess, a.testTelegram)
 	a.handle("GET /api/v1/audit", adminAccess, a.listAudit)

@@ -12,7 +12,6 @@ ipv6: true
 unified-delay: true
 tcp-concurrent: true
 find-process-mode: strict
-global-client-fingerprint: chrome
 geodata-mode: true
 geo-auto-update: false
 geo-update-interval: 24

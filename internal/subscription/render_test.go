@@ -92,6 +92,61 @@ func TestRenderMihomo(t *testing.T) {
 	}
 }
 
+func TestRenderMihomoFiltersUnsupportedSnell(t *testing.T) {
+	for _, templateGroups := range []bool{false, true} {
+		t.Run(fmt.Sprint(templateGroups), func(t *testing.T) {
+			b := sampleBundle()
+			bad := proxynode.Proxy{Name: "unsupported", Type: "snell", Server: "example.com", Port: 443, Params: map[string]any{"version": "6", "psk": "test"}}
+			b.Proxies = append(b.Proxies, bad)
+			b.Chains = append(b.Chains,
+				ChainedProxy{Proxy: proxynode.Proxy{Name: "dependent-two", Type: "ss"}, Via: "dependent-one"},
+				ChainedProxy{Proxy: proxynode.Proxy{Name: "dependent-one", Type: "ss"}, Via: "unsupported"},
+				ChainedProxy{Proxy: proxynode.Proxy{Name: "unsupported-chain", Type: "snell", Params: map[string]any{"version": 6}}, Via: "HK Reality"})
+			b.Groups = []domain.ProxyGroup{{Name: "selection", Type: "select", Proxies: []string{"unsupported", "dependent-one", "dependent-two", "unsupported-chain"}}}
+			b.Rules = []string{"DOMAIN,example.com,unsupported", "GEOIP,CN,dependent-one,no-resolve", "MATCH,selection"}
+			if templateGroups {
+				b.Groups = nil
+				b.Rules = nil
+				b.Template = &domain.RuleTemplate{Kind: "mihomo", Content: "proxy-groups:\n  - name: selection\n    type: select\n    proxies: [unsupported, dependent-one, dependent-two, unsupported-chain]\n  - name: all\n    type: select\n    proxies: ['{{all}}']\nrules: ['DOMAIN,example.com,unsupported', 'MATCH,selection']\n"}
+			}
+			r, err := RenderMihomo(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"unsupported", "dependent-one", "dependent-two", "unsupported-chain"} {
+				if strings.Contains(string(r.Body), name) {
+					t.Fatalf("dangling reference to %s: %s", name, r.Body)
+				}
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal(r.Body, &doc); err != nil {
+				t.Fatal(err)
+			}
+			if len(doc["proxies"].([]any)) != 6 {
+				t.Fatal("compatible nodes were removed")
+			}
+			members := doc["proxy-groups"].([]any)[0].(map[string]any)["proxies"].([]any)
+			if len(members) != 1 || members[0] != "DIRECT" {
+				t.Fatalf("empty group fallback: %v", members)
+			}
+			if len(b.Proxies) != 6 || len(b.Chains) != 4 || b.Proxies[5].Int("version") != 6 {
+				t.Fatal("render mutated source bundle")
+			}
+		})
+	}
+}
+
+func TestMihomoSnellVersionCompatibility(t *testing.T) {
+	for _, version := range []any{nil, 0, 1, 2, 3, 4, 5, 6, float64(6), "6", -1} {
+		p := proxynode.Proxy{Name: "snell", Type: "snell", Params: map[string]any{"version": version}}
+		b, _ := mihomoCompatibleBundle(&Bundle{Proxies: []proxynode.Proxy{p}})
+		want := p.Int("version") >= 0 && p.Int("version") <= 5
+		if (len(b.Proxies) == 1) != want {
+			t.Fatalf("version %v: kept %d proxies", version, len(b.Proxies))
+		}
+	}
+}
+
 func TestRenderMihomoTemplateMarkers(t *testing.T) {
 	b := sampleBundle()
 	b.Groups = nil

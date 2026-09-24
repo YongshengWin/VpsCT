@@ -1,5 +1,7 @@
 # 开源准备与版本验收
 
+未来 v0.1.5 的范围与验收入口见 [待发布说明](releases/v0.1.5.md) 和 [专项清单](releases/v0.1.5-checklist.md)。本文保留各阶段证据，历史通过不等于最终候选版本已验收。
+
 [返回 README](../README.md) · [查看发布流程](releasing.md)
 
 记录日期：2026-09-15。仓库：[YongshengWin/VpsCT](https://github.com/YongshengWin/VpsCT)。本文区分准备阶段的历史记录与首版验收范围。
@@ -103,3 +105,28 @@
 6. 未完成 100 用户并发压测。Snell 仍为每独立节点一个进程；整体内存上限可能触发 OOM，不能视作消除了内存增长。未实施按需启动或空闲回收。
 
 上述实机为发行前灰度构建。正式附件的安装、维护回归和安全检查以 `v0.1.1` 标签的 GitHub Actions 结果为准；不能将单台灰度或交叉编译扩大为所有系统与协议均已验收。
+
+## 8. 官方内核与公开订阅贯通验证
+
+2026-09-23，本地 Linux ARM64 隔离容器使用官方 sing-box 1.14.1、Mihomo 1.19.31、mita/mieru 3.37.0 和 Snell Server 5.0.1，运行真实控制端 API、agent、systemd 和网络隔离。测试不连接或修改生产节点。
+
+| 协议 | 普通节点的公开模板订阅 | 分享专属节点的公开模板订阅 | 客户端 |
+| --- | --- | --- | --- |
+| SS2022、VLESS Reality、Trojan、AnyTLS、Hysteria2、TUIC、WireGuard | TCP、UDP、服务端先发数据通过 | TCP、UDP、服务端先发数据通过 | 官方 sing-box |
+| Mieru、Snell v5 | TCP、UDP、服务端先发数据通过 | TCP、UDP、服务端先发数据通过 | 官方 Mihomo |
+
+复现入口为 `scripts/test-network-systemd-container.sh`：
+
+- `NETWORK_SYSTEMD_CASE=subscriptions`：从 `/s` 公开入口下载实际渲染配置，验证七种协议和暂停分享后排除专属节点。隔离模板不依赖公网规则集；逐节点测试只切换最终出口。
+- `NETWORK_SYSTEMD_CASE=native-subscriptions`：验证 Mieru 与 Snell 的公开模板、分享订阅。另需设置已校验的 `MIHOMO_BIN`、`MITA_BIN`、`MIERU_BIN`、`SNELL_BIN`。
+- `NETWORK_SYSTEMD_CASE=mita MIERU_TEST_CLIENT=mihomo`：使用实际渲染的 Mihomo 配置，分别验证 Mieru TCP/UDP 传输、业务 TCP/UDP、计量、密钥轮换和删除；设置 `MIHOMO_BIN`、`MITA_BIN`、`MIERU_BIN`。
+
+以上入口均需 `SINGBOX_BIN` 指向预先校验的官方 Linux 二进制，架构必须与 Docker 一致。正式客户端不支持的协议不能靠修改版本字段转换；Snell v6 需要另用支持该版本的客户端验证。这里的结果不代表所有客户端均支持全部协议，也不证明任意自定义模板或第三方节点永远可达。
+
+外部订阅可能把剩余流量、到期时间伪装成 SS 节点。导入和渲染会排除完整匹配的信息标签；旧记录不需要删除即可停止进入代理列表。只有信息项的上游响应不能清空原有真实节点。相关回归覆盖普通订阅、导入订阅、分享与链式引用，并保留名称仅包含类似词语的真实节点。
+
+完整模板还需验证默认分流，不能仅以节点逐一测速代替。地区标记没有匹配节点时，自动生成的空组回退到该订阅的可用节点；有匹配时仍只选对应地区，用户显式配置的 `DIRECT` 不变。这防止仅包含某地区节点的分享因模板优先选择另一空地区组而自动直连。
+
+## 9. v0.1.5 本地候选验收
+
+2026-09-23 的最终候选检查、旧版升级恢复、隔离维护与网络、浏览器结果集中见 [v0.1.5 验收记录](releases/v0.1.5-validation.md)。记录区分本地通过范围、环境阻碍和正式发布前剩余事项；AMD64 实际网络验收尚未完成。

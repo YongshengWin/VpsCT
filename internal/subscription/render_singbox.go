@@ -8,6 +8,8 @@ import (
 
 	"ctlvps/internal/domain"
 	"ctlvps/internal/proxynode"
+	"ctlvps/internal/sshconfig"
+	"ctlvps/internal/wgconfig"
 )
 
 // SingBoxOutbound converts a proxy into a sing-box client outbound. ok=false
@@ -198,6 +200,14 @@ func SingBoxOutbound(p proxynode.Proxy, via string) (map[string]any, bool) {
 		o["type"] = "anytls"
 		o["password"] = p.Str("password")
 		o["tls"] = tls("sni", true)
+	case "ssh":
+		config, err := sshconfig.Decode(p.Params)
+		if err != nil {
+			return nil, false
+		}
+		for key, value := range config.SingBox() {
+			o[key] = value
+		}
 	case "socks5":
 		o["type"] = "socks"
 		o["version"] = "5"
@@ -371,6 +381,24 @@ func singboxRules(rules []string, knownTags map[string]bool, ruleSets map[string
 	return out, final, added
 }
 
+// SingBoxEndpoint renders the 1.11+ endpoint shape, never the removed outbound.
+// Remote-DNS and TCP-only mihomo semantics have no equivalent endpoint option.
+func SingBoxEndpoint(p proxynode.Proxy, via string) (map[string]any, bool) {
+	if p.Type != "wireguard" {
+		return nil, false
+	}
+	c, err := wgconfig.Decode(p.Params)
+	if err != nil || c.RemoteDNS || !c.UDP {
+		return nil, false
+	}
+	ep := c.Endpoint(p.Server, p.Port)
+	ep["tag"] = p.Name
+	if via != "" {
+		ep["detour"] = via
+	}
+	return ep, true
+}
+
 // RenderSingBox produces a sing-box client JSON config.
 func RenderSingBox(b *Bundle) (*Rendered, error) {
 	tpl := builtinSingBoxTemplate
@@ -382,9 +410,16 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 		return nil, fmt.Errorf("sing-box 模板 JSON 解析失败: %w", err)
 	}
 	var nodeOutbounds []map[string]any
+	var nodeEndpoints []map[string]any
 	knownTags := map[string]bool{"direct": true}
 	var nodeTags []string
 	for _, p := range b.Proxies {
+		if ep, ok := SingBoxEndpoint(p, ""); ok {
+			nodeEndpoints = append(nodeEndpoints, ep)
+			nodeTags = append(nodeTags, p.Name)
+			knownTags[p.Name] = true
+			continue
+		}
 		if o, ok := SingBoxOutbound(p, ""); ok {
 			nodeOutbounds = append(nodeOutbounds, o)
 			nodeTags = append(nodeTags, p.Name)
@@ -392,6 +427,12 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 		}
 	}
 	for _, c := range b.Chains {
+		if ep, ok := SingBoxEndpoint(c.Proxy, c.Via); ok && knownTags[c.Via] {
+			nodeEndpoints = append(nodeEndpoints, ep)
+			nodeTags = append(nodeTags, c.Proxy.Name)
+			knownTags[c.Proxy.Name] = true
+			continue
+		}
 		if o, ok := SingBoxOutbound(c.Proxy, c.Via); ok && knownTags[c.Via] {
 			nodeOutbounds = append(nodeOutbounds, o)
 			nodeTags = append(nodeTags, c.Proxy.Name)
@@ -466,6 +507,20 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 	}
 	outbounds = append(outbounds, sys...)
 	doc["outbounds"] = outbounds
+	if len(nodeEndpoints) > 0 {
+		existing, _ := doc["endpoints"].([]any)
+		var merged []any
+		for _, raw := range existing {
+			ep, ok := raw.(map[string]any)
+			if ok && !knownTags[fmt.Sprint(ep["tag"])] {
+				merged = append(merged, ep)
+			}
+		}
+		for _, ep := range nodeEndpoints {
+			merged = append(merged, ep)
+		}
+		doc["endpoints"] = merged
+	}
 
 	route, _ := doc["route"].(map[string]any)
 	if route == nil {

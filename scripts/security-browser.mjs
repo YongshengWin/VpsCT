@@ -37,5 +37,30 @@ try{
  const csp=await page.evaluate(()=>new Promise(resolve=>{window.__injected=false;const el=document.createElement('script');el.textContent='window.__injected=true';document.body.append(el);setTimeout(()=>resolve(window.__injected),100)}));assert.equal(csp,false);
  const after=await inspect();assert.equal(after.servers.length,before.servers.length);assert.equal(after.me.nickname,before.me.nickname);assert.equal(violations.length,0);
  await page.goto(origin+'/servers/'+after.servers[0].id);await page.getByRole('button',{name:'部署节点',exact:true}).first().click();const dialog=page.getByRole('dialog');await dialog.getByRole('combobox').nth(0).click();await page.getByRole('option',{name:'Trojan',exact:true}).click();await dialog.getByRole('combobox').nth(1).click();await page.getByRole('option',{name:'外部证书',exact:true}).click();await dialog.getByText('外部证书 ID',{exact:true}).locator('..').locator('input').fill('fixture-cert');await dialog.getByRole('button',{name:'部署',exact:true}).click();await dialog.waitFor({state:'hidden'});
+ // Release smoke: exercise the new network navigation against real empty API state.
+ await page.goto(origin+'/servers/'+after.servers[0].id+'?tab=routes');
+ await page.getByRole('heading',{name:'网站会看到哪台 VPS 的地址？'}).waitFor();
+ await page.getByRole('button',{name:/看网卡和流量/}).click();
+ await page.getByText('等待多网卡数据',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'← 返回节点线路'}).click();
+ await page.getByRole('button',{name:/连接已有代理/}).click();
+ await page.getByText('还没有接入其他代理',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'← 返回节点线路'}).click();
+ await page.getByRole('button',{name:/转发固定端口/}).click();
+ await page.getByRole('button',{name:'添加转发',exact:true}).click();
+ const forwardDialog=page.getByRole('dialog');
+ await forwardDialog.getByRole('combobox').first().click();
+ for(const label of ['UDP（暂不可启用）','TCP + UDP（暂不可启用）']) {
+  const option=page.getByRole('option',{name:label,exact:true});
+  assert.equal(await option.getAttribute('aria-disabled'),'true');
+ }
+ await page.keyboard.press('Escape');await page.keyboard.press('Escape');
+ await page.setViewportSize({width:390,height:844});
+ await page.goto(origin+'/servers/'+after.servers[0].id+'?tab=routes');
+ await page.getByRole('heading',{name:'网站会看到哪台 VPS 的地址？'}).waitFor();
+ assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'network page overflows mobile viewport');
+ await page.screenshot({path:'/tmp/ctlvps-network-mobile.png',fullPage:true,animations:'disabled'});
+ assert.equal(violations.length,0);
+ console.log('PASS release network navigation, empty inventory/egress, disabled UDP forwarding and 390px layout.');
  await page.screenshot({path:'/tmp/ctlvps-security-browser.png',fullPage:true});console.log('PASS Chromium: UI setup/create, Secure HttpOnly host cookie, same-site/cross-site attacks, CSRF and CSP; no unauthorized mutation.');
 }finally{await browser?.close();child?.kill();await new Promise(r=>front?front.close(r):r());fs.rmSync(dir,{recursive:true,force:true});}

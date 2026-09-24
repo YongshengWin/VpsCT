@@ -83,3 +83,38 @@ jobs:
       - name: Frontend dependency audit
         working-directory: web
         run: npm audit --audit-level=high
+  network:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: Verify official AMD64 network test kernel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          asset=sing-box-1.14.1-linux-amd64.tar.gz
+          digest=$(gh api repos/SagerNet/sing-box/releases/tags/v1.14.1 --jq ".assets[] | select(.name == \"$asset\") | .digest")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/SagerNet/sing-box/releases/download/v1.14.1/$asset" -o "$RUNNER_TEMP/$asset"
+          printf '%s  %s\n' "${digest#sha256:}" "$RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          echo "SINGBOX_BIN=$RUNNER_TEMP/sing-box-1.14.1-linux-amd64/sing-box" >> "$GITHUB_ENV"
+      - name: AMD64 real agent and systemd network verification
+        env:
+          NETWORK_TEST_ARCH: amd64
+        run: |
+          for scenario in transit-ss2022 forward subscriptions; do
+            NETWORK_SYSTEMD_CASE="$scenario" bash scripts/test-network-systemd-container.sh
+          done

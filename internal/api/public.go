@@ -1,6 +1,7 @@
 package api
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -109,6 +110,15 @@ func (a *API) serveSub(w http.ResponseWriter, r *http.Request, sub domain.Subscr
 			return fail(http.StatusGone, "revoked", "subscription revoked")
 		}
 	}
+	if subscriptionBrowserRequest(r) {
+		logEntry.Status = http.StatusForbidden
+		_ = a.Store.AddAccessLog(ctx, logEntry)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(subscriptionBrowserPage))
+		return nil
+	}
 	if format == "" {
 		format = subscription.DetectFormat(r.UserAgent())
 	}
@@ -145,6 +155,22 @@ func (a *API) serveSub(w http.ResponseWriter, r *http.Request, sub domain.Subscr
 	_, _ = w.Write(body)
 	return nil
 }
+
+// Browser navigation must not download a profile, including explicit-format
+// and short URLs. Non-browser fetchers keep their existing format behavior.
+func subscriptionBrowserRequest(r *http.Request) bool {
+	if strings.EqualFold(r.Header.Get("Sec-Fetch-Mode"), "navigate") || strings.EqualFold(r.Header.Get("Sec-Fetch-Dest"), "document") {
+		return true
+	}
+	// Some subscription clients include browser tokens in their UA.
+	if subscription.DetectFormat(r.UserAgent()) != "" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(r.UserAgent()), "mozilla/")
+}
+
+//go:embed subscription_browser.html
+var subscriptionBrowserPage string
 
 // Use this request's subscription capability, never a URL embedded in a
 // shared template. Pin the format so background updates need no Surge UA.

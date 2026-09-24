@@ -25,6 +25,9 @@ func Command(args []string) (string, []string, error) {
 		return "/opt/ctlvps/bin/sing-box", []string{action, "-c", filepath.Join(base, profile, file)}, nil
 	}
 	port, err := strconv.Atoi(profile)
+	if kind == "mieru" && action == "run" && err == nil && port >= 1025 && port <= 65535 && strconv.Itoa(port) == profile {
+		return "/opt/ctlvps/bin/mita", []string{"run"}, nil
+	}
 	if kind == "snell" && action == "run" && err == nil && port > 0 && port <= 65535 && strconv.Itoa(port) == profile {
 		return "/opt/ctlvps/bin/snell-server", []string{"-c", filepath.Join(base, "snell-"+profile, "config.conf")}, nil
 	}
@@ -44,6 +47,11 @@ func Entry(args []string) (bool, error) {
 	}
 	if err = proxyguard.Ready(); err != nil {
 		return true, err
+	}
+	if bin == "/opt/ctlvps/bin/mita" {
+		if err = os.Setenv("MITA_CONFIG_JSON_FILE", filepath.Join("/etc/ctlvps-proxy", "mita-"+args[3], "config.json")); err != nil {
+			return true, err
+		}
 	}
 	return true, launch(bin, argv)
 }

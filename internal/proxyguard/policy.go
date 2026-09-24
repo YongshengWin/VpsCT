@@ -14,17 +14,24 @@ import (
 	"strings"
 	"time"
 
+	"ctlvps/internal/networkguard"
 	"golang.org/x/sys/unix"
 )
 
 const policyFile = Directory + "/policy.json"
 
 type policy struct {
-	Boot   string   `json:"boot"`
-	Rules  string   `json:"rules"`
-	Digest string   `json:"digest"`
-	Units  []string `json:"units"`
-	Paused []string `json:"paused,omitempty"`
+	Boot             string             `json:"boot"`
+	Rules            string             `json:"rules"`
+	Digest           string             `json:"digest"`
+	Units            []string           `json:"units"`
+	Paused           []string           `json:"paused,omitempty"`
+	Network          *networkguard.Plan `json:"network,omitempty"`
+	NetworkDigest    string             `json:"network_digest,omitempty"`
+	TransportGuard   bool               `json:"transport_guard,omitempty"`
+	AdmissionDigest  string             `json:"admission_digest,omitempty"`
+	AdmissionReset   bool               `json:"admission_reset,omitempty"`
+	AdmissionStopped bool               `json:"admission_stopped,omitempty"`
 }
 
 func command(ctx context.Context, input, name string, args ...string) ([]byte, error) {
@@ -120,6 +127,11 @@ func readPolicy() (policy, error) {
 	if p.Boot != string(current) {
 		return p, fmt.Errorf("stale proxy policy")
 	}
+	if p.Network != nil {
+		if err := p.Network.Validate(); err != nil {
+			return p, err
+		}
+	}
 	for _, u := range append(append([]string{}, p.Units...), p.Paused...) {
 		if !validUnit(u) {
 			return p, fmt.Errorf("invalid proxy unit")
@@ -131,6 +143,7 @@ func validUnit(u string) bool {
 	if u == "ctlvps-singbox.service" || u == "ctlvps-singbox-private.service" {
 		return true
 	}
+	u = strings.Replace(u, "ctlvps-mita@", "ctlvps-snell@", 1)
 	if !strings.HasPrefix(u, "ctlvps-snell@") || !strings.HasSuffix(u, ".service") {
 		return false
 	}
@@ -184,7 +197,7 @@ func liveDigest(ctx context.Context) (string, error) {
 }
 
 func activeUnits(ctx context.Context) ([]string, error) {
-	b, e := command(ctx, "", "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--state=active,activating,reloading", "ctlvps-singbox*", "ctlvps-snell@*")
+	b, e := command(ctx, "", "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--state=active,activating,reloading", "ctlvps-singbox*", "ctlvps-snell@*", "ctlvps-mita@*")
 	if e != nil {
 		return nil, e
 	}
@@ -229,33 +242,31 @@ func stopUnits(ctx context.Context, units []string) error {
 
 // Install atomically installs generated rules and publishes their trusted snapshot.
 func Install(ctx context.Context, rules string, units []string) error {
+	return install(ctx, rules, units, false)
+}
+
+func InstallWithTransport(ctx context.Context, rules string, units []string) error {
+	return install(ctx, rules, units, true)
+}
+
+func install(ctx context.Context, rules string, units []string, transportGuard bool) error {
 	return locked(ctx, func() error {
 		for _, u := range units {
 			if !validUnit(u) {
 				return fmt.Errorf("invalid protected unit")
 			}
 		}
-		// Recreate only the counter-free guard table so changed hook priorities
-		// and obsolete chains cannot survive a policy update.
-		transaction := "add table inet ctlvps_egress\ndelete table inet ctlvps_egress\n" + rules
-		if _, e := command(ctx, transaction, "nft", "--check", "-f", "-"); e != nil {
-			return e
-		}
-		if _, e := command(ctx, transaction, "nft", "-f", "-"); e != nil {
-			return e
-		}
-		d, e := liveDigest(ctx)
-		if e != nil {
-			return e
-		}
 		b, e := boot()
 		if e != nil {
 			return e
 		}
 		sort.Strings(units)
-		p := policy{Boot: string(b), Rules: rules, Digest: d, Units: units}
+		p := policy{Boot: string(b), Rules: rules, Units: units, TransportGuard: transportGuard}
 		// Do not revive nodes removed by a later desired state.
 		if old, e := readPolicy(); e == nil {
+			p.Network, p.NetworkDigest = old.Network, old.NetworkDigest
+			p.AdmissionDigest, p.AdmissionReset = old.AdmissionDigest, old.AdmissionReset
+			p.AdmissionStopped = old.AdmissionStopped
 			for _, u := range old.Paused {
 				for _, v := range units {
 					if u == v {
@@ -264,11 +275,101 @@ func Install(ctx context.Context, rules string, units []string) error {
 				}
 			}
 		}
+		complete, err := p.egressRules()
+		if err != nil {
+			return err
+		}
+		transaction := "add table inet ctlvps_egress\ndelete table inet ctlvps_egress\n" + complete
+		if _, err = command(ctx, transaction, "nft", "--check", "-f", "-"); err != nil {
+			return err
+		}
+		if _, err = command(ctx, transaction, "nft", "-f", "-"); err != nil {
+			return err
+		}
+		p.Digest, err = liveDigest(ctx)
+		if err != nil {
+			return err
+		}
 		if e = writePolicy(p); e != nil {
 			return e
 		}
 		return Publish()
 	})
+}
+
+func (p policy) egressRules() (string, error) {
+	if !p.TransportGuard {
+		if p.Network != nil {
+			for _, b := range p.Network.Bindings {
+				if pin := b.Applied.ForwardTarget; pin != nil && len(pin.Grants) > 0 {
+					return "", errors.New("private forward requires the current general guard")
+				}
+				if b.Applied.SOCKS5 != nil && len(b.Applied.SOCKS5.TransportGrants) > 0 {
+					return "", errors.New("private transport requires the current general guard")
+				}
+			}
+		}
+		return p.Rules, nil
+	}
+	plan := p.Network
+	if plan == nil {
+		plan = &networkguard.Plan{Token: strings.Repeat("0", 32)}
+	}
+	rules, err := plan.TransportRules()
+	return p.Rules + rules, err
+}
+
+// Recreate both tables in one transaction when either policy drifts. General
+// transport exceptions must never outlive the corresponding leased guard.
+func repairPolicy(ctx context.Context, p *policy) error {
+	if err := repairAdmission(ctx, p); err != nil {
+		return err
+	}
+	d, err := liveDigest(ctx)
+	var nd string
+	var networkErr error
+	if p.Network != nil {
+		nd, networkErr = liveNetworkDigest(ctx)
+	}
+	if err == nil && p.Digest != "" && d == p.Digest && (p.Network == nil || (networkErr == nil && p.NetworkDigest != "" && nd == p.NetworkDigest)) {
+		return nil
+	}
+	general, err := p.egressRules()
+	if err != nil {
+		return err
+	}
+	rules := "add table inet ctlvps_egress\ndelete table inet ctlvps_egress\n" + general
+	if p.Network != nil {
+		network, err := p.Network.Rules()
+		if err != nil {
+			return err
+		}
+		rules += network
+	}
+	if _, err = command(ctx, rules, "nft", "-f", "-"); err != nil {
+		return err
+	}
+	d, err = liveDigest(ctx)
+	if err != nil {
+		return err
+	}
+	if p.Digest != "" && p.Digest != d {
+		return errors.New("restored proxy policy differs")
+	}
+	if p.Network != nil {
+		nd, err = liveNetworkDigest(ctx)
+		if err != nil {
+			return err
+		}
+		if p.NetworkDigest != "" && p.NetworkDigest != nd {
+			return errors.New("restored network policy differs")
+		}
+	}
+	if p.Digest == "" || (p.Network != nil && p.NetworkDigest == "") {
+		p.Digest, p.NetworkDigest = d, nd
+		return writePolicy(*p)
+	}
+	return nil
 }
 
 // Check repairs drift locally, even while the controller or agent is offline.
@@ -294,38 +395,26 @@ func Check(ctx context.Context) error {
 			units, listErr := activeUnits(safe)
 			return errors.Join(e, revoke(), listErr, stopUnits(safe, units))
 		}
-		d, readErr := liveDigest(ctx)
-		if readErr != nil || d != p.Digest {
-			// Egress has no billing counters; replace the whole table in one transaction.
-			rules := "add table inet ctlvps_egress\ndelete table inet ctlvps_egress\n" + p.Rules
-			_, repairErr := command(ctx, rules, "nft", "-f", "-")
-			if repairErr == nil {
-				d, repairErr = liveDigest(ctx)
-				if repairErr == nil && d != p.Digest {
-					repairErr = fmt.Errorf("restored policy differs")
-				}
+		if repairErr := repairPolicy(ctx, &p); repairErr != nil {
+			// Reserve a fresh timeout for stopping after a timed-out nft command.
+			safe, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			revokeErr := revoke()
+			known := map[string]bool{}
+			for _, u := range p.Paused {
+				known[u] = true
 			}
-			if repairErr != nil {
-				// Reserve a fresh timeout for stopping after a timed-out nft command.
-				safe, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				revokeErr := revoke()
-				known := map[string]bool{}
-				for _, u := range p.Paused {
+			active, listErr := activeUnits(safe)
+			for _, u := range active {
+				if !known[u] {
+					p.Paused = append(p.Paused, u)
 					known[u] = true
 				}
-				active, listErr := activeUnits(safe)
-				for _, u := range active {
-					if !known[u] {
-						p.Paused = append(p.Paused, u)
-						known[u] = true
-					}
-				}
-				// Persist the restart set before stopping; a killed watchdog can resume it.
-				saveErr := writePolicy(p)
-				stopErr := stopUnits(safe, p.Paused)
-				return errors.Join(fmt.Errorf("proxy policy restore failed; proxies paused: %w", repairErr), revokeErr, saveErr, listErr, stopErr)
 			}
+			// Persist the restart set before stopping; a killed watchdog can resume it.
+			saveErr := writePolicy(p)
+			stopErr := stopUnits(safe, p.Paused)
+			return errors.Join(fmt.Errorf("proxy policy restore failed; proxies paused: %w", repairErr), revokeErr, saveErr, listErr, stopErr)
 		}
 		if e = Publish(); e != nil {
 			return e

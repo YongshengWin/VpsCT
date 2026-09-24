@@ -3,6 +3,7 @@
 package domain
 
 import (
+	"ctlvps/internal/networkconfig"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -131,6 +132,8 @@ type Agent struct {
 // NodeSource says where a node came from.
 type NodeSource string
 
+const NodeTransit NodeSource = "transit"
+
 const (
 	NodeManual   NodeSource = "manual"   // typed or pasted by the operator
 	NodeImported NodeSource = "imported" // pulled from an external subscription
@@ -145,6 +148,7 @@ const (
 	CoreNone    Core = ""
 	CoreSingBox Core = "singbox"
 	CoreSnell   Core = "snell"
+	CoreMita    Core = "mieru"
 )
 
 // Node is a proxy endpoint. Params holds the client-facing protocol
@@ -153,27 +157,29 @@ const (
 // secrets (reality private key, certificate mode) and is never rendered to
 // subscriptions.
 type Node struct {
-	ID               int64           `json:"id"`
-	Name             string          `json:"name"`
-	Protocol         string          `json:"protocol"`
-	Server           string          `json:"server"`
-	Port             int             `json:"port"`
-	Params           json.RawMessage `json:"params"`
-	ServerParams     json.RawMessage `json:"-"`
-	Source           NodeSource      `json:"source"`
-	ServerID         *int64          `json:"server_id,omitempty"`
-	ListenPort       int             `json:"listen_port,omitempty"`
-	Core             Core            `json:"core"`
-	ShareID          *int64          `json:"share_id,omitempty"`
-	ExternalSubID    *int64          `json:"external_sub_id,omitempty"`
-	ChainFrontNodeID *int64          `json:"chain_front_node_id,omitempty"`
-	Enabled          bool            `json:"enabled"`
-	OwnerUserID      int64           `json:"owner_user_id"`
-	Tags             []string        `json:"tags"`
-	SortOrder        int             `json:"sort_order"`
-	Revoked          bool            `json:"revoked"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	Network          *networkconfig.Node `json:"network,omitempty"`
+	NetworkRevision  int64               `json:"network_revision,omitempty"`
+	ID               int64               `json:"id"`
+	Name             string              `json:"name"`
+	Protocol         string              `json:"protocol"`
+	Server           string              `json:"server"`
+	Port             int                 `json:"port"`
+	Params           json.RawMessage     `json:"params"`
+	ServerParams     json.RawMessage     `json:"-"`
+	Source           NodeSource          `json:"source"`
+	ServerID         *int64              `json:"server_id,omitempty"`
+	ListenPort       int                 `json:"listen_port,omitempty"`
+	Core             Core                `json:"core"`
+	ShareID          *int64              `json:"share_id,omitempty"`
+	ExternalSubID    *int64              `json:"external_sub_id,omitempty"`
+	ChainFrontNodeID *int64              `json:"chain_front_node_id,omitempty"`
+	Enabled          bool                `json:"enabled"`
+	OwnerUserID      int64               `json:"owner_user_id"`
+	Tags             []string            `json:"tags"`
+	SortOrder        int                 `json:"sort_order"`
+	Revoked          bool                `json:"revoked"`
+	CreatedAt        time.Time           `json:"created_at"`
+	UpdatedAt        time.Time           `json:"updated_at"`
 }
 
 // ExternalSubscription is an "airport" subscription URL that we pull nodes
@@ -331,8 +337,9 @@ const (
 
 // ShareTarget selects which protocols a share gets on one server.
 type ShareTarget struct {
-	ServerID  int64    `json:"server_id"`
-	Protocols []string `json:"protocols"`
+	Network   *networkconfig.Node `json:"network,omitempty"`
+	ServerID  int64               `json:"server_id"`
+	Protocols []string            `json:"protocols"`
 }
 
 // Share is a customer allotment: dedicated inbounds on chosen servers plus
@@ -519,6 +526,7 @@ const (
 	SettingQuotaAlertPct    = "quota.alert_percent"
 	SettingSingBoxVersion   = "core.singbox_version"
 	SettingSnellVersion     = "core.snell_version"
+	SettingMitaVersion      = "core.mita_version"
 	SettingRateLimitPerMin  = "security.subscription_rate_per_min"
 )
 
@@ -532,6 +540,8 @@ const (
 	ProtocolTUIC        = "tuic"
 	ProtocolAnyTLS      = "anytls"
 	ProtocolSnell       = "snell"
+	ProtocolMieru       = "mieru"
+	ProtocolWireGuard   = "wireguard"
 	ProtocolSocks5      = "socks5"
 	ProtocolHTTP        = "http"
 	ProtocolShadowTLS   = "shadowtls"
@@ -540,12 +550,15 @@ const (
 // DeployableProtocols lists what ctlvps can create on a managed VPS.
 var DeployableProtocols = []string{
 	ProtocolVLESS, ProtocolAnyTLS, ProtocolHysteria2, ProtocolTUIC,
-	ProtocolTrojan, ProtocolShadowsocks, ProtocolSnell,
+	ProtocolTrojan, ProtocolShadowsocks, ProtocolSnell, ProtocolMieru, ProtocolWireGuard,
 }
 
 // CoreFor returns the core that serves protocol p. Snell is only implemented
 // by the official snell-server; everything else runs in sing-box.
 func CoreFor(p string, _ CoreMode) Core {
+	if p == ProtocolMieru {
+		return CoreMita
+	}
 	if p == ProtocolSnell {
 		return CoreSnell
 	}
@@ -555,7 +568,7 @@ func CoreFor(p string, _ CoreMode) Core {
 // ProtocolAllowed reports whether p may be deployed on a server in mode.
 // "lean" servers run sing-box only, so Snell is unavailable there.
 func ProtocolAllowed(p string, mode CoreMode) bool {
-	if mode == CoreModeLean && p == ProtocolSnell {
+	if mode == CoreModeLean && (p == ProtocolSnell || p == ProtocolMieru) {
 		return false
 	}
 	for _, d := range DeployableProtocols {

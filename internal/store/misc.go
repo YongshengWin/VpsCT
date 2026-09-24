@@ -4,9 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strconv"
+	"strings"
 	"time"
 
+	"ctlvps/internal/agentproto"
 	"ctlvps/internal/domain"
 )
 
@@ -53,11 +56,72 @@ func (s *Store) CreateDesiredState(ctx context.Context, serverID int64, payload 
 	return d, err
 }
 
-// UpdateDesiredPayload rewrites the payload of a revision (used to embed the
-// assigned revision number).
-func (s *Store) UpdateDesiredPayload(ctx context.Context, id int64, payload []byte) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE desired_states SET payload=? WHERE id=?`, s.seal("desired_states.payload", string(payload)), id)
-	return err
+var ErrDesiredConflict = errors.New("desired state changed while building")
+
+// PublishDesired atomically embeds the assigned revision and compares with
+// the revision observed BEFORE building the candidate. An older build cannot
+// overwrite a completed newer publish; the caller must rebuild after conflict.
+func (s *Store) PublishDesired(ctx context.Context, expected int64, candidate *agentproto.DesiredState, force bool) (domain.DesiredState, bool, error) {
+	var out domain.DesiredState
+	created := false
+	err := s.Tx(ctx, func(tx *sql.Tx) error {
+		generation, err := networkGeneration(ctx, tx, candidate.ServerID)
+		if err != nil {
+			return err
+		}
+		if generation != candidate.NetworkGeneration {
+			return ErrDesiredConflict
+		}
+		if generation > 0 {
+			if err := networkMaintenance(ctx, tx, candidate.ServerID); err != nil {
+				return err
+			}
+		}
+		latest, err := s.scanDesired(tx.QueryRowContext(ctx, `SELECT `+desiredCols+` FROM desired_states WHERE server_id=? ORDER BY revision DESC LIMIT 1`, candidate.ServerID))
+		if err != nil && !isNoRows(err) {
+			return err
+		}
+		if latest.Revision != expected {
+			return ErrDesiredConflict
+		}
+		var republish bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM network_operations WHERE server_id=? AND generation=? AND republish=1 AND status IN ('queued','publish_failed'))`, candidate.ServerID, generation).Scan(&republish); err != nil {
+			return err
+		}
+		force = force || republish
+		if latest.Revision > 0 && latest.Hash == candidate.Hash && !force {
+			out = latest
+			return s.attachNetworkOperations(ctx, tx, out, generation)
+		}
+		ds := *candidate
+		ds.Revision = expected + 1
+		payload, err := json.Marshal(&ds)
+		if err != nil {
+			return err
+		}
+		now := s.Now()
+		if _, err := tx.ExecContext(ctx, `UPDATE desired_states SET status=? WHERE server_id=? AND status=?`, domain.DesiredStale, ds.ServerID, domain.DesiredPending); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `INSERT INTO desired_states(server_id,revision,payload,hash,status,created_at) VALUES (?,?,?,?,?,?)`, ds.ServerID, ds.Revision, s.seal("desired_states.payload", string(payload)), ds.Hash, domain.DesiredPending, fmtTime(now))
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		out = domain.DesiredState{ID: id, ServerID: ds.ServerID, Revision: ds.Revision, Payload: payload, Hash: ds.Hash, Status: domain.DesiredPending, CreatedAt: now}
+		created = true
+		return s.attachNetworkOperations(ctx, tx, out, generation)
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "database is locked") {
+			err = ErrDesiredConflict
+		}
+		return domain.DesiredState{}, false, err
+	}
+	return out, created, nil
 }
 
 // LatestDesiredState returns the newest revision for a server.
@@ -111,6 +175,10 @@ func (s *Store) PruneDesiredStates(ctx context.Context, keep int) error {
 
 // AddAudit appends an audit event.
 func (s *Store) AddAudit(ctx context.Context, e domain.AuditEvent) error {
+	return s.addAudit(ctx, s.db, e)
+}
+
+func (s *Store) addAudit(ctx context.Context, q querier, e domain.AuditEvent) error {
 	if len(e.Target) > 512 {
 		e.Target = e.Target[:512]
 	}
@@ -124,7 +192,7 @@ func (s *Store) AddAudit(ctx context.Context, e domain.AuditEvent) error {
 	if len(e.Detail) == 0 {
 		e.Detail = []byte("{}")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO audit_log(ts,user_id,username,action,target,detail,ip) VALUES (?,?,?,?,?,?,?)`,
+	_, err := q.ExecContext(ctx, `INSERT INTO audit_log(ts,user_id,username,action,target,detail,ip) VALUES (?,?,?,?,?,?,?)`,
 		fmtTime(e.TS), nullInt(e.UserID), e.Username, e.Action, e.Target, string(e.Detail), e.IP)
 	return err
 }
@@ -307,8 +375,7 @@ func (s *Store) GetSettingBool(ctx context.Context, key string, def bool) bool {
 
 // SetSetting upserts a setting.
 func (s *Store) SetSetting(ctx context.Context, key, value string) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, key, s.seal("settings.value", value))
-	return err
+	return s.SetSettings(ctx, map[string]string{key: value})
 }
 
 // AllSettings returns every setting.

@@ -1,8 +1,10 @@
 import * as React from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Save, Send, Plus, Trash2, Sun, Moon, Monitor } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
 import { MaintenancePanel } from "@/components/maintenance";
+import { CoreUpgradeDetails } from "@/components/core-upgrade";
 import type { AuditEvent, BanRule, AccessLog } from "@/lib/types";
 import { fmtBytes, fmtDate, fmtDuration, cn } from "@/lib/utils";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Confirm, Dialog, Field, Input, PageHeader, Select, Spinner, Switch, Table, Tabs, Td, Th, Tr, Code } from "@/components/ui";
@@ -12,7 +14,10 @@ import { useTheme } from "@/lib/auth";
 type Settings = Record<string, string>;
 
 export function SettingsPage() {
-  const [tab, setTab] = React.useState<"general" | "notify" | "retention" | "cores" | "security" | "audit" | "system">("general");
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("tab") || "general";
+  const tab = ["general", "notify", "retention", "cores", "security", "audit", "system"].includes(selected) ? selected : "general";
+  const setTab = (value: string) => setParams(p => { p.set("tab", value); return p; });
   return (
     <div>
       <PageHeader title="设置" />
@@ -42,7 +47,7 @@ function useSettings() {
   const set = (k: string, v: string) => setDraft((d) => ({ ...d, [k]: v }));
   const save = useMutation({
     mutationFn: () => put<Settings>("/api/v1/settings", draft),
-    onSuccess: (r) => { qc.setQueryData(["settings"], r); setDraft({}); toast.success("已保存"); qc.invalidateQueries({ queryKey: ["meta"] }); },
+    onSuccess: (r) => { qc.setQueryData(["settings"], r); setDraft({}); toast.success("已保存"); qc.invalidateQueries({ queryKey: ["meta"] }); qc.invalidateQueries({ queryKey: ["core-upgrade"] }); },
     onError: (e) => toast.fromError(e),
   });
   return { q, value, set, save, dirty: Object.keys(draft).length > 0 };
@@ -172,15 +177,18 @@ function VersionSelect({ value, onChange, channel, loading }: { value: string; o
 
 function CoresTab() {
   const s = useSettings();
-  const cat = useQuery({ queryKey: ["core-versions"], queryFn: () => get<{ singbox: CoreChannel; snell: CoreChannel }>("/api/v1/settings/core-versions"), staleTime: 60 * 60 * 1000 });
+  const cat = useQuery({ queryKey: ["core-versions"], queryFn: () => get<{ singbox: CoreChannel; snell: CoreChannel; mita: CoreChannel }>("/api/v1/settings/core-versions"), staleTime: 60 * 60 * 1000 });
   if (s.q.isLoading) return <Spinner />;
   return (
-    <Card className="max-w-2xl p-4 sm:p-5">
-      <p className="mb-3 text-sm leading-6 text-muted-foreground">下拉从 GitHub / Surge 拉当前能装的版本（约 6 小时刷新一次）。选中并保存才会下发，不会自动升级。日常用「内置默认」即可。</p>
+    <div className="grid items-stretch gap-4 lg:grid-cols-2">
+    <Card className="flex min-w-0 flex-col p-4 sm:p-5">
+      <h2 className="mb-2 text-sm font-semibold">版本选择</h2>
+      <p className="mb-3 text-sm leading-6 text-muted-foreground">下拉从 GitHub / Surge 拉取官方版本（约 6 小时刷新一次）。选中并保存才会下发。升级面板保留已锁定版本；sing-box 选择默认版本并保存后，也会锁定为当次具体版本。</p>
       <div className="grid gap-4">
         <Field label="sing-box" hint={cat.data?.singbox.error ? `上游暂不可用，已用备份列表。${cat.data.singbox.error}` : "VLESS / Hy2 / TUIC 走这个内核。"}>
           <VersionSelect value={s.value("core.singbox_version")} onChange={(v) => s.set("core.singbox_version", v)} channel={cat.data?.singbox} loading={cat.isLoading} />
         </Field>
+        <Field label="mita（mieru）" hint="默认锁定 3.37.0；切换其他版本需填写对应官方 SHA-256，保存后升级。"><VersionSelect value={s.value("core.mita_version")} onChange={v=>s.set("core.mita_version",v)} channel={cat.data?.mita} loading={cat.isLoading} /></Field>
         <Field label="snell-server" hint={cat.data?.snell.error ? `未能探测 Surge CDN，已用已知版本。` : "只有 Snell 协议才用。v4 兼容 Surge 4 / 小火箭；v5 要 Surge 5。"}>
           <VersionSelect value={s.value("core.snell_version")} onChange={(v) => s.set("core.snell_version", v)} channel={cat.data?.snell} loading={cat.isLoading} />
         </Field>
@@ -189,11 +197,16 @@ function CoresTab() {
         <summary className="cursor-pointer text-sm font-medium text-muted-foreground">高级：下载校验（SHA-256，可留空）</summary>
         <div className="mt-3 grid gap-3">
           <Field label="sing-box SHA-256" hint="amd64=哈希,arm64=哈希"><Input className="mono" value={s.value("core.singbox_sha256")} onChange={(e) => s.set("core.singbox_sha256", e.target.value)} placeholder="可留空" /></Field>
+          <Field label="mita SHA-256" hint="amd64=哈希,arm64=哈希；默认版本留空使用内置官方校验和。"><Input className="mono" value={s.value("core.mita_sha256")} onChange={e=>s.set("core.mita_sha256",e.target.value)} /></Field>
           <Field label="snell-server SHA-256"><Input className="mono" value={s.value("core.snell_sha256")} onChange={(e) => s.set("core.snell_sha256", e.target.value)} placeholder="可留空" /></Field>
         </div>
       </details>
-      <SaveBar s={s} />
+      <div className="mt-auto"><SaveBar s={s} /></div>
     </Card>
+    <Card className="min-w-0 p-4 sm:p-5">
+      <CoreUpgradeDetails selectedVersion={s.value("core.singbox_version")} onSelect={v => s.set("core.singbox_version", v)} />
+    </Card>
+    </div>
   );
 }
 

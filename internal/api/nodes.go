@@ -12,6 +12,7 @@ import (
 	"ctlvps/internal/proxynode"
 	"ctlvps/internal/store"
 	"ctlvps/internal/subscription"
+	"ctlvps/internal/wgconfig"
 )
 
 func queryInt64Ptr(r *http.Request, name string) *int64 {
@@ -62,6 +63,9 @@ func (a *API) nodeViews(r *http.Request, nodes []domain.Node) []NodeView {
 	out := make([]NodeView, 0, len(nodes))
 	for _, n := range nodes {
 		v := NodeView{Node: n}
+		if !isAdmin(userFrom(r.Context())) {
+			v.Network, v.NetworkRevision = nil, 0
+		}
 		if n.Source == domain.NodeDeployed && summaryErr == nil {
 			summary := summaries[n.ID]
 			summary.Days = 30
@@ -203,6 +207,11 @@ func (in nodeInput) apply(n *domain.Node) error {
 	}
 	if n.Protocol == "" || n.Server == "" || n.Port <= 0 || n.Port > 65535 {
 		return httpx.BadRequest("协议、地址和端口不能为空")
+	}
+	if n.Protocol == "ssh" || n.Protocol == "wireguard" || n.Protocol == "mieru" {
+		if err := proxynode.Validate(proxynode.FromDomain(*n)); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
 	}
 	if in.Tags != nil {
 		n.Tags = in.Tags
@@ -507,6 +516,26 @@ func (a *API) nodeURI(w http.ResponseWriter, r *http.Request) error {
 		return httpx.ErrNotFound
 	}
 	p := subscription.ProxyFor(n, a.serverHosts(r))
+	if p.Type == "ssh" || p.Type == "wireguard" || p.Type == "mieru" {
+		if err := proxynode.Validate(p); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+		out, _ := subscription.SingBoxOutbound(p, "")
+		result := map[string]any{"uri": "", "clash": p.ClashMap(), "singbox": out, "surge": ""}
+		if p.Type == "wireguard" {
+			c, _ := wgconfig.Decode(p.Params)
+			config, err := c.StandardConfig(p.Server, p.Port)
+			if err == nil {
+				result["wireguard"] = config
+			}
+			ep, ok := subscription.SingBoxEndpoint(p, "")
+			if ok {
+				result["singbox_endpoint"] = ep
+			}
+		}
+		httpx.OK(w, result)
+		return nil
+	}
 	uri, err := proxynode.ToURI(p)
 	if err != nil {
 		return httpx.BadRequest(err.Error())

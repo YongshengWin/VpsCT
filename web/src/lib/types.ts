@@ -1,3 +1,5 @@
+import type { NodeNetworkPolicy } from "./network";
+
 export type Role = "admin" | "user";
 
 export interface User {
@@ -15,6 +17,7 @@ export interface User {
 }
 
 export interface Metrics {
+	network?: NetworkSnapshot;
   cpu_percent: number;
   load1: number;
   load5: number;
@@ -38,6 +41,44 @@ export interface Metrics {
   interface: string;
 }
 
+export interface NetworkInterface {
+  id: string;
+  generation: string;
+  name: string;
+  index: number;
+  kind: string;
+  mac?: string;
+  mtu: number;
+  up: boolean;
+  carrier: boolean;
+  parent_index?: number;
+  master_index?: number;
+  addresses: string[] | null;
+  usable_addresses?: string[] | null;
+  default_ipv4: boolean;
+  default_ipv6: boolean;
+  counters_valid: boolean;
+  rx: number;
+  tx: number;
+  rate_valid: boolean;
+  rx_rate: number;
+  tx_rate: number;
+}
+
+export interface NetworkSnapshot {
+  version: number;
+  status: "ok" | "incomplete" | "error" | "unsupported";
+  sampled_at: string;
+  error?: string;
+  interfaces: NetworkInterface[];
+}
+
+export interface NetworkView {
+  snapshot: NetworkSnapshot | null;
+  received_at: string | null;
+  interfaces: { id: number; interface: NetworkInterface; present: boolean; last_seen_at: string }[];
+}
+
 export interface CoreStatus {
   name: string;
   version: string;
@@ -53,6 +94,9 @@ export interface CoreStatus {
 }
 
 export interface Diagnostics {
+	 network_forward_errors?: Record<string, string>;
+  network_billing_version?: number;
+  network_billing_error?: string;
  security_version?: number;
  security_policy?: boolean;
  security_paused?: boolean;
@@ -73,6 +117,21 @@ export interface Diagnostics {
   recent_errors?: string[];
   connlog_lag: number;
   binary_sha256?: string;
+}
+
+export interface NetworkBillingPolicy {
+  revision: number;
+  mode: "legacy" | "interfaces";
+  interface_ids: string[] | null;
+}
+
+export interface NetworkBillingView {
+  current: NetworkBillingPolicy;
+  requested: NetworkBillingPolicy;
+  status: "legacy" | "active" | "incomplete" | "switching";
+  error: string;
+  applied_at: string | null;
+  sampled_at: string | null;
 }
 
 export interface AgentUpdateInfo {
@@ -137,6 +196,8 @@ export interface Server {
 }
 
 export interface Node {
+  network?: NodeNetworkPolicy | null;
+  network_revision?: number;
  traffic?: { inbound: number; outbound: number; total: number; days: number; has_data: boolean; first_sample?: string; last_sample?: string };
   id: number;
   name: string;
@@ -274,6 +335,7 @@ export interface Preset {
 }
 
 export interface ShareTarget {
+  network?: import("@/lib/network").NodeNetworkPolicy;
   server_id: number;
   protocols: string[];
 }

@@ -62,6 +62,16 @@ func (m *Manager) Run(id string) error {
 		_, _ = fmt.Fprintf(log, "%s %s: %s\n", j.UpdatedAt.Format(time.RFC3339), step, message)
 		_ = report(s, j)
 	}
+	releaseConfiguration := func() {}
+	if s.Role == "agent" {
+		release, err := m.tryConfigurationLock()
+		if err != nil {
+			stage("failed", "target_lock", "无法取得 agent 配置锁，未执行维护")
+			return err
+		}
+		releaseConfiguration = release
+		defer releaseConfiguration()
+	}
 	stage("running", "preflight", "正在检查安装路径和服务状态")
 	uninstaller := m.path(id, "uninstall.sh")
 	err = os.WriteFile(uninstaller, lifecycle.Uninstall, 0700)
@@ -92,6 +102,7 @@ func (m *Manager) Run(id string) error {
 	if err != nil {
 		_, _ = fmt.Fprintln(log, err)
 	}
+	releaseConfiguration()
 	stage(status, status, message)
 	// Completed reports are retried independently of the agent. Its token and
 	// data may already be gone; this callback can only update this one job.
@@ -176,6 +187,9 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	}
 	if err := command(ctx, log, newPath, "version"); err != nil {
 		return "failed", "新 agent 无法在本机运行，原 agent 未更换", err
+	}
+	if err := secureupdate.CheckAgentCompatibility(ctx, newPath, "/var/lib/ctlvps-agent/state.json"); err != nil {
+		return "failed", "新 agent 不兼容已启用的网络或计量功能，原 agent 未更换", err
 	}
 	if info, err := os.Lstat(target); err != nil || !info.Mode().IsRegular() {
 		return "failed", "agent 安装路径不是默认普通文件", errors.New("nonstandard agent path")

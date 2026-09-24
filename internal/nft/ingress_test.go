@@ -70,6 +70,23 @@ func TestIngressRejectsOtherManagersAndBadInputs(t *testing.T) {
 	}
 }
 
+func TestIngressCoexistsWithBindingGuardWithoutModifyingIt(t *testing.T) {
+	nodes := []agentproto.NodeSpec{{Protocol: "ss", ListenPort: 21001}}
+	guard := `,{"chain":{"family":"inet","table":"ctlvps_network","name":"input","hook":"input","policy":"accept"}},{"rule":{"family":"inet","table":"ctlvps_network","chain":"input","handle":80,"expr":[{"drop":null}]}}`
+	want, err := IngressRules(ingressSnapshot(), nodes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := IngressRules(ingressSnapshot(guard), nodes)
+	if err != nil || got != want || strings.Contains(got, "ctlvps_network") {
+		t.Fatal("owned guard prevented or was modified by ingress allowance", err)
+	}
+	// A matching table name in a different family is not our owned guard.
+	if _, err := IngressRules(ingressSnapshot(strings.ReplaceAll(guard, `"family":"inet"`, `"family":"ip"`)), nodes); err == nil {
+		t.Fatal("foreign same-name firewall accepted")
+	}
+}
+
 func TestCompatibilitySSHProtectionDoesNotBlockNodePorts(t *testing.T) {
 	chain := &ingressEntry{Family: "ip", Table: "filter", Name: "INPUT", Policy: "accept"}
 	var rule ingressEntry

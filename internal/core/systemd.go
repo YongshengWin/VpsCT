@@ -305,7 +305,7 @@ func (s *Systemd) EnsureSnellMeter(ctx context.Context, n agentproto.NodeSpec) (
 	if err != nil {
 		return false, err
 	}
-	dropin, err := s.WriteUnit(SnellUnit(n.ListenPort)+".d/meter.conf", "[Service]\nSlice="+name+"\n")
+	dropin, err := s.WriteUnit(StandaloneUnit(n.Core, n.ListenPort)+".d/meter.conf", "[Service]\nSlice="+name+"\n")
 	if err != nil {
 		return false, err
 	}

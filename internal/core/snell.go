@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -56,7 +57,11 @@ func (d *Snell) EnsureInstalled(ctx context.Context, v agentproto.CoreVersion) (
 func Config(n agentproto.NodeSpec, ipv4Only bool) string {
 	var b strings.Builder
 	b.WriteString("[snell-server]\n")
-	fmt.Fprintf(&b, "listen = :::%d\n", n.ListenPort)
+	listen := fmt.Sprintf(":::%d", n.ListenPort)
+	if n.RuntimeNetwork != nil {
+		listen = net.JoinHostPort(n.RuntimeNetwork.ListenAddress, strconv.Itoa(n.ListenPort))
+	}
+	fmt.Fprintf(&b, "listen = %s\n", listen)
 	fmt.Fprintf(&b, "psk = %s\n", str(n.Params, "psk"))
 	obfs := str(n.Params, "obfs")
 	if obfs == "" {
@@ -77,6 +82,9 @@ func Config(n agentproto.NodeSpec, ipv4Only bool) string {
 // Apply implements Driver.
 func (d *Snell) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec) (bool, error) {
 	for _, n := range nodes {
+		if err := validateNodeNetwork(n, ds); err != nil {
+			return false, err
+		}
 		if err := agentproto.ValidateParams(n.Params, 0); err != nil {
 			return false, err
 		}

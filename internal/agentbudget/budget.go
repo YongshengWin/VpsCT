@@ -4,6 +4,7 @@ package agentbudget
 
 const (
 	ActiveNodes        = 256
+	ActiveForwards     = 128
 	QueueSlots         = 8192
 	QueuePayloadBytes  = 3 << 20 // plus <1 MiB fixed ring storage
 	PairEntriesPerTail = 256     // both pairing maps, two tails: <2 MiB total

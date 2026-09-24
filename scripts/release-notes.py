@@ -17,6 +17,10 @@ if not changes:
     raise SystemExit('version missing from CHANGELOG.md')
 changes = re.sub(r'^## \d+\.', '## 5.', changes, flags=re.M)
 changes = re.sub(r'^### \d+\.', '### 5.', changes, flags=re.M)
+# Release pages do not resolve repository-relative documentation links.
+changes = re.sub(r'(\[[^\]]+\]\()((?:docs/|README\.md|CHANGELOG\.md)[^)]+)(\))',
+                 lambda m: m[1] + f'https://github.com/{repo}/blob/{version}/' + m[2] + m[3], changes)
+
 print(f'''# VpsCT {version}
 
 ## 1. 安装控制端

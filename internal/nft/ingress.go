@@ -12,6 +12,7 @@ import (
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/boundedexec"
+	"ctlvps/internal/networkguard"
 )
 
 const ingressComment = "ctlvps-node-ingress"
@@ -35,10 +36,13 @@ var errForeignIngress = errors.New("检测到其他入站防火墙规则，请�
 // Other firewall managers are deliberately not rewritten.
 
 func IngressRules(snapshot []byte, nodes []agentproto.NodeSpec) (string, error) {
-	return ingressRules(snapshot, nodes, nil)
+	return ingressResourceRules(snapshot, nodes, nil, nil)
 }
 
 func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[string]string) (string, error) {
+	return ingressResourceRules(snapshot, nodes, nil, compat)
+}
+func ingressResourceRules(snapshot []byte, nodes []agentproto.NodeSpec, forwards []agentproto.ForwardSpec, compat map[string]string) (string, error) {
 	var doc struct {
 		Nftables []struct {
 			Chain *ingressEntry `json:"chain"`
@@ -57,7 +61,13 @@ func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[strin
 			return "", fmt.Errorf("节点监听端口无效")
 		}
 		switch n.Protocol {
-		case "hysteria2", "tuic":
+		case "mieru":
+			transport, _ := n.Params["transport"].(string)
+			if transport != "TCP" && transport != "UDP" {
+				return "", fmt.Errorf("mieru 传输无效")
+			}
+			ports[strings.ToLower(transport)][n.ListenPort] = true
+		case "hysteria2", "tuic", "wireguard":
 			ports["udp"][n.ListenPort] = true
 		case "ss", "shadowsocks":
 			ports["tcp"][n.ListenPort] = true
@@ -66,6 +76,20 @@ func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[strin
 			ports["tcp"][n.ListenPort] = true
 		default:
 			return "", fmt.Errorf("无法确定节点协议 %q 的入站端口", n.Protocol)
+		}
+	}
+	for _, f := range forwards {
+		if f.Blocked || f.Retired {
+			continue
+		}
+		if err := f.Config.Validate(); err != nil {
+			return "", err
+		}
+		if f.Config.Network == "tcp" || f.Config.Network == "both" {
+			ports["tcp"][f.Config.ListenPort] = true
+		}
+		if f.Config.Network == "udp" || f.Config.Network == "both" {
+			ports["udp"][f.Config.ListenPort] = true
 		}
 	}
 	var owned []*ingressEntry
@@ -77,7 +101,13 @@ func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[strin
 				target = true
 				continue
 			}
-			if c.Table == "ctlvps" || c.Table == NodeTable || c.Table == "ctlvps_egress" {
+			if c.Table == "ctlvps" || c.Table == NodeTable || c.Table == ForwardTable || c.Table == networkguard.AdmissionTable || c.Table == "ctlvps_egress" {
+				continue
+			}
+			// Our binding guard intentionally drops traffic before this ingress
+			// allowance. It is managed separately and must never be rewritten
+			// or mistaken for an unsupported third-party firewall manager.
+			if c.Family == "inet" && c.Table == networkguard.Table {
 				continue
 			}
 			// Empty permissive compatibility chains are harmless. Never claim to
@@ -150,11 +180,14 @@ func ingressRules(snapshot []byte, nodes []agentproto.NodeSpec, compat map[strin
 }
 
 func (m *Manager) EnsureIngress(ctx context.Context, nodes []agentproto.NodeSpec) error {
+	return m.EnsureResourceIngress(ctx, nodes, nil)
+}
+func (m *Manager) EnsureResourceIngress(ctx context.Context, nodes []agentproto.NodeSpec, forwards []agentproto.ForwardSpec) error {
 	snapshot, err := m.run(ctx, "", "-j", "list", "ruleset")
 	if err != nil {
 		return err
 	}
-	script, err := IngressRules(snapshot, nodes)
+	script, err := ingressResourceRules(snapshot, nodes, forwards, nil)
 	if errors.Is(err, errForeignIngress) {
 		compat := map[string]string{}
 		for family, bin := range map[string]string{"ip": "iptables", "ip6": "ip6tables"} {
@@ -167,7 +200,7 @@ func (m *Manager) EnsureIngress(ctx context.Context, nodes []agentproto.NodeSpec
 				compat[family] = string(out)
 			}
 		}
-		script, err = ingressRules(snapshot, nodes, compat)
+		script, err = ingressResourceRules(snapshot, nodes, forwards, compat)
 	}
 	if err != nil || script == "" {
 		return err

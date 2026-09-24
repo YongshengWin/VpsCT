@@ -13,6 +13,7 @@ import (
 const (
 	SubjectServer   = "server"
 	SubjectNode     = "node"
+	SubjectForward  = "forward"
 	SubjectExternal = "external"
 	SubjectShare    = "share"
 )
@@ -260,7 +261,7 @@ func (s *Store) NodeTrafficSummaries(ctx context.Context, days int) (map[int64]T
 
 // MeterNodes returns identities including removed nodes, without credentials.
 func (s *Store) MeterNodes(ctx context.Context, serverID int64) ([]domain.Node, error) {
-	rows, err := s.db.QueryContext(ctx, "SELECT node_id,listen_port,core,share_id FROM node_meter_identities WHERE server_id=?", serverID)
+	rows, err := s.db.QueryContext(ctx, "SELECT node_id,listen_port,core,share_id,CASE WHEN EXISTS(SELECT 1 FROM managed_transits WHERE landing_node_id=node_id) THEN 'transit' ELSE 'deployed' END FROM node_meter_identities WHERE server_id=?", serverID)
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +270,7 @@ func (s *Store) MeterNodes(ctx context.Context, serverID int64) ([]domain.Node, 
 	for rows.Next() {
 		var n domain.Node
 		var share sql.NullInt64
-		if err := rows.Scan(&n.ID, &n.ListenPort, &n.Core, &share); err != nil {
+		if err := rows.Scan(&n.ID, &n.ListenPort, &n.Core, &share, &n.Source); err != nil {
 			return nil, err
 		}
 		n.ServerID = &serverID

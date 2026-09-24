@@ -1,3 +1,5 @@
+import { SSHClientFields } from "@/components/ssh-client-fields";
+import { TunnelClientFields } from "@/components/tunnel-client-fields";
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,6 +14,8 @@ import { Badge, Button, Confirm, Dialog, Empty, Field, Input, PageHeader, Select
 import { useToast } from "@/components/toast";
 import { TrafficIO } from "@/components/traffic-ways";
 import { TrafficBars } from "@/components/charts";
+import { NodeNetwork } from "@/components/node-network";
+import { useIsAdmin } from "@/lib/auth";
 
 export function ProtocolBadge({ p }: { p: string }) {
   return <Badge variant="outline">{PROTOCOL_LABELS[p] ?? p}</Badge>;
@@ -436,14 +440,14 @@ export function NodeEditDialog({ open, onClose, node }: { open: boolean; onClose
               <>
                 <div className="grid grid-cols-3 gap-3">
                   <Field label="协议">
-                    <Select value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
-                      {["vless", "vmess", "trojan", "ss", "hysteria2", "tuic", "anytls", "snell", "socks5", "http"].map((p) => <option key={p} value={p}>{PROTOCOL_LABELS[p] ?? p}</option>)}
+                    <Select value={f.protocol} onChange={(e) => { set("protocol", e.target.value); if (e.target.value === "ssh") { set("port", "22"); set("params", JSON.stringify({ username: "", password: "", "host-key": [] })); } else if (e.target.value === "wireguard") {set("port", "51820");set("params", JSON.stringify({ip: "", "private-key": "", "public-key": "", udp: true, mtu: 1408, "persistent-keepalive": 25}));} else if (e.target.value === "mieru") {set("port", "2999");set("params", JSON.stringify({username: "", password: "", transport: "TCP", udp: true}));} }}>
+                      {["vless", "vmess", "trojan", "ss", "hysteria2", "tuic", "anytls", "snell", "socks5", "http", "ssh", "wireguard", "mieru"].map((p) => <option key={p} value={p}>{PROTOCOL_LABELS[p] ?? p}</option>)}
                     </Select>
                   </Field>
                   <Field label="地址"><Input value={f.server} onChange={(e) => set("server", e.target.value)} /></Field>
                   <Field label="端口"><Input type="number" value={f.port} onChange={(e) => set("port", e.target.value)} /></Field>
                 </div>
-                <Field label="参数 (Clash 字段 JSON)" hint="uuid / password / sni / tls / network 等"><Textarea className="mono" rows={6} value={f.params} onChange={(e) => set("params", e.target.value)} /></Field>
+                {f.protocol === "ssh" ? <SSHClientFields value={f.params} onChange={(value) => set("params", value)} /> : f.protocol === "wireguard" || f.protocol === "mieru" ? <TunnelClientFields protocol={f.protocol} value={f.params} onChange={value => set("params", value)} /> : <Field label="参数 (Clash 字段 JSON)" hint="uuid / password / sni / tls / network 等"><Textarea className="mono" rows={6} value={f.params} onChange={(e) => set("params", e.target.value)} /></Field>}
               </>
             )}
           </>
@@ -455,15 +459,18 @@ export function NodeEditDialog({ open, onClose, node }: { open: boolean; onClose
   );
 }
 
-export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose: () => void }) {
+export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | null; onClose: () => void }) {
   const qc = useQueryClient();
+  const isAdmin = useIsAdmin();
+  const detail = useQuery({ queryKey: ["nodes", initialNode?.id, "detail"], queryFn: () => get<Node>(`/api/v1/nodes/${initialNode!.id}`), enabled: isAdmin && !!initialNode && initialNode.source === "deployed" });
+  const node = detail.data ?? initialNode;
   const toast = useToast();
   const [edit, setEdit] = React.useState(false);
   const [confirmDel, setConfirmDel] = React.useState(false);
   const [confirmRegen, setConfirmRegen] = React.useState(false);
   const [showQR, setShowQR] = React.useState(false);
  const [trafficDays,setTrafficDays]=React.useState(30);
-  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node });
+  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string; wireguard?: string; singbox?: Record<string, unknown>; singbox_endpoint?: Record<string, unknown> }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node });
   const traffic = useQuery({ queryKey: ["nodes", node?.id, "traffic",trafficDays], queryFn: () => get<Series>(`/api/v1/nodes/${node!.id}/traffic?days=${trafficDays}`), refetchInterval:30000, enabled: !!node && node.source === "deployed" });
   const delM = useMutation({ mutationFn: () => del(`/api/v1/nodes/${node!.id}`), onSuccess: () => { toast.success("已删除"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (e) => toast.fromError(e) });
   const regen = useMutation({ mutationFn: () => post(`/api/v1/nodes/${node!.id}/regenerate`), onSuccess: () => { toast.success("凭据已重置，订阅将自动更新"); setConfirmRegen(false); qc.invalidateQueries({ queryKey: ["nodes"] }); }, onError: (e) => toast.fromError(e) });
@@ -486,7 +493,8 @@ export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose
             <p className="text-xs text-muted-foreground">创建于 {fmtDate(node.created_at)}</p>
             {uri.data && (
               <>
-                <div>
+                {!uri.data.uri && <p className="text-xs text-muted-foreground">此协议使用客户端配置，不提供通用分享链接。</p>}
+                {uri.data.uri && <div>
                   <div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">分享链接</span>
                     <div className="flex gap-1">
                       <Button size="sm" variant="ghost" onClick={() => setShowQR((v) => !v)}><QrCode className="h-4 w-4" /></Button>
@@ -495,19 +503,21 @@ export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose
                   </div>
                   <Pre className="whitespace-pre-wrap break-all">{uri.data.uri}</Pre>
                   {showQR && <QR text={uri.data.uri} />}
-                </div>
-                <div>
+                </div>}
+                {uri.data.surge && <div>
                   <div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Surge</span><Button size="sm" variant="ghost" onClick={async () => { await copyText(uri.data!.surge); toast.success("已复制"); }}><Copy className="h-4 w-4" /></Button></div>
                   <Pre className="whitespace-pre-wrap break-all">{uri.data.surge}</Pre>
-                </div>
+                </div>}
               </>
             )}
           </div>
           <div className="space-y-3">
             {uri.data && (
               <div>
-                <div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">Clash / mihomo</span><Button size="sm" variant="ghost" onClick={async () => { await copyText(JSON.stringify(uri.data!.clash, null, 2)); toast.success("已复制"); }}><Copy className="h-4 w-4" /></Button></div>
+                <div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{["ssh", "wireguard", "mieru"].includes(node.protocol) ? "mihomo" : "Clash / mihomo"}</span><Button size="sm" variant="ghost" onClick={async () => { await copyText(JSON.stringify(uri.data!.clash, null, 2)); toast.success("已复制"); }}><Copy className="h-4 w-4" /></Button></div>
                 <Pre className="max-h-64">{JSON.stringify(uri.data.clash, null, 2)}</Pre>
+                {uri.data.wireguard && <div className="mt-3"><div className="mb-1 flex items-center justify-between"><span className="text-xs text-muted-foreground">标准 WireGuard 配置</span><Button size="sm" variant="ghost" onClick={async () => {await copyText(uri.data!.wireguard!);toast.success("已复制");}}><Copy className="h-4 w-4" /></Button></div><Pre className="max-h-64">{uri.data.wireguard}</Pre></div>}
+                {(uri.data.singbox || uri.data.singbox_endpoint) && <div className="mt-3"><span className="text-xs text-muted-foreground">{uri.data.singbox_endpoint ? "sing-box 1.11+ endpoint" : "sing-box outbound"}</span><Pre className="max-h-64">{JSON.stringify(uri.data.singbox_endpoint ?? uri.data.singbox,null,2)}</Pre></div>}
               </div>
             )}
             {node.source === "deployed" && <div className="space-y-2">
@@ -516,6 +526,7 @@ export function NodeDetailDialog({ node, onClose }: { node: Node | null; onClose
             </div>}
           </div>
         </div>
+        {isAdmin && node.source === "deployed" && node.server_id && <NodeNetwork key={node.id} nodeID={node.id} serverID={node.server_id} onNavigate={onClose} />}
       </Dialog>
       <NodeEditDialog open={edit} onClose={() => { setEdit(false); onClose(); }} node={node} />
       <Confirm open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={() => delM.mutate()} loading={delM.isPending} destructive title="删除节点？" description={node.source === "deployed" ? "该节点会从服务器上撤下，使用它的订阅将不再包含它。" : "使用它的订阅将不再包含它。"} />

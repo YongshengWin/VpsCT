@@ -17,19 +17,24 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/wgconfig"
 )
 
 // Options tune node creation.
 type Options struct {
-	Name         string
-	Protocol     string
-	Port         int    // 0 = allocate
-	SNI          string // reality handshake target / TLS server name
-	Domain       string // TLS domain when cert mode is acme/external; empty = public host
-	Obfs         bool   // hysteria2 salamander
-	SnellVersion int
-	CertID       string
-	CertMode     string // inherit server when empty
+	Network        *networkconfig.Node
+	AdvertiseHost  string
+	Name           string
+	Protocol       string
+	Port           int    // 0 = allocate
+	SNI            string // reality handshake target / TLS server name
+	Domain         string // TLS domain when cert mode is acme/external; empty = public host
+	Obfs           bool   // hysteria2 salamander
+	SnellVersion   int
+	MieruTransport string
+	CertID         string
+	CertMode       string // inherit server when empty
 }
 
 // Ports range used for automatic allocation.
@@ -101,6 +106,24 @@ const DefaultSNI = "www.sony.com"
 // NewNode builds a deployed node for server. The caller assigns ownership,
 // share id and persists it.
 func NewNode(server domain.Server, host string, opts Options) (domain.Node, error) {
+	var network *networkconfig.Node
+	if opts.Network != nil {
+		copy := *opts.Network
+		if err := copy.Validate(); err != nil {
+			return domain.Node{}, err
+		}
+		network = &copy
+		if copy.AdvertiseMode == "override" {
+			if err := networkconfig.ValidateAdvertiseHost(opts.AdvertiseHost); err != nil {
+				return domain.Node{}, err
+			}
+			host = opts.AdvertiseHost
+		} else if opts.AdvertiseHost != "" {
+			return domain.Node{}, errors.New("独立访问地址需要选择 override 模式")
+		}
+	} else if opts.AdvertiseHost != "" {
+		return domain.Node{}, errors.New("独立访问地址需要显式网络策略")
+	}
 	if opts.Port <= 0 || opts.Port > 65535 {
 		return domain.Node{}, errors.New("port required")
 	}
@@ -222,6 +245,31 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 		srv["password"] = key
 		delete(srv, "cert_mode")
 		delete(srv, "tls_domain")
+	case domain.ProtocolWireGuard:
+		c, serverConfig, err := wgconfig.Generate(server.IPv4Only)
+		if err != nil {
+			return domain.Node{}, err
+		}
+		cb, _ := json.Marshal(c)
+		sb, _ := json.Marshal(serverConfig)
+		client = map[string]any{}
+		srv = map[string]any{}
+		_ = json.Unmarshal(cb, &client)
+		_ = json.Unmarshal(sb, &srv)
+	case domain.ProtocolMieru:
+		transport := opts.MieruTransport
+		if transport == "" {
+			transport = "TCP"
+		}
+		if transport != "TCP" && transport != "UDP" {
+			return domain.Node{}, errors.New("mieru 传输须为 TCP 或 UDP")
+		}
+		if opts.Port < 1025 {
+			return domain.Node{}, errors.New("mita 监听端口必须至少为 1025")
+		}
+		username, password := "vpsct-"+Password(8), Password(24)
+		client = map[string]any{"username": username, "password": password, "transport": transport, "udp": true}
+		srv = map[string]any{"username": username, "password": password, "transport": transport, "udp": true}
 	case domain.ProtocolSnell:
 		psk := Password(24)
 		ver := opts.SnellVersion
@@ -242,6 +290,7 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 	sb, _ := json.Marshal(srv)
 	sid := server.ID
 	return domain.Node{
+		Network:      network,
 		Name:         name,
 		Protocol:     opts.Protocol,
 		Server:       host,
@@ -265,6 +314,9 @@ func RegenerateCredentials(n *domain.Node, server domain.Server) error {
 	var oldSrv map[string]any
 	_ = json.Unmarshal(n.ServerParams, &oldSrv)
 	opts := Options{Name: n.Name, Protocol: n.Protocol, Port: n.ListenPort, CertMode: fmt.Sprint(oldSrv["cert_mode"])}
+	if transport, ok := oldSrv["transport"].(string); ok {
+		opts.MieruTransport = transport
+	}
 	if id, ok := oldSrv["cert_id"].(string); ok {
 		opts.CertID = id
 	}

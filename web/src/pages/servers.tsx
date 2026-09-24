@@ -2,8 +2,12 @@ import { ConfigStatusNotice, configurationState } from "@/components/config-stat
 import * as React from "react";
 import { MaintenancePanel } from "@/components/maintenance";
 import { ServerActions } from "@/components/server-actions";
+import { ServerNetwork } from "@/components/server-network";
+import { ServerForwards } from "@/components/server-forwards";
+import { ServerEgress } from "@/components/server-egress";
+import { ServerRoutes } from "@/components/server-routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle, Wrench } from "lucide-react";
 import { get, post, put } from "@/lib/api";
 import type { Server, Node, Series } from "@/lib/types";
@@ -212,7 +216,12 @@ export function ServerDetailPage() {
   const [enroll, setEnroll] = React.useState<{ token: string; install_command: string; expires_at: string } | null>(null);
   const [confirmDel, setConfirmDel] = React.useState(false);
   const [confirmReset, setConfirmReset] = React.useState(false);
-  const [tab, setTab] = React.useState<"nodes" | "diag" | "revisions">("nodes");
+  const [searchParams, setSearchParams] = useSearchParams();
+  type ServerTab = "nodes" | "routes" | "network" | "egress" | "forwards" | "diag" | "revisions";
+  const selectedTab = searchParams.get("tab");
+  const tab: ServerTab = ["nodes", "routes", "network", "egress", "forwards", "diag", "revisions"].includes(selectedTab ?? "") ? selectedTab as ServerTab : "nodes";
+  const setTab = (value: ServerTab) => setSearchParams((previous) => { const next = new URLSearchParams(previous); next.set("tab", value); return next; }, { replace: true });
+  const routeTab = tab === "routes" || tab === "network" || tab === "egress" || tab === "forwards";
   const [nodeDetail, setNodeDetail] = React.useState<Node | null>(null);
   const [maintenanceOpen, setMaintenanceOpen] = React.useState(false);
   const [maintenanceBusy, setMaintenanceBusy] = React.useState(false);
@@ -278,6 +287,11 @@ export function ServerDetailPage() {
         </div>
       )}
 
+      <div className="mt-6">
+        <Tabs value={routeTab ? "routes" : tab} onChange={setTab} items={[{ value: "nodes", label: `节点与概览 (${nodes.data?.filter((n) => !n.revoked).length ?? 0})` }, { value: "routes", label: "节点线路" }, { value: "diag", label: "诊断" }, { value: "revisions", label: "配置版本" }]} />
+      </div>
+
+      {tab === "nodes" && <>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card className="p-4"><p className="text-xs text-muted-foreground">CPU / 负载</p><p className="mt-1 text-xl font-semibold">{m ? `${m.cpu_percent.toFixed(0)}%` : "-"}</p><p className="text-xs text-muted-foreground">load {m?.load1?.toFixed(2) ?? "-"} / {m?.load5?.toFixed(2) ?? "-"}</p></Card>
         <Card className="p-4"><p className="text-xs text-muted-foreground">内存</p><p className="mt-1 text-xl font-semibold">{m?.mem_total ? `${((m.mem_used / m.mem_total) * 100).toFixed(0)}%` : "-"}</p><p className="text-xs text-muted-foreground">{fmtBytes(m?.mem_used)} / {fmtBytes(m?.mem_total)}</p></Card>
@@ -338,10 +352,13 @@ export function ServerDetailPage() {
           <CardContent><RateArea points={samples.data} /></CardContent>
         </Card>
       )}
+      </>}
 
-      <div className="mt-6">
-        <Tabs value={tab} onChange={setTab} items={[{ value: "nodes", label: `节点 (${nodes.data?.filter((n) => !n.revoked).length ?? 0})` }, { value: "diag", label: "诊断" }, { value: "revisions", label: "配置版本" }]} />
-      </div>
+      {tab === "routes" && <ServerRoutes server={s} onNavigate={setTab} />}
+      {routeTab && tab !== "routes" && <div className="mt-5">
+        <Button size="sm" variant="outline" onClick={() => setTab("routes")}>← 返回节点线路</Button>
+        <h2 className="mt-4 text-lg font-semibold">{tab === "network" ? "看网卡和流量" : tab === "egress" ? "连接已有代理" : "转发固定端口"}</h2>
+      </div>}
 
       {tab === "nodes" && (
         <div className="mt-4">
@@ -355,6 +372,10 @@ export function ServerDetailPage() {
           )}
         </div>
       )}
+
+      {tab === "network" && <ServerNetwork server={s} />}
+      {tab === "egress" && <ServerEgress key={s.id} server={s} />}
+      {tab === "forwards" && <ServerForwards key={s.id} server={s} />}
 
       {tab === "diag" && (
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
@@ -477,14 +498,14 @@ function Diag({ ok, label, warnOnly }: { ok: boolean; label: string; warnOnly?: 
 function DeployDialog({ open, onClose, server, protocols }: { open: boolean; onClose: () => void; server: Server; protocols: string[] }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, cert_mode: "", cert_id: "" });
+  const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, mieru_transport: "TCP", cert_mode: "", cert_id: "" });
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
   const m = useMutation({
     mutationFn: () => post<Node>(`/api/v1/servers/${server.id}/nodes`, { ...f, port: Number(f.port) || 0, snell_version: Number(f.snell_version) }),
     onSuccess: () => { toast.success("节点已创建，agent 将在下次心跳后生效"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); },
     onError: (e) => toast.fromError(e),
   });
-  const list = protocols.filter((p) => !(server.core_mode === "lean" && p === "snell"));
+  const list = protocols.filter((p) => !(server.core_mode === "lean" && ["snell","mieru"].includes(p)));
   const tls = ["anytls", "hysteria2", "tuic", "trojan"].includes(f.protocol);
   return (
     <Dialog open={open} onClose={onClose} title={`在 ${server.name} 上部署节点`} description="凭据自动生成；Reality 无需证书，Hy2/TUIC/AnyTLS/Trojan 按服务器证书模式处理。" footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending}>部署</Button></>}>
@@ -512,6 +533,8 @@ function DeployDialog({ open, onClose, server, protocols }: { open: boolean; onC
         )}
         {tls && (f.cert_mode || server.cert_mode) === "external" && <Field label="外部证书 ID" hint="填写此 VPS 本机安全策略中已登记的证书名称"><Input value={f.cert_id} onChange={(e) => set("cert_id", e.target.value)} maxLength={64} /></Field>}
         {f.protocol === "hysteria2" && <div className="sm:col-span-2"><Switch checked={f.obfs} onChange={(v) => set("obfs", v)} label="启用 Salamander 混淆（对抗 QUIC 封锁）" /></div>}
+        {f.protocol === "wireguard" && <p className="text-sm text-muted-foreground">每个节点使用独立端口和单用户密钥，可在节点详情导出标准 WireGuard 配置。用户态接入不创建宿主机 VPN 或子网路由。</p>}
+        {f.protocol === "mieru" && <Field label="mieru 传输" hint="独立 mita 实例，支持 mihomo。"><Select value={f.mieru_transport} onChange={e=>set("mieru_transport",e.target.value)}><option>TCP</option><option>UDP</option></Select></Field>}
         {f.protocol === "snell" && (
           <Field label="Snell 版本">
             <Select value={String(f.snell_version)} onChange={(e) => set("snell_version", Number(e.target.value))}>

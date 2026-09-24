@@ -17,17 +17,24 @@ import (
 	"time"
 
 	"ctlvps/internal/agentbudget"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 )
 
 type request struct {
-	Public        bool
-	PrivateOrigin bool
-	URL           string
-	Method        string
-	Token         string
-	Encoding      string
-	Body          []byte
+	Public                  bool
+	PrivateOrigin           bool
+	URL                     string
+	Method                  string
+	Token                   string
+	Encoding                string
+	Body                    []byte
+	NetworkBindingVersion   int `json:",omitempty"`
+	NetworkEgressVersion    int `json:",omitempty"`
+	MitaVersion             int `json:",omitempty"`
+	NetworkSSHVersion       int `json:",omitempty"`
+	NetworkWireGuardVersion int `json:",omitempty"`
+	NetworkForwardVersion   int `json:",omitempty"`
 }
 type response struct {
 	Status int
@@ -59,7 +66,46 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 			return nil, err
 		}
 	}
-	b, err := json.Marshal(request{t.Public, t.PrivateOrigin, r.URL.String(), r.Method, r.Header.Get("Authorization"), r.Header.Get("Content-Encoding"), body})
+	in := request{Public: t.Public, PrivateOrigin: t.PrivateOrigin, URL: r.URL.String(), Method: r.Method, Token: r.Header.Get("Authorization"), Encoding: r.Header.Get("Content-Encoding"), Body: body}
+	if !t.Public && r.Method == http.MethodGet && r.URL.Path == "/api/agent/v1/desired" {
+		if version := r.Header.Get(networkconfig.BindingHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.BindingVersion) {
+				return nil, errors.New("unsupported network binding request version")
+			}
+			in.NetworkBindingVersion = networkconfig.BindingVersion
+		}
+		if version := r.Header.Get(networkconfig.EgressHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.EgressVersion) || in.NetworkBindingVersion != networkconfig.BindingVersion {
+				return nil, errors.New("unsupported network egress request version")
+			}
+			in.NetworkEgressVersion = networkconfig.EgressVersion
+		}
+		if version := r.Header.Get(networkconfig.WireGuardHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.WireGuardVersion) || in.NetworkEgressVersion != networkconfig.EgressVersion {
+				return nil, errors.New("unsupported WireGuard request version")
+			}
+			in.NetworkWireGuardVersion = networkconfig.WireGuardVersion
+		}
+		if version := r.Header.Get(networkconfig.MitaHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.MitaVersion) {
+				return nil, errors.New("unsupported mita version")
+			}
+			in.MitaVersion = networkconfig.MitaVersion
+		}
+		if version := r.Header.Get(networkconfig.SSHHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.SSHVersion) || in.NetworkEgressVersion != networkconfig.EgressVersion {
+				return nil, errors.New("unsupported SSH request version")
+			}
+			in.NetworkSSHVersion = networkconfig.SSHVersion
+		}
+		if version := r.Header.Get(networkconfig.ForwardHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.ForwardVersion) || in.NetworkBindingVersion != networkconfig.BindingVersion {
+				return nil, errors.New("unsupported forwarding request version")
+			}
+			in.NetworkForwardVersion = networkconfig.ForwardVersion
+		}
+	}
+	b, err := json.Marshal(in)
 	if err != nil {
 		return nil, err
 	}
@@ -113,6 +159,9 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(result.Body)), Request: r}, nil
 }
 func Entry(args []string) (bool, error) {
+	if ok, e := dnsEntry(args); ok {
+		return ok, e
+	}
 	if ok, e := DownloadEntry(args); ok {
 		return ok, e
 	}
@@ -155,6 +204,56 @@ func Entry(args []string) (bool, error) {
 	r.Header.Set("Authorization", in.Token)
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Content-Encoding", in.Encoding)
+	// Preserve only versioned capabilities, never arbitrary caller headers.
+	// A new helper serving an old parent must not invent parent capabilities.
+	if in.NetworkBindingVersion != 0 {
+		if in.NetworkBindingVersion != networkconfig.BindingVersion {
+			return true, errors.New("unsupported network binding request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.BindingHeader, fmt.Sprint(in.NetworkBindingVersion))
+		}
+	}
+	if in.NetworkEgressVersion != 0 {
+		if in.NetworkEgressVersion != networkconfig.EgressVersion || in.NetworkBindingVersion != networkconfig.BindingVersion {
+			return true, errors.New("unsupported network egress request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.EgressHeader, fmt.Sprint(in.NetworkEgressVersion))
+		}
+	}
+	if in.NetworkWireGuardVersion != 0 {
+		if in.NetworkWireGuardVersion != networkconfig.WireGuardVersion || in.NetworkEgressVersion != networkconfig.EgressVersion {
+			return true, errors.New("unsupported WireGuard request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.WireGuardHeader, fmt.Sprint(in.NetworkWireGuardVersion))
+		}
+	}
+	if in.MitaVersion != 0 {
+		if in.MitaVersion != networkconfig.MitaVersion {
+			return true, errors.New("unsupported mita version")
+		}
+		if !in.Public && in.Method == http.MethodGet && r.URL.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.MitaHeader, fmt.Sprint(in.MitaVersion))
+		}
+	}
+	if in.NetworkSSHVersion != 0 {
+		if in.NetworkSSHVersion != networkconfig.SSHVersion || in.NetworkEgressVersion != networkconfig.EgressVersion {
+			return true, errors.New("unsupported SSH request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.SSHHeader, fmt.Sprint(in.NetworkSSHVersion))
+		}
+	}
+	if in.NetworkForwardVersion != 0 {
+		if in.NetworkForwardVersion != networkconfig.ForwardVersion || in.NetworkBindingVersion != networkconfig.BindingVersion {
+			return true, errors.New("unsupported forwarding request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.ForwardHeader, fmt.Sprint(in.NetworkForwardVersion))
+		}
+	}
 	c := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 32 << 10}}
 	if in.Public {
 		opts := safehttp.Options{}

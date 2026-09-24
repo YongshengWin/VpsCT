@@ -4,6 +4,7 @@ package agentproto
 
 import (
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/networkconfig"
 	"time"
 )
 
@@ -60,6 +61,8 @@ type Metrics struct {
 	Kernel     string  `json:"kernel"`
 	Arch       string  `json:"arch"`
 	Interface  string  `json:"interface"`
+
+	Network *NetworkSnapshot `json:"network,omitempty"`
 }
 
 // PortCounter is a cumulative nftables counter for one listening port.
@@ -100,59 +103,92 @@ type CertStatus struct {
 
 // Diagnostics is the health section of a heartbeat.
 type Diagnostics struct {
-	SecurityVersion int          `json:"security_version,omitempty"`
-	SecurityPolicy  bool         `json:"security_policy,omitempty"`
-	SecurityPaused  bool         `json:"security_paused,omitempty"`
-	MeteringError   string       `json:"metering_error,omitempty"`
-	Maintenance     int          `json:"maintenance,omitempty"`
-	Cores           []CoreStatus `json:"cores"`
-	Certs           []CertStatus `json:"certs,omitempty"`
-	ClockSkewMs     int64        `json:"clock_skew_ms"`
-	BBR             bool         `json:"bbr"`
-	CongestionCtl   string       `json:"congestion_ctl"`
-	IPv6Reachable   bool         `json:"ipv6_reachable"`
-	IPv4Reachable   bool         `json:"ipv4_reachable"`
-	OOMEvents       int          `json:"oom_events"`
-	Nftables        bool         `json:"nftables"`
-	Systemd         bool         `json:"systemd"`
-	TimeSync        bool         `json:"time_sync"`
-	Warnings        []string     `json:"warnings,omitempty"`
-	RecentErrors    []string     `json:"recent_errors,omitempty"`
-	ConnlogLag      int64        `json:"connlog_lag"` // buffered events not yet uploaded
-	BinarySHA256    string       `json:"binary_sha256,omitempty"`
+	MeterInventoryVersion   int                            `json:"meter_inventory_version,omitempty"`
+	RetainedNodeMeters      []int64                        `json:"retained_node_meters,omitempty"`
+	NetworkTransportVersion int                            `json:"network_transport_version,omitempty"`
+	TransportGrants         []networkconfig.TransportGrant `json:"transport_grants,omitempty"`
+	NetworkSSHVersion       int                            `json:"network_ssh_version,omitempty"`
+	NetworkWireGuardVersion int                            `json:"network_wireguard_version,omitempty"`
+	MitaVersion             int                            `json:"mita_version,omitempty"`
+	NetworkEgressVersion    int                            `json:"network_egress_version,omitempty"`
+	NetworkForwardVersion   int                            `json:"network_forward_version,omitempty"`
+	NetworkBindingVersion   int                            `json:"network_binding_version,omitempty"`
+	NetworkConfigureAllowed bool                           `json:"network_configure_allowed,omitempty"`
+	NetworkBindingErrors    map[int64]string               `json:"network_binding_errors,omitempty"`
+	NetworkForwardErrors    map[int64]string               `json:"network_forward_errors,omitempty"`
+	ForwardDNSVersion       int                            `json:"forward_dns_version,omitempty"`
+	ForwardPrivateVersion   int                            `json:"forward_private_version,omitempty"`
+	ForwardTransportVersion int                            `json:"forward_transport_version,omitempty"`
+	ForwardGrants           []networkconfig.ForwardGrant   `json:"forward_grants,omitempty"`
+	ListenBindingVersion    int                            `json:"listen_binding_version,omitempty"`
+	NetworkGuardError       string                         `json:"network_guard_error,omitempty"`
+	NetworkBillingVersion   int                            `json:"network_billing_version,omitempty"`
+	NetworkBillingError     string                         `json:"network_billing_error,omitempty"`
+	SecurityVersion         int                            `json:"security_version,omitempty"`
+	SecurityPolicy          bool                           `json:"security_policy,omitempty"`
+	SecurityPaused          bool                           `json:"security_paused,omitempty"`
+	MeteringError           string                         `json:"metering_error,omitempty"`
+	Maintenance             int                            `json:"maintenance,omitempty"`
+	Cores                   []CoreStatus                   `json:"cores"`
+	Certs                   []CertStatus                   `json:"certs,omitempty"`
+	ClockSkewMs             int64                          `json:"clock_skew_ms"`
+	BBR                     bool                           `json:"bbr"`
+	CongestionCtl           string                         `json:"congestion_ctl"`
+	IPv6Reachable           bool                           `json:"ipv6_reachable"`
+	IPv4Reachable           bool                           `json:"ipv4_reachable"`
+	OOMEvents               int                            `json:"oom_events"`
+	Nftables                bool                           `json:"nftables"`
+	Systemd                 bool                           `json:"systemd"`
+	TimeSync                bool                           `json:"time_sync"`
+	Warnings                []string                       `json:"warnings,omitempty"`
+	RecentErrors            []string                       `json:"recent_errors,omitempty"`
+	ConnlogLag              int64                          `json:"connlog_lag"` // buffered events not yet uploaded
+	BinarySHA256            string                         `json:"binary_sha256,omitempty"`
 }
 
 // Heartbeat is sent every poll interval.
 type Heartbeat struct {
-	FinalMeters     *MeterSettlement `json:"final_meters,omitempty"`
-	Version         string           `json:"version"`
-	BinarySHA256    string           `json:"binary_sha256,omitempty"`
-	Epoch           string           `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
-	TS              time.Time        `json:"ts"`
-	PublicIPv4      string           `json:"public_ipv4"`
-	PublicIPv6      string           `json:"public_ipv6"`
-	Metrics         Metrics          `json:"metrics"`
-	Ports           []PortCounter    `json:"ports"`
-	AppliedRevision int64            `json:"applied_revision"`
-	AppliedHash     string           `json:"applied_hash"`
-	ApplyStatus     string           `json:"apply_status"` // applied|failed|pending
-	ApplyError      string           `json:"apply_error,omitempty"`
-	Diagnostics     Diagnostics      `json:"diagnostics"`
+	NetworkBillingHeld     bool                   `json:"network_billing_held,omitempty"`
+	NetworkBillingRevision int64                  `json:"network_billing_revision,omitempty"`
+	NetworkBillingLegacy   *LegacyNetworkCounters `json:"network_billing_legacy,omitempty"`
+	NetworkBillingSwitch   *NetworkBillingSwitch  `json:"network_billing_switch,omitempty"`
+	FinalMeters            *MeterSettlement       `json:"final_meters,omitempty"`
+	Version                string                 `json:"version"`
+	BinarySHA256           string                 `json:"binary_sha256,omitempty"`
+	Epoch                  string                 `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
+	TS                     time.Time              `json:"ts"`
+	PublicIPv4             string                 `json:"public_ipv4"`
+	PublicIPv6             string                 `json:"public_ipv6"`
+	Metrics                Metrics                `json:"metrics"`
+	Ports                  []PortCounter          `json:"ports"`
+	ForwardCounters        []ForwardCounter       `json:"forward_counters,omitempty"`
+	ForwardReceipt         *ForwardReceipt        `json:"forward_receipt,omitempty"`
+	AppliedRevision        int64                  `json:"applied_revision"`
+	AppliedHash            string                 `json:"applied_hash"`
+	ApplyStatus            string                 `json:"apply_status"` // applied|failed|pending
+	ApplyError             string                 `json:"apply_error,omitempty"`
+	Diagnostics            Diagnostics            `json:"diagnostics"`
 }
 
 // HeartbeatResponse tells the agent what to do next.
 type HeartbeatResponse struct {
-	FinalMeterVersion int                 `json:"final_meter_version,omitempty"`
-	FinalMeterAck     string              `json:"final_meter_ack,omitempty"`
-	MeteringVersion   int                 `json:"metering_version,omitempty"`
-	Maintenance       *MaintenanceCommand `json:"maintenance,omitempty"`
-	ServerTime        time.Time           `json:"server_time"`
-	DesiredRevision   int64               `json:"desired_revision"`
-	DesiredHash       string              `json:"desired_hash"`
-	PollIntervalSec   int                 `json:"poll_interval_sec"`
-	ConnlogEnabled    bool                `json:"connlog_enabled"`
-	CounterReset      bool                `json:"counter_reset"` // server lost baseline; agent may reset
-	AgentUpdate       *AgentUpdateSpec    `json:"agent_update,omitempty"`
+	ForwardReceiptAck       string                `json:"forward_receipt_ack,omitempty"`
+	NetworkBillingVersion   int                   `json:"network_billing_version,omitempty"`
+	NetworkBillingCurrent   *NetworkBillingPolicy `json:"network_billing_current,omitempty"`
+	NetworkBillingRequested *NetworkBillingPolicy `json:"network_billing_requested,omitempty"`
+	NetworkBillingAck       string                `json:"network_billing_ack,omitempty"`
+	NetworkVersion          int                   `json:"network_version,omitempty"`
+	FinalMeterVersion       int                   `json:"final_meter_version,omitempty"`
+	FinalMeterAck           string                `json:"final_meter_ack,omitempty"`
+	MeteringVersion         int                   `json:"metering_version,omitempty"`
+	Maintenance             *MaintenanceCommand   `json:"maintenance,omitempty"`
+	ServerTime              time.Time             `json:"server_time"`
+	DesiredRevision         int64                 `json:"desired_revision"`
+	DesiredHash             string                `json:"desired_hash"`
+	PollIntervalSec         int                   `json:"poll_interval_sec"`
+	ConnlogEnabled          bool                  `json:"connlog_enabled"`
+	CounterReset            bool                  `json:"counter_reset"` // server lost baseline; agent may reset
+	AgentUpdate             *AgentUpdateSpec      `json:"agent_update,omitempty"`
 }
 
 type MaintenanceCommand struct {
@@ -180,18 +216,21 @@ type CertSpec struct {
 
 // NodeSpec is one inbound the agent must serve.
 type NodeSpec struct {
-	AllowPrivate   bool           `json:"-"` // resolved only from root-owned local policy
-	Retired        bool           `json:"-"` // local accounting tombstone, never an inbound
-	NodeID         int64          `json:"node_id"`
-	Name           string         `json:"name"`
-	Protocol       string         `json:"protocol"`
-	Core           string         `json:"core"` // singbox | snell
-	ListenPort     int            `json:"listen_port"`
-	ShareID        *int64         `json:"share_id,omitempty"`
-	Blocked        bool           `json:"blocked"`
-	ConnlogEnabled bool           `json:"connlog_enabled"`
-	Params         map[string]any `json:"params"` // server-side protocol params
-	Cert           *CertSpec      `json:"cert,omitempty"`
+	Network         *NodeNetworkSpec               `json:"network,omitempty"`
+	RuntimeNetwork  *networkconfig.Resolved        `json:"-"` // resolved from this agent's own inventory only
+	AllowPrivate    bool                           `json:"-"` // resolved only from root-owned local policy
+	TransportGrants []networkconfig.TransportGrant `json:"-"` // independent local transport authority, never remote input
+	Retired         bool                           `json:"-"` // local accounting tombstone, never an inbound
+	NodeID          int64                          `json:"node_id"`
+	Name            string                         `json:"name"`
+	Protocol        string                         `json:"protocol"`
+	Core            string                         `json:"core"` // singbox | snell
+	ListenPort      int                            `json:"listen_port"`
+	ShareID         *int64                         `json:"share_id,omitempty"`
+	Blocked         bool                           `json:"blocked"`
+	ConnlogEnabled  bool                           `json:"connlog_enabled"`
+	Params          map[string]any                 `json:"params"` // server-side protocol params
+	Cert            *CertSpec                      `json:"cert,omitempty"`
 }
 
 // CoreVersion pins a downloadable core binary.
@@ -203,18 +242,26 @@ type CoreVersion struct {
 
 // DesiredState is the full declarative state for one server.
 type DesiredState struct {
-	Revision    int64                  `json:"revision"`
-	Hash        string                 `json:"hash"`
-	ServerID    int64                  `json:"server_id"`
-	ServerName  string                 `json:"server_name"`
-	PublicHost  string                 `json:"public_host"`
-	CoreMode    string                 `json:"core_mode"`
-	IPv4Only    bool                   `json:"ipv4_only"`
-	Nodes       []NodeSpec             `json:"nodes"`
-	Versions    map[string]CoreVersion `json:"versions"`
-	Connlog     ConnlogSpec            `json:"connlog"`
-	Tuning      Tuning                 `json:"tuning"`
-	GeneratedAt time.Time              `json:"generated_at"`
+	NetworkBindingVersion   int                    `json:"network_binding_version,omitempty"`
+	NetworkSSHVersion       int                    `json:"network_ssh_version,omitempty"`
+	NetworkWireGuardVersion int                    `json:"network_wireguard_version,omitempty"`
+	MitaVersion             int                    `json:"mita_version,omitempty"`
+	NetworkEgressVersion    int                    `json:"network_egress_version,omitempty"`
+	NetworkForwardVersion   int                    `json:"network_forward_version,omitempty"`
+	NetworkGeneration       int64                  `json:"network_generation,omitempty"`
+	Revision                int64                  `json:"revision"`
+	Hash                    string                 `json:"hash"`
+	ServerID                int64                  `json:"server_id"`
+	ServerName              string                 `json:"server_name"`
+	PublicHost              string                 `json:"public_host"`
+	CoreMode                string                 `json:"core_mode"`
+	IPv4Only                bool                   `json:"ipv4_only"`
+	Nodes                   []NodeSpec             `json:"nodes"`
+	Forwards                []ForwardSpec          `json:"forwards,omitempty"`
+	Versions                map[string]CoreVersion `json:"versions"`
+	Connlog                 ConnlogSpec            `json:"connlog"`
+	Tuning                  Tuning                 `json:"tuning"`
+	GeneratedAt             time.Time              `json:"generated_at"`
 }
 
 // ConnlogSpec controls connection log collection.

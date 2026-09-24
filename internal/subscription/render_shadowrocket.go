@@ -59,7 +59,7 @@ func mapStr(m map[string]any, k string) string {
 
 // ShadowrocketProxyLine renders one [Proxy] line. Unlike Surge, VLESS/Reality is supported.
 func ShadowrocketProxyLine(p proxynode.Proxy, via string) string {
-	if p.Type != "vless" {
+	if p.Type != "vless" && p.Type != "snell" {
 		return SurgeProxyLine(p, via)
 	}
 	var parts []string
@@ -75,6 +75,26 @@ func ShadowrocketProxyLine(p proxynode.Proxy, via string) string {
 		if v {
 			parts = append(parts, k+"=true")
 		}
+	}
+	if p.Type == "snell" {
+		// Shadowrocket's native [Proxy] syntax uses password, not Surge's psk.
+		parts = append(parts, "snell", p.Server, strconv.Itoa(p.Port))
+		add("password", p.Str("psk"))
+		add("version", strconv.Itoa(orInt(p.Int("version"), 4)))
+		if oo := p.Sub("obfs-opts"); oo != nil {
+			add("obfs", mapStr(oo, "mode"))
+			add("obfs-host", mapStr(oo, "host"))
+		}
+		if p.Bool("udp") {
+			add("udp", "1")
+		}
+		addBool("reuse", p.Bool("reuse"))
+		addBool("tfo", p.Bool("tfo"))
+		if via != "" {
+			parts = append(parts, "underlying-proxy="+surgeQuote(via))
+			add("test-timeout", "8")
+		}
+		return surgeIdent(p.Name) + " = " + strings.Join(parts, ", ")
 	}
 	parts = append(parts, "vless", p.Server, strconv.Itoa(p.Port))
 	add("encrypt-method", nonempty(p.Str("encryption"), "none"))

@@ -164,7 +164,7 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
             <div className={cn("grid gap-2", enabledServers.length > 1 && "sm:grid-cols-2")}>
               {enabledServers.map((s) => {
                 const t = f.targets.find((x) => x.server_id === s.id);
-                const protos = (meta?.protocols ?? []).filter((p) => !(s.core_mode === "lean" && p === "snell"));
+                const protos = (meta?.protocols ?? []).filter((p) => !(s.core_mode === "lean" && ["snell","mieru"].includes(p)));
                 return (
                   <div key={s.id} className="rounded-xl border p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -179,6 +179,11 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
                         </label>
                       ))}
                     </div>
+                    {t && <Field label="新入口网络" hint="仅在新建入口时复制监听与固定出口版本，已有入口保持各自设置。应用会重启共享代理。"><Select aria-label={`分享网络 ${s.name}`} value={t.network?JSON.stringify(t.network):""} onChange={e=>set("targets",f.targets.map(x=>x.server_id===s.id?{...x,network:e.target.value?JSON.parse(e.target.value):undefined}:x))}>
+                    <option value="">默认网络</option>
+                    {t.network&&<option value={JSON.stringify(t.network)}>已保存的网络模板</option>}
+                    {(nodes.data??[]).filter(n=>n.server_id===s.id&&n.network&&n.network.advertise_mode==="inherit"&&!n.revoked).map(n=><option key={n.id} value={JSON.stringify(n.network)}>复制 {n.name} 的网络 · v{n.network_revision}</option>)}
+                    </Select></Field>}
                   </div>
                 );
               })}

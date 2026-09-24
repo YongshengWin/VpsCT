@@ -26,6 +26,9 @@ func ParseAny(text string) ParseResult {
 	if trimmed == "" {
 		return ParseResult{Errors: []string{"empty input"}}
 	}
+	if strings.Contains(trimmed, "[Interface]") {
+		return parseWireGuard(trimmed)
+	}
 	if looksLikeClash(trimmed) {
 		res := parseClashYAML(trimmed)
 		if len(res.Proxies) > 0 || res.ClashDoc != nil {

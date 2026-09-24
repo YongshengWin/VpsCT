@@ -2,6 +2,7 @@
 """Build self-contained release attachments from make release's binaries."""
 import argparse
 import hashlib
+import json
 import pathlib
 import re
 import shutil
@@ -76,6 +77,17 @@ def main():
         shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
         shutil.copy2(ROOT / name, out / name)
+    manifest = []
+    def signed(path, component, version, arch):
+        manifest.append({'path': str(path.relative_to(ROOT)), 'identity': {
+            'product': 'VpsCT', 'component': component, 'version': version,
+            'arch': arch, 'epoch': args.security_epoch}})
+    signed(out / 'install.sh', 'installer', args.version, 'all')
+    for arch in ('amd64', 'arm64'):
+        signed(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'controller', args.version, arch)
+        signed(out / f'ctlvps-agent-linux-{arch}', 'agent', args.version, arch)
+        signed(out / f'ctlvps-verify-linux-{arch}', 'verifier', args.version, arch)
+    (out / 'signing-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     with (out / 'SHA256SUMS').open('w') as sums:
         for path in sorted(out.iterdir()):
             if path.name != 'SHA256SUMS':

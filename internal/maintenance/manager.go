@@ -199,6 +199,13 @@ func (m *Manager) Start(s Spec) (Job, error) {
 	} else if action != "" {
 		return Job{}, ErrBusy
 	}
+	if s.Role == "agent" {
+		release, err := m.tryConfigurationLock()
+		if err != nil {
+			return Job{}, err
+		}
+		defer release()
+	}
 	if err := m.pruneDiagnostics(); err != nil {
 		return Job{}, err
 	}

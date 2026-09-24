@@ -2,6 +2,9 @@ package proxynode
 
 import (
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/mieruconfig"
+	"ctlvps/internal/sshconfig"
+	"ctlvps/internal/wgconfig"
 	"errors"
 	"gopkg.in/yaml.v3"
 	"strings"
@@ -18,6 +21,18 @@ var proxyFields = func() map[string]bool {
 func validateProxy(p Proxy) error {
 	if len(p.Name) > 512 || len(p.Server) > 253 || strings.ContainsAny(p.Name, "\r\n\x00") || strings.ContainsAny(p.Server, "\r\n\x00, =") || p.Port < 0 || p.Port > 65535 {
 		return errors.New("节点名称、地址或端口无效")
+	}
+	if p.Type == "ssh" {
+		_, err := sshconfig.Decode(p.Params)
+		return err
+	}
+	if p.Type == "wireguard" {
+		_, err := wgconfig.Decode(p.Params)
+		return err
+	}
+	if p.Type == "mieru" {
+		_, err := mieruconfig.Decode(p.Params)
+		return err
 	}
 	if err := agentproto.ValidateParams(p.Params, 0); err != nil {
 		return err

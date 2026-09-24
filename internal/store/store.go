@@ -117,6 +117,12 @@ func (s *Store) migrate() error {
 			tx.Rollback()
 			return fmt.Errorf("migration %d: %w", i+1, err)
 		}
+		if migrations[i] == coreVersionPinMigration {
+			if err := s.pinInitialCoreVersion(ctx, tx, version == 0); err != nil {
+				tx.Rollback()
+				return fmt.Errorf("migration %d: %w", i+1, err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM schema_version`); err != nil {
 			tx.Rollback()
 			return err
