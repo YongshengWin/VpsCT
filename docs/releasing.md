@@ -18,7 +18,7 @@
 
 ### 1.2 每个版本
 
-当前候选版本使用 [v0.1.5 待发布说明](releases/v0.1.5.md) 和 [专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
+当前修复版本使用 [v0.1.6 发布说明](releases/v0.1.6.md)；上一版完整功能验收见 [v0.1.5 专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
 
 确定 `vX.Y.Z` 版本号，将 CHANGELOG 中的 Unreleased 内容归入该版本。注明数据库迁移、agent 兼容要求、已验证范围和已知限制。依赖有变化时重新生成第三方声明。
 
@@ -39,16 +39,16 @@ bash scripts/check.sh
 在项目根目录执行，替换实际仓库归属和版本：
 
 ```bash
-make release VERSION=v0.1.5 REPOSITORY=YongshengWin/VpsCT
+make release VERSION=v0.1.6 REPOSITORY=YongshengWin/VpsCT
 ```
 
-产物位于 `release/v0.1.5/`：
+产物位于 `release/v0.1.6/`：
 
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.5-linux-amd64.tar.gz`、`ctlvps-v0.1.5-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、说明文档与许可文件 |
+| `ctlvps-v0.1.6-linux-amd64.tar.gz`、`ctlvps-v0.1.6-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、说明文档与许可文件 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
@@ -65,7 +65,7 @@ README 的安装与更新命令使用 `releases/latest/download/install.sh`，�
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-release_dir=release/v0.1.5 # 替换为刚用当前源码构建的待发布版本目录
+release_dir=release/v0.1.6 # 替换为刚用当前源码构建的待发布版本目录
 bash scripts/test-install-container.sh "$release_dir"
 bash scripts/test-uninstall-container.sh
 bash scripts/test-maintenance-container.sh "$release_dir"
@@ -77,8 +77,8 @@ bash scripts/test-docker.sh
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
 ```bash
-sudo bash install.sh --assets-dir /path/to/release/v0.1.5 \
-  --version v0.1.5 --domain panel.example.com
+sudo bash install.sh --assets-dir /path/to/release/v0.1.6 \
+  --version v0.1.6 --domain panel.example.com
 ```
 
 这里使用发行目录内生成的 `install.sh`，目录同时包含对应架构压缩包和 `SHA256SUMS`。该模式仍需系统软件源提供依赖。实际验证过哪些系统和架构，就在验收记录中写明哪些；交叉编译不能替代实机安装。
@@ -100,7 +100,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.5 \
 
 ## 4. 公开发行并验证下载
 
-维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.5-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
+维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.6-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
 
 发布后从未登录 GitHub 的环境检查：
 
