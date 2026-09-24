@@ -86,7 +86,10 @@ export function MaintenancePanel({ server, open = false, onOpen, onClose, onBusy
   });
   const disconnected = !!q.error || (controller && !!submitted && !q.data?.available);
   const lastKnown = jobs[0] ?? submitted;
-  const attention = jobs.find(active) ?? (lastKnown && ["failed", "rolled_back", "interrupted", "expired"].includes(lastKnown.status) ? lastKnown : null);
+  // A terminal update failure remains in history after a manual recovery,
+  // but matching binary hashes confirm that it is no longer actionable.
+  const agentUpdateRecovered = !controller && !q.error && q.data?.available && versionKnown && update?.current_sha === update?.latest_sha && lastKnown?.action === "update";
+  const attention = jobs.find(active) ?? (lastKnown && !agentUpdateRecovered && ["failed", "rolled_back", "interrupted", "expired"].includes(lastKnown.status) ? lastKnown : null);
   const start = useMutation({
     mutationFn: () => post<Job>(endpoint, {
       id: requestID, role, action: selected, version: selected === "update" ? target : undefined,

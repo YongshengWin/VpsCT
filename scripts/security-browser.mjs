@@ -37,6 +37,23 @@ try{
  const csp=await page.evaluate(()=>new Promise(resolve=>{window.__injected=false;const el=document.createElement('script');el.textContent='window.__injected=true';document.body.append(el);setTimeout(()=>resolve(window.__injected),100)}));assert.equal(csp,false);
  const after=await inspect();assert.equal(after.servers.length,before.servers.length);assert.equal(after.me.nickname,before.me.nickname);assert.equal(violations.length,0);
  await page.goto(origin+'/servers/'+after.servers[0].id);await page.getByRole('button',{name:'部署节点',exact:true}).first().click();const dialog=page.getByRole('dialog');await dialog.getByRole('combobox').nth(0).click();await page.getByRole('option',{name:'Trojan',exact:true}).click();await dialog.getByRole('combobox').nth(1).click();await page.getByRole('option',{name:'外部证书',exact:true}).click();await dialog.getByText('外部证书 ID',{exact:true}).locator('..').locator('input').fill('fixture-cert');await dialog.getByRole('button',{name:'部署',exact:true}).click();await dialog.waitFor({state:'hidden'});
+ // A manually recovered agent retains failed history without a stale banner.
+ const maintenanceURL=`**/api/v1/servers/${after.servers[0].id}/maintenance`;
+ const failedJob={id:'fixture-maintenance',role:'agent',action:'update',status:'failed',version:'v0.1.5',message:'fixture download failure',updated_at:new Date().toISOString()};
+ const maintenanceState={available:true,version:'v0.1.5',target_version:'v0.1.5',agent_update:{current_sha:'same',latest_sha:'same',outdated:false},jobs:[failedJob]};
+ await page.route(maintenanceURL,route=>route.fulfill({json:maintenanceState}));
+ await page.reload();await page.getByRole('button',{name:'更多',exact:true}).click();await page.getByText('agent 维护',{exact:true}).click();
+ await page.getByText('操作记录',{exact:true}).click();await page.getByText('fixture download failure',{exact:true}).waitFor();
+ assert.equal(await page.getByRole('status').filter({hasText:'agent 升级'}).count(),0);
+ await page.keyboard.press('Escape');
+ maintenanceState.agent_update.current_sha='old';maintenanceState.agent_update.outdated=true;
+ await page.reload();await page.getByRole('status').filter({hasText:'agent 升级 · 失败'}).waitFor();
+ maintenanceState.agent_update.current_sha='same';maintenanceState.agent_update.outdated=false;maintenanceState.available=false;
+ await page.reload();await page.getByRole('status').filter({hasText:'agent 升级 · 失败'}).waitFor();
+ maintenanceState.available=true;failedJob.action='uninstall';
+ await page.reload();await page.getByRole('status').filter({hasText:'agent 卸载 · 失败'}).waitFor();
+ await page.unroute(maintenanceURL);
+ console.log('PASS recovered agent hides obsolete update banner, retains history, and preserves offline/outdated/uninstall failures.');
  // Release smoke: exercise the new network navigation against real empty API state.
  await page.goto(origin+'/servers/'+after.servers[0].id+'?tab=routes');
  await page.getByRole('heading',{name:'网站会看到哪台 VPS 的地址？'}).waitFor();

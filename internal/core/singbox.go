@@ -147,7 +147,13 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 	logLevel := "warn"
 	outbounds := []any{}
 	endpoints := []any{}
-	dnsServers := []any{map[string]any{"type": "local", "tag": "local"}}
+	localDNS := map[string]any{"type": "local", "tag": "local"}
+	// Since 1.13, local DNS may select D-Bus even on hosts without
+	// systemd-resolved. Use the system nameservers directly on those versions.
+	if major, minor, _, ok := corecompat.StableVersion(ds.Versions["sing-box"].Version); ok && major == 1 && minor >= 13 {
+		localDNS["prefer_go"] = true
+	}
+	dnsServers := []any{localDNS}
 	rules := []any{}
 	denied := []string{}
 	for _, n := range sorted {
