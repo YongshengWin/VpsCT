@@ -29,7 +29,7 @@ type ingressEntry struct {
 	Expr    []map[string]json.RawMessage `json:"expr"`
 }
 
-var errForeignIngress = errors.New("检测到其他入站防火墙规则，请手动放行节点端口；自动开放仅支持原生 inet filter input")
+var errForeignIngress = errors.New("[ingress_policy_unsupported] 无法证明其他入站防火墙规则与节点端口兼容，请检查主机防火墙并手动放行；不会修改外部规则")
 
 // IngressRules modifies only our tagged rules in the administrator's input
 // chain. A separate accept base chain cannot override an existing drop chain.
@@ -70,8 +70,13 @@ func ingressResourceRules(snapshot []byte, nodes []agentproto.NodeSpec, forwards
 		case "hysteria2", "tuic", "wireguard":
 			ports["udp"][n.ListenPort] = true
 		case "ss", "shadowsocks":
-			ports["tcp"][n.ListenPort] = true
-			ports["udp"][n.ListenPort] = true
+			networks, err := natNodeNetworks(n)
+			if err != nil {
+				return "", err
+			}
+			for _, network := range networks {
+				ports[network][n.ListenPort] = true
+			}
 		case "vless", "vmess", "trojan", "anytls", "snell":
 			ports["tcp"][n.ListenPort] = true
 		default:

@@ -176,7 +176,7 @@ func (a *Agent) networkRefreshDue(now time.Time) bool {
 			continue
 		}
 		seen[b.NodeID] = true
-		if b.Pending || health[b.NodeID] != "" || b.Applied.SOCKS5 == nil || b.Applied.SOCKS5.DNSRefreshDue(now) {
+		if b.Pending || health[b.NodeID] != "" || b.Applied.SOCKS5 == nil || b.Applied.SOCKS5.DNSRefreshDue(now) || (b.Applied.Handshake != nil && b.Applied.Handshake.DNSRefreshDue(now)) {
 			return true
 		}
 	}

@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 binary=${SINGBOX_BIN:?Set SINGBOX_BIN to a pre-verified official Linux sing-box binary}
 client=${NETWORK_TEST_CLIENT:-sing-box}
 network_case=${NETWORK_SYSTEMD_CASE:-direct}
-case "$network_case" in native-subscriptions|subscriptions|direct|socks|socks-private|forward|forward-udp|forward-socks|forward-ssh|forward-wireguard|ssh|wireguard|mita|wgaccess|transit|transit-ss2022|protocols|listen|reality|forward-dns|forward-private) ;; *) echo 'unsupported NETWORK_SYSTEMD_CASE' >&2; exit 1;; esac
+case "$network_case" in native-subscriptions|subscriptions|direct|socks|socks-private|forward|forward-stress|forward-udp|forward-both|forward-udp6|forward-socks-udp|forward-wireguard-udp|forward-socks|forward-ssh|forward-wireguard|ssh|wireguard|mita|wgaccess|transit|transit-ss2022|protocols|listen|reality|forward-dns|forward-private) ;; *) echo 'unsupported NETWORK_SYSTEMD_CASE' >&2; exit 1;; esac
 case "$client" in
  sing-box) ;;
  shadowsocks-rust) : "${SSLOCAL_BIN:?Set SSLOCAL_BIN to pre-verified official shadowsocks-rust 1.25.0 sslocal}" ;;
@@ -44,29 +44,40 @@ network_args=(--network none)
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
  docker network create --internal --subnet 198.18.37.0/24 "$transit_network" >/dev/null
  network_args=(--network "$transit_network" --ip 198.18.37.2)
- docker run -d --platform "linux/$arch" --name "$landing_container" --network "$transit_network" --ip 198.18.37.3 --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_BIND_FIXTURE=1 -e "NETWORK_SYSTEMD_CASE=$network_case" --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
+ docker run -d --platform "linux/$arch" --name "$landing_container" --network "$transit_network" --ip 198.18.37.3 --privileged --cgroupns=private --memory=1g --memory-swap=1g --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_BIND_FIXTURE=1 -e "NETWORK_SYSTEMD_CASE=$network_case" --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
 fi
-docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" --privileged --cgroupns=private \
+docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" --privileged --cgroupns=private --memory=1g --memory-swap=1g \
  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
  -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_NETWORK_CONTRACT_TEST=1 \
  -e "NETWORK_TEST_CLIENT=$client" \
- -e "NETWORK_SYSTEMD_CASE=$network_case" \
+ -e "NETWORK_SYSTEMD_CASE=$network_case" -e "UDP_STRESS_SECONDS=${UDP_STRESS_SECONDS:-600}" -e "UDP_STRESS_SESSIONS=${UDP_STRESS_SESSIONS:-1024}" \
  -e "MITA_TEST_TRANSPORT=${MITA_TEST_TRANSPORT:-}" \
  -e "MIERU_TEST_CLIENT=${MIERU_TEST_CLIENT:-}" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
-for ((attempt=0;attempt<30;attempt++)); do
- if docker exec "$container" test -d /run/systemd/system; then break; fi
- sleep 1
-done
+# docker exec can place the harness in the container's cgroup root. A v2
+# domain with internal processes cannot enable memory for its children. Move
+# only this disposable harness beside PID 1 before systemd starts budgeted units.
+fixture_exec() {
+ docker exec "$1" sh -ec '
+  if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+   echo "$$" > /sys/fs/cgroup/init.scope/cgroup.procs
+   echo +memory > /sys/fs/cgroup/cgroup.subtree_control
+  fi
+  exec "$@"
+ ' fixture "${@:2}"
+}
 # Wait for boot-time tmpfiles cleanup before creating fixture CA/temp files.
 # Degraded is expected in a container; an unfinished boot or timeout is not.
-docker exec "$container" timeout 45s sh -c 'systemctl is-system-running --wait; boot_result=$?; [ "$boot_result" -le 1 ]' >/dev/null
+bash scripts/wait-systemd-container.sh "$container" >/dev/null
+if [[ "$network_case" == forward-stress ]]; then
+ fixture_exec "$container" timeout 15s /fixtures/integration memory-preflight
+fi
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
- docker exec "$landing_container" timeout 45s sh -c 'systemctl is-system-running --wait; boot_result=$?; [ "$boot_result" -le 1 ]' >/dev/null
- docker exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
+ bash scripts/wait-systemd-container.sh "$landing_container" >/dev/null
+ fixture_exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
 fi
 if [[ "$network_case" != native-subscriptions && "$network_case" != subscriptions && "$network_case" != forward-private && "$network_case" != forward-dns && "$network_case" != forward-socks && "$network_case" != forward-ssh && "$network_case" != forward-wireguard && "$network_case" != forward-udp && "$network_case" != reality && "$network_case" != listen && "$network_case" != protocols && "$network_case" != transit && "$network_case" != transit-ss2022 && "$network_case" != forward && "$network_case" != ssh && "$network_case" != wireguard && "$network_case" != mita && "$network_case" != wgaccess ]]; then docker exec "$container" /fixtures/transport.test -test.run '^TestNetworkContractContainer$' -test.v; fi
-if ! docker exec "$container" timeout 600s /fixtures/integration; then
+if ! fixture_exec "$container" timeout 1400s /fixtures/integration; then
  if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then cat "$fixture/landing.log"; docker exec "$landing_container" journalctl --no-pager -n 60 -u ctlvps-agent.service -u ctlvps-singbox.service; fi
  docker exec "$container" journalctl --no-pager -n 100 -u ctlvps-agent.service -u ctlvps-singbox.service -u ctlvps-proxy-guard.service -u 'ctlvps-mita@*.service'
  exit 1

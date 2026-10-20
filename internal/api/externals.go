@@ -105,7 +105,7 @@ func (a *API) deleteExternal(w http.ResponseWriter, r *http.Request) error {
 		return httpx.ErrNotFound
 	}
 	if err := a.Store.DeleteExternal(r.Context(), id); err != nil {
-		return err
+		return networkOperationError(err)
 	}
 	a.audit(r, "external.delete", e.Name, nil)
 	httpx.NoContent(w)

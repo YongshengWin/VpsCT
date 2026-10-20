@@ -31,7 +31,7 @@ func (s MeterSettlement) Validate() error {
 	}
 	seen := map[int64]bool{}
 	for _, c := range s.Counters {
-		if c.NodeID <= 0 || seen[c.NodeID] || !c.FromZero || (c.Source != "nft-node-v1" && c.Source != "systemd-v1") || len(c.Epoch) == 0 || len(c.Epoch) > 128 || c.Rx < 0 || c.Tx < 0 || c.Rx > math.MaxInt64/4 || c.Tx > math.MaxInt64/4 {
+		if c.NodeID <= 0 || seen[c.NodeID] || !c.FromZero || (c.Source != "openrc-cgroup-v1" && c.Source != "nft-node-v1" && c.Source != "systemd-v1") || len(c.Epoch) == 0 || len(c.Epoch) > 128 || c.Rx < 0 || c.Tx < 0 || c.Rx > math.MaxInt64/4 || c.Tx > math.MaxInt64/4 {
 			return errors.New("invalid final meter reading")
 		}
 		seen[c.NodeID] = true

@@ -73,9 +73,13 @@ func (s *Store) subArgs(v *domain.Subscription) []any {
 
 // CreateSubscription inserts a subscription.
 func (s *Store) CreateSubscription(ctx context.Context, v *domain.Subscription) error {
+	return s.createSubscription(ctx, s.db, v)
+}
+
+func (s *Store) createSubscription(ctx context.Context, q querier, v *domain.Subscription) error {
 	now := s.Now()
 	args := append(s.subArgs(v), fmtTime(now), fmtTime(now))
-	res, err := s.db.ExecContext(ctx, `INSERT INTO subscriptions(name,kind,token,token_hash,token_hint,short_code,short_code_hash,template_id,default_format,proxy_groups,chains,rules,rule_providers,node_selection,source_external_id,expire_at,traffic_limit_bytes,reset_day,userinfo_header,show_info_nodes,owner_user_id,allowed_user_ids,share_id,enabled,created_at,updated_at)
+	res, err := q.ExecContext(ctx, `INSERT INTO subscriptions(name,kind,token,token_hash,token_hint,short_code,short_code_hash,template_id,default_format,proxy_groups,chains,rules,rule_providers,node_selection,source_external_id,expire_at,traffic_limit_bytes,reset_day,userinfo_header,show_info_nodes,owner_user_id,allowed_user_ids,share_id,enabled,created_at,updated_at)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 	if err != nil {
 		return err

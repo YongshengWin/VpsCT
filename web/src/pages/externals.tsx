@@ -4,6 +4,7 @@ import { Plus, RefreshCw, Trash2, Pencil, Upload, ExternalLink } from "lucide-re
 import { del, get, post, put } from "@/lib/api";
 import type { ExternalSubscription, Node, Series } from "@/lib/types";
 import { fmtBytes, fmtAgo, fmtDate } from "@/lib/utils";
+import { trafficUsage } from "@/lib/traffic-billing";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Confirm, Dialog, Empty, Field, Input, PageHeader, Progress, Spinner, Switch, Table, Th, Textarea, Code } from "@/components/ui";
 import { useToast } from "@/components/toast";
 import { TrafficBars } from "@/components/charts";
@@ -91,14 +92,13 @@ export function ExternalsPage() {
         <div className="space-y-3">
           {q.data.map((e) => {
             const ui = e.userinfo;
-            const used = ui ? ui.upload + ui.download : 0;
-            const pct = ui && ui.total > 0 ? (used / ui.total) * 100 : 0;
+            const usage = trafficUsage(undefined, "dual", { inbound: ui?.upload, outbound: ui?.download, quota: ui?.total });
             return (
               <Card key={e.id}>
                 <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <button className="break-words text-left font-medium hover:underline" onClick={() => setExpanded(expanded === e.id ? null : e.id)}>{e.name}</button>
+                      <button className="wrap-break-word text-left font-medium hover:underline" onClick={() => setExpanded(expanded === e.id ? null : e.id)}>{e.name}</button>
                       <Badge variant={e.enabled ? "success" : "secondary"}>{e.enabled ? "同步中" : "已停用"}</Badge>
                       <Badge variant="outline">{e.node_count} 节点</Badge>
                       {e.last_error && <Badge variant="destructive">同步失败</Badge>}
@@ -116,10 +116,10 @@ export function ExternalsPage() {
                 {ui && (
                   <div className="border-t px-4 py-3">
                     <div className="mb-1 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
-                      <span>机场流量：汇总 {fmtBytes((ui.upload ?? 0) + (ui.download ?? 0))}{ui.total > 0 && ` · 机场额度 ${fmtBytes(used)} / ${fmtBytes(ui.total)}`}（上传 {fmtBytes(ui.upload)} · 下载 {fmtBytes(ui.download)}）</span>
+                      <span>上游上报用量 {fmtBytes(usage.billed)}{usage.quota > 0 && ` / ${fmtBytes(usage.quota)} · 剩余 ${fmtBytes(usage.remaining)}`}（上传 {fmtBytes(ui.upload)} · 下载 {fmtBytes(ui.download)}，按上游口径）</span>
                       <span>{ui.expire > 0 ? `到期 ${fmtDate(new Date(ui.expire * 1000).toISOString(), false)}` : "无到期时间"}</span>
                     </div>
-                    {ui.total > 0 && <Progress value={pct} />}
+                    {usage.quota > 0 && <Progress value={usage.percent} />}
                   </div>
                 )}
                 {expanded === e.id && <ExternalDetail ext={e} />}

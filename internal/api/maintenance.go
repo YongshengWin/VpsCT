@@ -42,7 +42,7 @@ func (a *API) maintenanceAuth(w http.ResponseWriter, r *http.Request, in *mainte
 	// Browsers supply Origin for JSON POST. Requiring it here also rejects
 	// cross-site forms even if a session cookie happens to be attached.
 	origin, err := url.Parse(r.Header.Get("Origin"))
-	if err != nil || !sameSiteHost(origin, r.Host) || (origin.Scheme != "https" && origin.Scheme != "http") || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+	if apiKeyFrom(r.Context()) == nil && (err != nil || !sameSiteHost(origin, r.Host) || (origin.Scheme != "https" && origin.Scheme != "http") || r.Header.Get("Sec-Fetch-Site") == "cross-site") {
 		return httpx.ErrForbidden
 	}
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
@@ -191,8 +191,14 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 	_ = json.Unmarshal(ag.Metrics, &m)
 	sha := ""
 	if in.Action == "update" {
+		if normalizeAgentArch(m.Arch) == "" {
+			return httpx.E(409, "unsupported_platform", "当前仅支持 Linux AMD64；ARM 安装和升级支持已暂停")
+		}
 		if in.Version != a.Config.Version {
 			return httpx.Conflict("控制端提供的版本已变化，请刷新页面后重试")
+		}
+		if maintenance.CanonicalReleaseVersion(in.Version) == "" {
+			return httpx.Conflict("控制端没有有效发行版本，无法安全校验 agent；请先安装正式发行版")
 		}
 		spec := a.agentUpdateSpec(m.Arch)
 		if spec == nil {
@@ -201,7 +207,7 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 		sha = spec.SHA256
 	}
 	_ = a.Store.ExpireMaintenance(r.Context(), id)
-	j := store.MaintenanceJob{Job: maintenance.Job{Request: in.Request, Status: "queued", Stage: "queued", Message: "等待 agent 接收；15 分钟内未接收会自动过期", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: id, DeleteServer: in.DeleteServer, ReportToken: auth.RandomToken(32), AgentSHA: sha}
+	j := store.MaintenanceJob{Job: maintenance.Job{Request: in.Request, PreviousSHA256: d.BinarySHA256, Status: "queued", Stage: "queued", Message: "等待 agent 接收；15 分钟内未接收会自动过期", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: id, DeleteServer: in.DeleteServer, ReportToken: auth.RandomToken(32), AgentSHA: sha}
 	if err := a.audit(r, "maintenance.request."+in.Action, fmt.Sprintf("server:%d", id), map[string]any{"request": in.Request, "delete_server": in.DeleteServer}); err != nil {
 		return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未启动任务")
 	}
@@ -239,6 +245,15 @@ func (a *API) claimMaintenance(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !j.Active() {
 		return httpx.Conflict("任务已结束或过期，不能执行")
+	}
+	if j.Action == "update" {
+		spec, _ := a.maintenanceTarget(r.Context(), j.ServerID)
+		if spec == nil || !strings.EqualFold(spec.SHA256, j.AgentSHA) {
+			if j.Status == "queued" && spec != nil {
+				a.cancelObsoleteAgentUpdate(r.Context(), j)
+			}
+			return httpx.Conflict("agent 发行目标已变化或暂不可用，旧任务未开始；请等待最新任务或刷新后重试")
+		}
 	}
 	if j.Status == "queued" {
 		j.Status, j.Stage, j.Message = "running", "dispatch", "agent 已领取任务，正在启动独立维护进程"
@@ -285,29 +300,126 @@ func (a *API) nextAgentMaintenance(ctx context.Context, serverID int64) *agentpr
 	}
 	for _, j := range jobs {
 		if j.Active() {
+			if j.Action == "update" && j.Status == "queued" {
+				spec, current := a.maintenanceTarget(ctx, serverID)
+				if spec != nil && !strings.EqualFold(spec.SHA256, j.AgentSHA) {
+					if a.cancelObsoleteAgentUpdate(ctx, j) && current != "" && !strings.EqualFold(current, spec.SHA256) {
+						a.queueAutomaticAgentUpdate(ctx, serverID, spec.SHA256)
+						return a.nextAgentMaintenance(ctx, serverID)
+					}
+					continue
+				}
+			}
 			return &agentproto.MaintenanceCommand{Request: j.Request, ReportToken: j.ReportToken, SHA256: j.AgentSHA}
 		}
 	}
 	return nil
 }
 
-// Preserve automatic synchronization, but run new agents through the same
-// tracked, rollback-capable executor. A failed target is never retried forever.
+// Automatic synchronization shares the tracked rollback executor. Only a
+// failed download can retry: at most three executions with durable backoff.
 func (a *API) queueAutomaticAgentUpdate(ctx context.Context, serverID int64, sha string) {
+	version := maintenance.CanonicalReleaseVersion(a.Config.Version)
+	if version == "" {
+		return
+	}
 	_ = a.Store.ExpireMaintenance(ctx, serverID)
 	jobs, err := a.Store.ListMaintenance(ctx, serverID)
 	if err != nil {
 		return
 	}
 	for _, j := range jobs {
-		if j.Active() || (j.Action == "update" && strings.EqualFold(j.AgentSHA, sha)) {
+		if !j.Active() {
+			continue
+		}
+		if j.Action == "update" && j.Status == "queued" && !strings.EqualFold(j.AgentSHA, sha) {
+			if !a.cancelObsoleteAgentUpdate(ctx, j) {
+				return
+			}
+			continue
+		}
+		return
+	}
+	previous, err := a.Store.LatestAgentUpdate(ctx, serverID, sha)
+	if err != nil && err != store.ErrNotFound {
+		return
+	}
+	if err == nil {
+		switch previous.Status {
+		case "failed":
+			if previous.Stage != "download_retryable" {
+				return
+			}
+			attempts, err := a.Store.AgentUpdateAttempts(ctx, serverID, sha)
+			if err != nil || attempts >= 3 {
+				return
+			}
+			backoff := time.Minute
+			if attempts >= 2 {
+				backoff = 5 * time.Minute
+			}
+			if a.Store.Now().Sub(previous.UpdatedAt) < backoff {
+				return
+			}
+		case "rolled_back", "interrupted", "queued", "running":
 			return
 		}
 	}
-	j := store.MaintenanceJob{Job: maintenance.Job{Request: maintenance.Request{ID: maintenance.NewID(), Role: "agent", Action: "update", Version: a.Config.Version}, Status: "queued", Stage: "queued", Message: "等待自动同步控制端提供的 agent", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: serverID, ReportToken: auth.RandomToken(32), AgentSHA: sha}
+	if attempts, err := a.Store.AgentUpdateAttempts(ctx, serverID, sha); err != nil || attempts >= 3 {
+		return
+	}
+	_, current := a.maintenanceTarget(ctx, serverID)
+	j := store.MaintenanceJob{Job: maintenance.Job{Request: maintenance.Request{ID: maintenance.NewID(), Role: "agent", Action: "update", Version: version}, PreviousSHA256: current, Status: "queued", Stage: "queued", Message: "等待自动同步控制端提供的 agent", CreatedAt: a.Store.Now(), UpdatedAt: a.Store.Now()}, ServerID: serverID, ReportToken: auth.RandomToken(32), AgentSHA: sha}
 	if err := a.Store.CreateMaintenance(ctx, j); err != nil {
 		a.Logger.Warn("queue agent maintenance", "server_id", serverID)
 	}
+}
+
+func (a *API) maintenanceTarget(ctx context.Context, serverID int64) (*agentproto.AgentUpdateSpec, string) {
+	ag, err := a.Store.GetAgentByServer(ctx, serverID)
+	if err != nil {
+		return nil, ""
+	}
+	var metrics agentproto.Metrics
+	var diagnostics agentproto.Diagnostics
+	if json.Unmarshal(ag.Metrics, &metrics) != nil {
+		return nil, ""
+	}
+	_ = json.Unmarshal(ag.Diagnostics, &diagnostics)
+	return a.agentUpdateSpec(metrics.Arch), diagnostics.BinarySHA256
+}
+
+func (a *API) cancelObsoleteAgentUpdate(ctx context.Context, j store.MaintenanceJob) bool {
+	if j.Status != "queued" || j.Action != "update" {
+		return false
+	}
+	j.Status, j.Stage, j.Message = "cancelled", "target_changed", "控制端提供的 agent 已变化，未执行旧任务；等待最新目标同步"
+	if err := a.Store.SaveMaintenance(ctx, j, "queued"); err != nil {
+		return false
+	}
+	a.Events.Publish("maintenance.updated", map[string]any{"server_id": j.ServerID, "job": j.Job})
+	return true
+}
+
+// A fresh heartbeat repairs a lost terminal report after the worker's maximum
+// lifetime has elapsed. Never confirm a running worker early: it may still
+// roll back. Same-hash reinstalls require the worker's actual completion report.
+func (a *API) reconcileAgentMaintenance(ctx context.Context, serverID int64, currentSHA string) {
+	if currentSHA == "" {
+		return
+	}
+	if err := a.Store.ExpireMaintenance(ctx, serverID); err != nil {
+		return
+	}
+	j, err := a.Store.LatestAgentUpdate(ctx, serverID, currentSHA)
+	if err != nil || j.Status != "interrupted" || j.PreviousSHA256 == "" || strings.EqualFold(j.PreviousSHA256, currentSHA) || a.Store.Now().Sub(j.CreatedAt) <= time.Hour {
+		return
+	}
+	j.Status, j.Stage, j.Message = "succeeded", "heartbeat_confirmed", "已通过恢复后的心跳确认目标 agent 正在运行；节点恢复情况请查看配置及节点状态"
+	if err := a.Store.SaveMaintenance(ctx, j, "interrupted"); err != nil {
+		return
+	}
+	a.Events.Publish("maintenance.updated", map[string]any{"server_id": j.ServerID, "job": j.Job})
 }
 
 func (a *API) requireNoMaintenance(r *http.Request, serverID int64) error {
@@ -325,14 +437,16 @@ func (a *API) requireNoMaintenance(r *http.Request, serverID int64) error {
 }
 
 func (a *API) agentMaintenanceNeedsRetry(ctx context.Context, serverID int64, sha string) bool {
-	jobs, err := a.Store.ListMaintenance(ctx, serverID)
+	j, err := a.Store.LatestAgentUpdate(ctx, serverID, sha)
 	if err != nil {
 		return false
 	}
-	for _, j := range jobs {
-		if j.Action == "update" && strings.EqualFold(j.AgentSHA, sha) {
-			return !j.Active()
-		}
+	if j.Status == "succeeded" || j.Active() {
+		return false
 	}
-	return false
+	if j.Status == "expired" || j.Status == "cancelled" || (j.Status == "failed" && j.Stage == "download_retryable") {
+		attempts, err := a.Store.AgentUpdateAttempts(ctx, serverID, sha)
+		return err != nil || attempts >= 3
+	}
+	return true
 }

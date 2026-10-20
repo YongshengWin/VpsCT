@@ -1,5 +1,7 @@
 # 开源准备与版本验收
 
+本文保留各阶段的历史验收记录。2026-10-21 起发行范围收敛为 Linux AMD64：ARM 构建、CI 矩阵、安装与升级支持暂停，历史独立 ARM Release 附件已撤下。下文双架构或 ARM 记录不代表当前支持，现行要求见 [运维说明](operations.md)。
+
 未来 v0.1.5 的范围与验收入口见 [待发布说明](releases/v0.1.5.md) 和 [专项清单](releases/v0.1.5-checklist.md)。本文保留各阶段证据，历史通过不等于最终候选版本已验收。
 
 [返回 README](../README.md) · [查看发布流程](releasing.md)

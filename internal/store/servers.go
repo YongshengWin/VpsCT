@@ -3,21 +3,26 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"time"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/natconfig"
 )
 
-const serverCols = `id, name, region, public_host, tags, notes, quota_bytes, quota_reset_day, quota_billing, core_mode, ipv4_only, cert_mode, enabled, created_at, updated_at`
+const serverCols = `id, name, region, public_host, tags, notes, quota_bytes, quota_reset_day, quota_billing, core_mode, ipv4_only, cert_mode, enabled, created_at, updated_at, is_nat`
 
 func scanServer(sc interface{ Scan(...any) error }) (domain.Server, error) {
 	var v domain.Server
 	var tags, created, updated string
-	var ipv4Only, enabled int
+	var ipv4Only, enabled, isNAT int
 	if err := sc.Scan(&v.ID, &v.Name, &v.Region, &v.PublicHost, &tags, &v.Notes, &v.QuotaBytes, &v.QuotaResetDay, &v.QuotaBilling,
-		&v.CoreMode, &ipv4Only, &v.CertMode, &enabled, &created, &updated); err != nil {
+		&v.CoreMode, &ipv4Only, &v.CertMode, &enabled, &created, &updated, &isNAT); err != nil {
 		return v, err
 	}
 	v.Tags = jsonList[string](tags)
+	v.IsNAT = isNAT == 1
 	v.IPv4Only = ipv4Only == 1
 	v.Enabled = enabled == 1
 	v.CreatedAt = parseTime(created)
@@ -27,13 +32,41 @@ func scanServer(sc interface{ Scan(...any) error }) (domain.Server, error) {
 
 // CreateServer inserts a server and its (pending) agent record.
 func (s *Store) CreateServer(ctx context.Context, v *domain.Server) error {
+	return s.CreateServerWithCalibration(ctx, v, nil, time.Time{})
+}
+
+// CreateServerWithCalibration stores an optional provider reading for this
+// billing period. New servers have no observed traffic at creation time.
+func (s *Store) CreateServerWithCalibration(ctx context.Context, v *domain.Server, calibratedBytes *int64, periodStart time.Time, providerDirections ...[2]int64) error {
+	return s.CreateServerWithNATAndCalibration(ctx, v, nil, calibratedBytes, periodStart, providerDirections...)
+}
+
+// CreateServerWithNATAndCalibration atomically stores onboarding intent before agent enrollment.
+func (s *Store) CreateServerWithNATAndCalibration(ctx context.Context, v *domain.Server, config *natconfig.Config, calibratedBytes *int64, periodStart time.Time, providerDirections ...[2]int64) error {
+	c, err := normalizeNAT(config)
+	if err != nil {
+		return err
+	}
+	if c != nil {
+		if !v.IsNAT || len(c.Mappings) == 0 {
+			return errors.New("只有 NAT 服务器可以录入非空端口映射")
+		}
+		if err := validateNATPublicHost(v.PublicHost); err != nil {
+			return fmt.Errorf("%w: %v", ErrNATPublicHost, err)
+		}
+	}
+	if v.QuotaBytes < 0 {
+		return errors.New("invalid server quota")
+	}
 	now := s.Now()
 	if v.CoreMode == "" {
 		v.CoreMode = domain.CoreModeStable
 	}
-	if v.QuotaBilling == "" {
-		v.QuotaBilling = domain.BillingDual
+	mode, ok := domain.NormalizeServerQuotaBilling(v.QuotaBilling)
+	if !ok {
+		return errors.New("invalid server quota billing mode")
 	}
+	v.QuotaBilling = mode
 	if v.CertMode == "" {
 		v.CertMode = "self_signed"
 	}
@@ -41,29 +74,79 @@ func (s *Store) CreateServer(ctx context.Context, v *domain.Server) error {
 		v.Tags = []string{}
 	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO servers(name,region,public_host,tags,notes,quota_bytes,quota_reset_day,quota_billing,core_mode,ipv4_only,cert_mode,enabled,created_at,updated_at)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), fmtTime(now))
+		res, err := tx.ExecContext(ctx, `INSERT INTO servers(name,region,public_host,tags,notes,quota_bytes,quota_reset_day,quota_billing,core_mode,ipv4_only,cert_mode,enabled,created_at,updated_at,is_nat)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), fmtTime(now), b2i(v.IsNAT))
 		if err != nil {
 			return err
 		}
 		v.ID, _ = res.LastInsertId()
 		v.CreatedAt, v.UpdatedAt = now, now
-		_, err = tx.ExecContext(ctx, `INSERT INTO agents(server_id,created_at,updated_at) VALUES (?,?,?)`, v.ID, fmtTime(now), fmtTime(now))
-		return err
+		if _, err = tx.ExecContext(ctx, `INSERT INTO agents(server_id,created_at,updated_at) VALUES (?,?,?)`, v.ID, fmtTime(now), fmtTime(now)); err != nil {
+			return err
+		}
+		if c != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO server_nat_configs(server_id,revision,config,updated_at) VALUES(?,1,?,?)`, v.ID, jsonStr(c), fmtTime(now)); err != nil {
+				return err
+			}
+		}
+		return saveServerUsageCalibrationTx(ctx, tx, v.ID, v.QuotaBilling, calibratedBytes, periodStart, now, providerDirections...)
 	})
 }
 
 // UpdateServer saves editable fields.
 func (s *Store) UpdateServer(ctx context.Context, v *domain.Server) error {
+	return s.UpdateServerWithCalibration(ctx, v, nil, time.Time{})
+}
+
+// UpdateServerWithCalibration preserves the current calibration on ordinary
+// edits and clears it if the billing reset day or quota mode changes.
+func (s *Store) UpdateServerWithCalibration(ctx context.Context, v *domain.Server, calibratedBytes *int64, periodStart time.Time, providerDirections ...[2]int64) error {
+	if v.QuotaBytes < 0 {
+		return errors.New("invalid server quota")
+	}
 	now := s.Now()
+	mode, ok := domain.NormalizeServerQuotaBilling(v.QuotaBilling)
+	if !ok {
+		return errors.New("invalid server quota billing mode")
+	}
+	v.QuotaBilling = mode
 	if v.Tags == nil {
 		v.Tags = []string{}
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?, region=?, public_host=?, tags=?, notes=?, quota_bytes=?, quota_reset_day=?, quota_billing=?, core_mode=?, ipv4_only=?, cert_mode=?, enabled=?, updated_at=? WHERE id=?`,
-		v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), v.ID)
-	v.UpdatedAt = now
-	return err
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		vnat, err := s.serverNAT(ctx, tx, v.ID)
+		if err != nil {
+			return err
+		}
+		if (vnat.DesiredConfig != nil && len(vnat.DesiredConfig.Mappings) > 0) || (vnat.Report != nil && vnat.Report.Configured) {
+			if err := validateNATPublicHost(v.PublicHost); err != nil {
+				return fmt.Errorf("%w: %v", ErrNATPublicHost, err)
+			}
+		}
+		var oldResetDay, oldNAT int
+		var oldBilling string
+		if err := tx.QueryRowContext(ctx, `SELECT quota_reset_day, quota_billing, is_nat FROM servers WHERE id=?`, v.ID).Scan(&oldResetDay, &oldBilling, &oldNAT); err != nil {
+			return err
+		}
+		if oldNAT == 1 && !v.IsNAT && ((vnat.DesiredConfig != nil && len(vnat.DesiredConfig.Mappings) > 0) || (vnat.Report != nil && (vnat.Report.Configured || vnat.Report.Status == "error" || vnat.Report.Status == "pending")) || vnat.Pending) {
+			return fmt.Errorf("%w: 请先清除端口映射并等待生效，再改为独立公网", ErrNATResources)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE servers SET name=?, region=?, public_host=?, tags=?, notes=?, quota_bytes=?, quota_reset_day=?, quota_billing=?, core_mode=?, ipv4_only=?, cert_mode=?, enabled=?, updated_at=?, is_nat=? WHERE id=?`,
+			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), b2i(v.IsNAT), v.ID); err != nil {
+			return err
+		}
+		if oldResetDay != v.QuotaResetDay || oldBilling != v.QuotaBilling {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM server_usage_calibrations WHERE server_id=?`, v.ID); err != nil {
+				return err
+			}
+		}
+		if err := saveServerUsageCalibrationTx(ctx, tx, v.ID, v.QuotaBilling, calibratedBytes, periodStart, now, providerDirections...); err != nil {
+			return err
+		}
+		v.UpdatedAt = now
+		return nil
+	})
 }
 
 // DeleteServer atomically removes the server, its nodes and dependent chains.
@@ -72,17 +155,25 @@ func (s *Store) DeleteServer(ctx context.Context, id int64) error {
 }
 
 func deleteServerTx(ctx context.Context, tx *sql.Tx, id int64) error {
-	// Chains copy the landing endpoint rather than keeping a landing node ID.
-	// Resolve both landing and front dependencies before removing any nodes.
+	if err := requireNoAccessRoutes(ctx, tx, id, true); err != nil {
+		return err
+	}
+	// Prefer the recorded landing identity, which survives endpoint changes.
+	// Older chains without an origin still need the copied endpoint fallback.
+	// Resolve all dependencies before foreign keys clear the landing identity.
 	if _, err := tx.ExecContext(ctx, `WITH RECURSIVE removed(id) AS (
 			SELECT id FROM nodes WHERE server_id=?
 			UNION
 			SELECT chain.id FROM nodes chain JOIN nodes landing
 			ON chain.server=landing.server AND chain.port=landing.port AND chain.protocol=landing.protocol
+			LEFT JOIN node_chain_origins origin ON origin.chain_id=chain.id
 			WHERE chain.source='chain' AND landing.server_id=?
+			AND origin.landing_id IS NULL
 			UNION
 			SELECT chain.id FROM nodes chain JOIN removed ON chain.chain_front_node_id=removed.id
 			WHERE chain.source='chain'
+			UNION
+			SELECT origin.chain_id FROM node_chain_origins origin JOIN removed ON origin.landing_id=removed.id
 		) DELETE FROM nodes WHERE id IN (SELECT id FROM removed)`, id, id); err != nil {
 		return err
 	}

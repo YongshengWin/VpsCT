@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +15,43 @@ import (
 )
 
 var identityMu sync.Mutex
+
+func trustedNologin(path string) bool {
+	if path != "/usr/sbin/nologin" && path != "/sbin/nologin" {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false
+	}
+	for current, first := resolved, true; current != "/"; current, first = filepath.Dir(current), false {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return false
+		}
+		owner, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || owner.Uid != 0 || info.Mode().Perm()&0022 != 0 || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		if first {
+			if !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 {
+				return false
+			}
+		} else if !info.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+func nologinShell() (string, error) {
+	for _, path := range []string{"/usr/sbin/nologin", "/sbin/nologin"} {
+		if trustedNologin(path) {
+			return path, nil
+		}
+	}
+	return "", errors.New("缺少可信的 nologin 系统程序")
+}
 
 // Use a dedicated identity instead of nobody, which is shared by unrelated
 // daemons. This fixed local account is provisioned before any untrusted parsing.
@@ -23,7 +61,11 @@ func networkIdentity() (uint32, uint32, error) {
 	const name = "ctlvps-net"
 	u, e := user.Lookup(name)
 	if _, missing := e.(user.UnknownUserError); missing && os.Geteuid() == 0 {
-		cmd := exec.Command("/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "--comment", "VpsCT isolated network worker", name)
+		shell, err := nologinShell()
+		if err != nil {
+			return 0, 0, err
+		}
+		cmd := exec.Command("/usr/sbin/useradd", "--system", "--user-group", "--no-create-home", "--home-dir", "/nonexistent", "--shell", shell, "--comment", "VpsCT isolated network worker", name)
 		cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
 		// A concurrent first installation may already have created the account.
 		_ = cmd.Run()
@@ -75,7 +117,7 @@ func networkIdentity() (uint32, uint32, error) {
 			continue
 		}
 		count++
-		if fields[0] != name || fields[6] != "/usr/sbin/nologin" {
+		if fields[0] != name || !trustedNologin(fields[6]) {
 			return 0, 0, errors.New("ctlvps-net 身份不独占或允许交互登录")
 		}
 	}

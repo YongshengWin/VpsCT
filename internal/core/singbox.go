@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/networkconfig"
@@ -33,6 +34,8 @@ type SingBox struct {
 	binaryChanged bool
 	private       bool
 	runtimeACME   string
+	// Local-only authentication; never supplied by controller desired state.
+	UDPAPISecret string
 }
 
 // NewSingBox builds the driver with default resolvers.
@@ -71,9 +74,15 @@ func (d *SingBox) instanceConfig(port int) string {
 
 // EnsureInstalled implements Driver.
 func (d *SingBox) EnsureInstalled(ctx context.Context, v agentproto.CoreVersion) (bool, error) {
+	if pending, err := recoverCoreInstallation(ctx, d.bin(), d.Systemd); err != nil || pending {
+		return false, err
+	}
 	cur := recordedVersion(d.bin())
 	if cur == v.Version && cur != "" {
 		return false, nil
+	}
+	if err := discardStagedCore(ctx, d.bin(), d.Systemd); err != nil {
+		return false, err
 	}
 	if err := installBinary(ctx, d.Paths.BinDir, "sing-box", v); err != nil {
 		return false, fmt.Errorf("install sing-box %s: %w", v.Version, err)
@@ -274,6 +283,9 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 			}
 			handshake := copyFields(dial)
 			handshake["server"], handshake["server_port"] = str(p, "handshake_server"), hsPort
+			if n.Network != nil && n.Network.HasTransport() {
+				handshake["server"] = n.RuntimeNetwork.Handshake.Address
+			}
 			in["tls"] = map[string]any{
 				"enabled":     true,
 				"server_name": str(p, "handshake_server"),
@@ -325,6 +337,12 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 			in["tls"] = tls
 		case "shadowsocks", "ss":
 			in["type"] = "shadowsocks"
+			if network := str(p, "network"); network != "" && network != "both" {
+				if network != "tcp" {
+					return nil, fmt.Errorf("Shadowsocks 传输只支持 tcp 或 both")
+				}
+				in["network"] = network
+			}
 			in["method"] = firstNonEmpty(str(p, "method"), "2022-blake3-aes-128-gcm")
 			in["password"] = str(p, "password")
 		default:
@@ -380,6 +398,19 @@ func (d *SingBox) Apply(ctx context.Context, ds *agentproto.DesiredState, nodes 
 // ApplyResources receives only locally prepared forwards. They join the public
 // shared service and cannot inherit a node's private-business permission.
 func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredState, nodes []agentproto.NodeSpec, forwards []agentproto.ForwardSpec) (changed bool, applyErr error) {
+	policy := corePolicyFingerprint(nodes, forwards)
+	defer func() {
+		if applyErr != nil {
+			applyErr = rollbackCoreAfterFailure(d.bin(), d.Systemd, policy, applyErr)
+		}
+	}()
+	configs := []string{filepath.Join(proxyConfigRoot, "public", "config.json"), filepath.Join(proxyConfigRoot, "private", "config.json")}
+	if err := beginCoreApply(ctx, d.bin(), d.Systemd, policy, []string{singboxUnit, "ctlvps-singbox-private.service"}, configs); err != nil {
+		return false, err
+	}
+	if err := setCoreRetainedIntent(d.bin(), ds, nodes, forwards); err != nil {
+		return false, err
+	}
 	groups := map[string][]agentproto.NodeSpec{"public": {}, "private": {}}
 	acme := false
 	for _, n := range nodes {
@@ -404,8 +435,10 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 		return false
 	}
 	liveForwards := false
+	liveUDP := false
 	for _, f := range forwards {
 		liveForwards = liveForwards || (!f.Blocked && !f.Retired)
+		liveUDP = liveUDP || (!f.Blocked && !f.Retired && f.Config.Network != "tcp")
 	}
 	twoGroups := (hasLive(groups["public"]) || liveForwards) && hasLive(groups["private"])
 	// Splitting native ACME storage/challenge listeners is not safe without a
@@ -481,6 +514,9 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 			return false, e
 		}
 		e = f.Chown(int(uid), int(gid))
+		if e == nil {
+			e = f.Chmod(0600)
+		}
 		f.Close()
 		if e != nil {
 			return false, e
@@ -511,6 +547,16 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 		var managedForwards []agentproto.ForwardSpec
 		if profile == "public" {
 			managedForwards = forwards
+			for _, f := range forwards {
+				if f.Blocked || f.Retired || f.Config.Network == "tcp" {
+					continue
+				}
+				clone.UDPAPISecret, e = d.udpSecret()
+				if e != nil {
+					return false, e
+				}
+				break
+			}
 		}
 		cfg, e := clone.BuildResourceConfig(ds, groups[profile], managedForwards)
 		if e != nil {
@@ -531,6 +577,12 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 			return false, e
 		}
 		props = append(props, fmt.Sprintf("Environment=GOMEMLIMIT=%dMiB", max(ds.Tuning.GoMemLimitMB, 64)), "IPAccounting=yes")
+		if !d.Systemd.openRC {
+			// Also change the unit so reapplying existing services restarts them.
+			// OpenRC's strict plan accepts only GOMEMLIMIT; the fixed launcher
+			// injects this setting on both init systems.
+			props = append(props, "Environment=GODEBUG="+agentbudget.SingBoxGoDebug)
+		}
 		unit := singboxUnit
 		if clone.private {
 			unit = "ctlvps-singbox-private.service"
@@ -566,71 +618,23 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 			if e := d.Systemd.CheckRunningProxy(ctx, c.unit, account, SingBoxSlice(c.profile == "private"), launcher+" proxy-exec singbox run "+c.profile, true); e != nil {
 				return false, e
 			}
+			if c.profile == "public" && liveUDP {
+				if e := verifyUDPManager(ctx, d.Systemd); e != nil {
+					return false, e
+				}
+			}
 		}
-		return false, nil
+		return false, markCoreValidated(d.bin())
 	}
-	type saved struct {
-		path   string
-		data   []byte
-		exists bool
-		mode   os.FileMode
-		gid    int
-	}
-	backups := []saved{}
 	active := []string{}
-	enabledBefore := map[string]bool{}
 	for _, u := range units {
-		en, _ := d.Systemd.ctl(ctx, "is-enabled", u)
-		enabledBefore[u] = strings.TrimSpace(en) == "enabled"
-		p := filepath.Join(d.Systemd.UnitDir, u)
-		b, e := os.ReadFile(p)
-		backups = append(backups, saved{p, b, e == nil, 0644, -1})
 		if d.Systemd.IsActive(ctx, u) {
 			active = append(active, u)
 		}
 	}
-	for _, c := range candidates {
-		b, e := os.ReadFile(c.config)
-		backups = append(backups, saved{c.config, b, e == nil, 0640, c.gid})
+	if err = markCoreApplying(d.bin()); err != nil {
+		return false, err
 	}
-	defer func() {
-		if applyErr == nil {
-			return
-		}
-		r, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		stop := []string{}
-		for _, u := range units {
-			if _, e := os.Stat(filepath.Join(d.Systemd.UnitDir, u)); e == nil || d.Systemd.IsActive(r, u) {
-				stop = append(stop, u)
-			}
-		}
-		errs := []error{applyErr, d.Systemd.StopUnits(r, stop)}
-		for _, u := range stop {
-			if !enabledBefore[u] {
-				_, e := d.Systemd.ctl(r, "disable", u)
-				errs = append(errs, e)
-			}
-		}
-		for _, b := range backups {
-			if b.exists {
-				_, e := WriteIfChanged(b.path, b.data, b.mode)
-				errs = append(errs, e)
-				if b.gid >= 0 {
-					errs = append(errs, os.Chown(b.path, 0, b.gid))
-				}
-			} else {
-				if e := os.Remove(b.path); e != nil && !os.IsNotExist(e) {
-					errs = append(errs, e)
-				}
-			}
-		}
-		errs = append(errs, d.Systemd.DaemonReload(r))
-		for _, u := range active {
-			errs = append(errs, d.Systemd.StartUnits(r, []string{u}))
-		}
-		applyErr = errors.Join(errs...)
-	}()
 	for _, u := range active {
 		if err = d.Systemd.StopUnits(ctx, []string{u}); err != nil {
 			return false, err
@@ -670,6 +674,11 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 		if err = d.Systemd.CheckRunningProxy(ctx, c.unit, user, SingBoxSlice(c.profile == "private"), launcher+" proxy-exec singbox run "+c.profile, true); err != nil {
 			return false, err
 		}
+		if c.profile == "public" && liveUDP {
+			if err = verifyUDPManager(ctx, d.Systemd); err != nil {
+				return false, err
+			}
+		}
 	}
 	for _, u := range units {
 		if !want[u] {
@@ -681,7 +690,7 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 			}
 		}
 	}
-	if err := completeActivation(d.bin()); err != nil {
+	if err := markCoreValidated(d.bin()); err != nil {
 		return true, err
 	}
 	d.binaryChanged = false

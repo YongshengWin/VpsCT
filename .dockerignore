@@ -8,6 +8,8 @@ bin
 release
 data
 deploy/data
+deploy/backups
+deploy/.compose-upgrade.lock
 backups
 **/*.db
 **/*.db-*

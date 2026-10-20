@@ -16,7 +16,7 @@ import (
 	"ctlvps/internal/store"
 )
 
-func (i *Ingestor) ingestNetworkBilling(ctx context.Context, tx *sql.Tx, serverID int64, hb agentproto.Heartbeat, ts time.Time, result *Result, legacy func() error, add func(string, int64, int64, int64) error, sample func(any, int64, int64) error) error {
+func (i *Ingestor) ingestNetworkBilling(ctx context.Context, tx *sql.Tx, serverID int64, hb agentproto.Heartbeat, ts time.Time, result *Result, legacy func() (bool, error), add func(string, int64, int64, int64) error, sample func(any, int64, int64) error) error {
 	var current, requested, totalRx, totalTx int64
 	var source string
 	var previousStatus, previousError string
@@ -128,23 +128,33 @@ func (i *Ingestor) ingestNetworkBilling(ctx context.Context, tx *sql.Tx, serverI
 	}
 	status, detail := "active", ""
 	if policy.Mode == "legacy" {
-		if err = legacy(); err != nil {
+		accepted, err := legacy()
+		if err != nil {
 			return err
 		}
 		if current == 0 {
-			totalRx, totalTx = hb.Metrics.NetRx, hb.Metrics.NetTx
-		} else {
+			// A policy request can create billing state after the latest legacy
+			// sample. Seed its cumulative chart from the committed baseline even
+			// when this heartbeat is a replay, without recording another sample.
+			baselineErr := tx.QueryRowContext(ctx, "SELECT last_rx,last_tx FROM counter_state WHERE server_id=? AND counter_key='nic'", serverID).Scan(&totalRx, &totalTx)
+			if baselineErr != nil && !errors.Is(baselineErr, sql.ErrNoRows) {
+				return baselineErr
+			}
+		} else if accepted {
 			if result.ServerUp > math.MaxInt64-totalRx || result.ServerDown > math.MaxInt64-totalTx {
 				return errors.New("server billing totals overflow")
 			}
 			totalRx += result.ServerUp
 			totalTx += result.ServerDown
 		}
-		if hb.Metrics.NetRx > 0 || hb.Metrics.NetTx > 0 {
+		if accepted {
 			if err = sample(nil, totalRx, totalTx); err != nil {
 				return err
 			}
 		}
+		// Replays do not add chart points, but collector identity and policy
+		// metadata must still commit together. A requested policy may have been
+		// created since the original legacy sample was received.
 		if current == 0 {
 			status = "legacy"
 		}

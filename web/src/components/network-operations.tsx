@@ -26,7 +26,7 @@ export function NetworkOperationItem({ op }: { op: NetworkOperation }) {
   const label = { node_network: "节点网络", egress_create: "创建出口", egress_update: "更新出口", egress_delete: "删除出口", forward_create: "创建转发", forward_update: "更新转发", forward_delete: "删除转发" }[op.kind];
   return <div className="space-y-2 rounded-lg border p-3 text-sm">
     <div className="flex flex-wrap items-center justify-between gap-2"><span>{label} #{op.resource_id} · 版本 {op.resource_revision}</span><Badge variant={failed ? "destructive" : op.status === "applied" ? "success" : networkTerminal(op) ? "secondary" : "warning"}>{networkStatus[op.status]}</Badge></div>
-    <p className="break-words text-muted-foreground">{op.message}</p>
+    <p className="wrap-break-word text-muted-foreground">{op.message}</p>
     <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{fmtAgo(op.updated_at)}{op.desired_revision > 0 ? ` · 配置版本 ${op.desired_revision}` : ""}</span>{(failed || op.status === "waiting_agent") && <Button size="sm" variant="outline" loading={retry.isPending} onClick={() => retry.mutate()}>重新申请应用</Button>}</div>
     {op.status === "applied" && <p className="text-xs text-muted-foreground">已收到对应配置的应用回执；这不代表所有业务目标均可达。</p>}
   </div>;
@@ -44,7 +44,7 @@ export function NetworkOperations({ serverID }: { serverID: number }) {
   const q = useQuery({ queryKey: ["network-operations", serverID, page], queryFn: () => get<NetworkOperation[]>(`/api/v1/servers/${serverID}/network/operations?limit=10&offset=${page * 10}`), refetchInterval: 5000 });
   return <Card><CardHeader><CardTitle>网络变更记录</CardTitle></CardHeader><CardContent className="space-y-3">
     <p className="text-xs text-muted-foreground">这里记录网络配置的应用结果。提交后请等待 VPS 回报状态。</p>
-    {q.isPending ? <Spinner /> : q.isError ? <p className="text-sm text-destructive">记录加载失败：{q.error.message}</p> : !q.data.length ? <Empty title="暂无变更记录" /> : q.data.map((op) => <NetworkOperationItem key={op.id} op={op} />)}
+    {q.isPending ? <Spinner /> : q.isError ? <p className="text-sm text-destructive">记录加载失败：{q.error.message}</p> : !q.data.length ? <Empty compact title="暂无变更记录" /> : q.data.map((op) => <NetworkOperationItem key={op.id} op={op} />)}
     <div className="flex items-center justify-end gap-2"><Button size="sm" variant="outline" disabled={page === 0 || q.isFetching} onClick={() => setPage(page - 1)}>上一页</Button><span className="text-xs">第 {page + 1} 页</span><Button size="sm" variant="outline" disabled={q.isFetching || q.data?.length !== 10} onClick={() => setPage(page + 1)}>下一页</Button></div>
   </CardContent></Card>;
 }

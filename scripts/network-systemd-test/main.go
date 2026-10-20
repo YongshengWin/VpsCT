@@ -188,6 +188,10 @@ func main() {
 	if _, err := os.Stat("/.dockerenv"); err != nil {
 		panic("container required")
 	}
+	if len(os.Args) == 2 && os.Args[1] == "memory-preflight" {
+		memoryPreflight()
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "ssh-peer" {
 		sshFixturePeer()
 		return
@@ -196,7 +200,11 @@ func main() {
 		transitLanding()
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
+	budget := 9 * time.Minute
+	if os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-stress" {
+		budget = 20 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	setupNetwork()
 	stopOrigin := process(ctx, "ip", "netns", "exec", "landing", "/fixtures/probe", "echo")
@@ -218,6 +226,9 @@ func main() {
 	must(err)
 	sum := sha256.Sum256(b)
 	writeJSON("/opt/ctlvps/bin/sing-box.trusted", map[string]string{"Version": corecompat.NetworkBaseline, "SHA256": hex.EncodeToString(sum[:])})
+	must(os.MkdirAll("/var/log/ctlvps", 0755))
+	must(os.WriteFile("/var/log/ctlvps/sing-box.log", nil, 0000))
+	must(os.Chmod("/var/log/ctlvps/sing-box.log", 0000))
 	must(os.MkdirAll("/etc/ctlvps", 0750))
 	dir := "/var/lib/ctlvps-network-fixture"
 	must(os.MkdirAll(dir, 0700))
@@ -278,7 +289,7 @@ func main() {
 	state.PollIntervalSec = 10
 	must(state.Save("/var/lib/ctlvps-agent"))
 	startFixtureAgent()
-	defer run("systemctl", "stop", "ctlvps-agent.service")
+	defer stopFixtureAgent()
 	interfaces := map[string]string{}
 	eventually("real agent inventory", func() bool {
 		view, err := st.Network(ctx, server.ID)

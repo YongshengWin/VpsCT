@@ -15,6 +15,10 @@ import (
 )
 
 type agentRequirements struct {
+	ForwardUDP       int             `json:"forward_udp_version"`
+	OpenRCMieru      int             `json:"openrc_mieru_version"`
+	OpenRC           int             `json:"openrc_version"`
+	NAT              int             `json:"nat_version"`
 	ListenBinding    int             `json:"listen_binding_version"`
 	ForwardDNS       int             `json:"forward_dns_version"`
 	ForwardPrivate   int             `json:"forward_private_version"`
@@ -51,7 +55,16 @@ func readAgentRequirements(path string) (agentRequirements, error) {
 	if r.ListenBinding < 0 || r.ForwardDNS < 0 || r.ForwardPrivate < 0 || r.ForwardTransport < 0 {
 		return r, errors.New("agent 网络特性状态无效")
 	}
-	if r.ForwardDNS > 0 || r.ForwardPrivate > 0 || r.ForwardTransport > 0 {
+	if r.NAT < 0 || r.NAT > networkconfig.NATVersion {
+		return r, errors.New("agent NAT 特性状态无效")
+	}
+	if r.OpenRCMieru < 0 || r.OpenRCMieru > 1 || r.OpenRC < 0 || r.OpenRC > 1 {
+		return r, errors.New("agent OpenRC 特性状态无效")
+	}
+	if r.ForwardUDP < 0 || r.ForwardUDP > networkconfig.ForwardUDPVersion {
+		return r, errors.New("agent UDP 会话管理状态无效")
+	}
+	if r.ForwardDNS > 0 || r.ForwardPrivate > 0 || r.ForwardTransport > 0 || r.ForwardUDP > 0 {
 		r.Forward = max(1, r.Forward)
 	}
 	if r.ForwardTransport > 0 {
@@ -76,6 +89,28 @@ func (r agentRequirements) billingRequired() bool {
 }
 
 func (r agentRequirements) check(c networkconfig.ExecutableCapabilities) error {
+	// Preserve the legacy base capability so an already-installed v1 updater
+	// can inspect this candidate. The separate flag proves v2 isolation support.
+	udpVersion := c.ForwardUDP
+	if c.ForwardUDPIsolation < 0 || c.ForwardUDPIsolation > 1 || c.ForwardUDPIsolation > 0 && c.ForwardUDP < 1 {
+		return errors.New("候选 UDP 隔离能力无效")
+	}
+	if c.ForwardUDPIsolation == 1 {
+		udpVersion = max(udpVersion, networkconfig.ForwardUDPVersion)
+	}
+
+	if c.ForwardUDP > networkconfig.ForwardUDPVersion || r.ForwardUDP < 0 || r.ForwardUDP > networkconfig.ForwardUDPVersion || (r.ForwardUDP > 0 && udpVersion < r.ForwardUDP) {
+		return errors.New("候选 agent 不支持本机 UDP 会话管理，拒绝降级")
+	}
+	if r.OpenRCMieru > 0 && r.OpenRCMieru != c.OpenRCMieru {
+		return errors.New("候选 agent 不支持本机 OpenRC mieru 计量，拒绝降级")
+	}
+	if r.OpenRC > 0 && r.OpenRC != c.OpenRC {
+		return errors.New("候选 agent 不支持本机 OpenRC 服务管理，拒绝降级；原程序保持不变")
+	}
+	if r.NAT > 0 && c.NAT < r.NAT {
+		return errors.New("候选 agent 不支持已启用的 NAT 端口适配，拒绝降级")
+	}
 	if r.ListenBinding > 0 && r.ListenBinding != c.ListenBinding || r.ForwardDNS > 0 && r.ForwardDNS != c.ForwardDNS || r.ForwardPrivate > 0 && r.ForwardPrivate != c.ForwardPrivate || r.ForwardTransport > 0 && r.ForwardTransport != c.ForwardTransport {
 		return errors.New("候选 agent 不支持已启用的监听或固定转发能力，拒绝降级")
 	}
@@ -102,7 +137,7 @@ func CheckAgentCompatibility(ctx context.Context, binary, statePath string) erro
 	if err != nil {
 		return err
 	}
-	if r.Mita == 0 && r.Binding == 0 && r.Egress == 0 && r.Forward == 0 && !r.billingRequired() {
+	if r.OpenRC == 0 && r.NAT == 0 && r.Mita == 0 && r.Binding == 0 && r.Egress == 0 && r.Forward == 0 && r.ForwardUDP == 0 && !r.billingRequired() {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

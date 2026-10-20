@@ -81,6 +81,9 @@ type API struct {
 	entryLimiter       *rateLimiter
 	securityLogLimiter *rateLimiter
 	cores              *corecatalog.Fetcher
+	apiKeyLimiter      *rateLimiter
+	apiKeyEntryLimiter *rateLimiter
+	agentOperations    []agentOperation
 }
 
 const (
@@ -107,7 +110,8 @@ func New(d Deps) *API {
 		cores:              &corecatalog.Fetcher{},
 		securityLogLimiter: newRateLimiter(10, time.Minute),
 		passwordGate:       safehttp.Gate{Limit: 2}, csrfKey: csrfSecret(), agentLimiter: newRateLimiter(240, time.Minute), apiGate: safehttp.Gate{Limit: 8}, agentGate: safehttp.Gate{Limit: 16}, subscriptionGate: safehttp.Gate{Limit: 4},
-		entryLimiter: newRateLimiter(120, time.Minute),
+		entryLimiter:  newRateLimiter(120, time.Minute),
+		apiKeyLimiter: newRateLimiter(240, time.Minute), apiKeyEntryLimiter: newRateLimiter(240, time.Minute),
 	}
 	a.routes()
 	return a
@@ -145,6 +149,10 @@ func userFrom(ctx context.Context) *domain.User {
 }
 
 func (a *API) currentUser(r *http.Request) (*domain.User, error) {
+	if len(r.Header.Values("Authorization")) != 0 {
+		_, u, err := a.apiKeyIdentity(r)
+		return u, err
+	}
 	c, err := r.Cookie(a.sessionName())
 	if err != nil || c.Value == "" {
 		return nil, httpx.ErrUnauthorized
@@ -173,6 +181,7 @@ func (a *API) handle(pattern string, policy accessPolicy, h httpx.Handler) {
 	if policy != memberAccess && policy != adminAccess {
 		panic("route access policy required")
 	}
+	a.registerAgentOperation(pattern, policy, h)
 	a.mux.Handle(pattern, httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		u, err := a.currentUser(r)
 		if err != nil {
@@ -182,12 +191,33 @@ func (a *API) handle(pattern string, policy accessPolicy, h httpx.Handler) {
 			a.securityEvent(r, "role_denied")
 			return httpx.ErrForbidden
 		}
-		if isWrite(r) && !a.checkCSRF(r) {
+		key := apiKeyFrom(r.Context())
+		if key != nil {
+			if sessionOnlyOperation(pattern) {
+				return httpx.E(403, "session_required", "此操作需要登录面板账户")
+			}
+			if !hasAPIKeyScope(key, operationScope(pattern)) {
+				return httpx.E(403, "insufficient_scope", "API key 权限不足")
+			}
+		}
+		if key == nil && isWrite(r) && !a.checkCSRF(r) {
 			a.securityEvent(r, "csrf_denied")
 			return httpx.E(403, "invalid_csrf", "页面验证已失效，请刷新后重试")
 		}
 		ctx := context.WithValue(r.Context(), userKey, u)
-		return h(w, r.WithContext(ctx))
+		r = r.WithContext(ctx)
+		if key != nil {
+			if err := a.Store.TouchAPIKey(ctx, key.ID); err != nil {
+				if errors.Is(err, store.ErrNotFound) {
+					return httpx.E(401, "invalid_api_key", "API key 无效、已过期或已撤销")
+				}
+				return httpx.E(503, "auth_unavailable", "API key 状态验证暂时不可用")
+			}
+			if err := a.audit(r, "api_key.request", pattern, map[string]any{"api_key_id": key.ID, "method": r.Method, "request_id": w.Header().Get("X-Request-ID")}); err != nil && isWrite(r) {
+				return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未执行操作")
+			}
+		}
+		return h(w, r)
 	}))
 }
 
@@ -308,6 +338,19 @@ func (a *API) routes() {
 
 	a.handle("GET /api/v1/auth/csrf", memberAccess, a.csrf)
 
+	// Developer credentials and agent discovery use the same product API.
+	a.handle("GET /api/v1/api-keys", memberAccess, a.listAPIKeys)
+	a.handle("POST /api/v1/api-keys", memberAccess, a.createAPIKey)
+	a.handle("DELETE /api/v1/api-keys/{id}", memberAccess, a.revokeAPIKey)
+	a.handle("GET /api/v1/agent/capabilities", memberAccess, a.agentCapabilities)
+	a.handle("GET /api/v1/agent/openapi.json", memberAccess, a.agentOpenAPI)
+	a.handle("GET /api/v1/agent/skill", memberAccess, a.agentSkill)
+	a.handle("GET /api/v1/agent/skill.zip", memberAccess, a.agentSkillBundle)
+	a.handle("GET /api/v1/agent/client.py", memberAccess, a.agentClient)
+	a.handle("GET /api/v1/agent/reference", memberAccess, a.agentReference)
+	// The installer contains only the embedded public Skill, never user data.
+	a.public("GET /agent/skill/install.py", a.agentSkillInstaller)
+
 	// users
 	a.handle("GET /api/v1/users", adminAccess, a.listUsers)
 	a.handle("POST /api/v1/users", adminAccess, a.createUser)
@@ -321,10 +364,20 @@ func (a *API) routes() {
 	a.handle("POST /api/v1/servers", adminAccess, a.createServer)
 	a.handle("GET /api/v1/servers/{id}", adminAccess, a.getServer)
 	a.handle("PUT /api/v1/servers/{id}", adminAccess, a.updateServer)
+	a.handle("GET /api/v1/servers/{id}/nat", adminAccess, a.serverNAT)
+	a.handle("PUT /api/v1/servers/{id}/nat", adminAccess, a.saveServerNAT)
 	a.handle("DELETE /api/v1/servers/{id}", adminAccess, a.deleteServer)
 	a.handle("POST /api/v1/servers/{id}/enroll-token", adminAccess, a.enrollToken)
 	a.handle("POST /api/v1/servers/{id}/reset-token", adminAccess, a.resetAgentToken)
 	a.handle("GET /api/v1/servers/{id}/traffic", adminAccess, a.serverTraffic)
+	a.handle("GET /api/v1/access-routes", adminAccess, a.listAccessRoutes)
+	a.handle("GET /api/v1/access-routes/{op}", adminAccess, a.getAccessRoute)
+	a.handle("GET /api/v1/servers/{id}/access-routes", adminAccess, a.listAccessRoutes)
+	a.handle("POST /api/v1/access-routes/preview", adminAccess, a.previewAccessRoute)
+	a.handle("POST /api/v1/access-routes", adminAccess, a.createAccessRoute)
+	a.handle("POST /api/v1/access-routes/{op}/retry", adminAccess, a.retryAccessRoute)
+	a.handle("DELETE /api/v1/access-routes/{op}", adminAccess, a.stopAccessRoute)
+	a.handle("GET /api/v1/access-routes/{op}/node", adminAccess, a.accessRouteNode)
 	a.handle("GET /api/v1/servers/{id}/transits", adminAccess, a.listManagedTransits)
 	a.handle("POST /api/v1/transits/preview", adminAccess, a.previewManagedTransit)
 	a.handle("POST /api/v1/transits", adminAccess, a.createManagedTransit)
@@ -473,6 +526,9 @@ func (a *API) routes() {
 	a.public("GET /s/{token}/{format}", a.publicSubscription)
 	a.public("GET /r/{code}", a.publicShort)
 	a.public("GET /healthz", func(w http.ResponseWriter, r *http.Request) error {
+		if r.URL.Query().Get("ready") == "1" {
+			return a.controllerReadiness(w, r)
+		}
 		httpx.OK(w, map[string]any{"ok": true})
 		return nil
 	})

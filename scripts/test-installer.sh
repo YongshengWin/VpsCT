@@ -30,4 +30,33 @@ bash install.sh --help >/dev/null
 if bash install.sh --repo >/dev/null 2>&1; then
   printf 'missing argument accepted\n' >&2; exit 1
 fi
+# A corrupt/unreadable recovery archive must never delete the failed data.
+(
+  restore_fixture=$(mktemp -d)
+  trap 'rm -rf -- "$restore_fixture"' EXIT
+  INSTALL_DIR="$restore_fixture/install"
+  PREVIOUS="$INSTALL_DIR/releases/old"
+  WORK="$restore_fixture/work"
+  BACKUP="$INSTALL_DIR/backups/test"
+  mkdir -p "$PREVIOUS" "$WORK" "$BACKUP" "$INSTALL_DIR/data"
+  touch "$PREVIOUS/VERIFIED-SHA256"
+  printf '#!/bin/sh\nexit 0\n' > "$PREVIOUS/ctlvpsd"
+  chmod 0755 "$PREVIOUS/ctlvpsd"
+  cat > "$WORK/backup-tool" <<'FIXTURE'
+#!/bin/sh
+[ "$1" = check-recovery ]
+FIXTURE
+  chmod 0755 "$WORK/backup-tool"
+  printf 'keep failed data\n' > "$INSTALL_DIR/data/marker"
+  if restore_previous; then printf 'invalid recovery unexpectedly succeeded\n' >&2; exit 1; fi
+  [[ -f "$INSTALL_DIR/data/marker" ]]
+)
 printf 'Installer argument checks passed\n'
+
+# Withdrawn ARM hosts must fail before root/service checks or any mutation.
+if (
+  uname() { if [[ "$1" == -s ]]; then echo Linux; else echo aarch64; fi; }
+  check_environment
+) > /dev/null 2>&1; then
+  printf 'ARM architecture unexpectedly accepted\n' >&2; exit 1
+fi

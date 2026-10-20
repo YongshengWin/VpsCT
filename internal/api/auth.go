@@ -288,7 +288,7 @@ func (a *API) changePassword(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	// invalidate other sessions, keep this one
-	if c, err := r.Cookie(a.sessionName()); err == nil {
+	if c, err := r.Cookie(a.sessionName()); err == nil && apiKeyFrom(r.Context()) == nil {
 		_ = a.Store.DeleteUserSessions(r.Context(), u.ID)
 		_ = a.Store.CreateSession(r.Context(), store.Session{ID: auth.HashToken(c.Value), UserID: u.ID, CreatedAt: a.Store.Now(), ExpiresAt: a.Store.Now().Add(a.Config.SessionTTL)})
 	}

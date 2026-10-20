@@ -73,9 +73,9 @@ func TestNetworkOperationsAPITracksExactReceiptsAndAuthorizedRetries(t *testing.
 	op, _ = c.api.Store.NetworkOperation(ctx, op.ID)
 	get("waiting_agent")
 	// Both receipt channels require the exact revision and hash.
-	c.do("POST", "/api/agent/v1/apply-report", agentproto.ApplyReport{Revision: op.DesiredRevision, Hash: strings.Repeat("f", 64), Status: "applied"}, 204)
+	c.do("POST", "/api/agent/v1/apply-report", agentproto.ApplyReport{Revision: op.DesiredRevision, Hash: strings.Repeat("f", 64), Status: "applied"}, 400)
 	get("waiting_agent")
-	c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{AppliedRevision: op.DesiredRevision + 1, AppliedHash: op.DesiredHash, ApplyStatus: "applied"}, 200)
+	c.do("POST", "/api/agent/v1/heartbeat", agentproto.Heartbeat{AppliedRevision: op.DesiredRevision + 1, AppliedHash: op.DesiredHash, ApplyStatus: "applied"}, 400)
 	get("waiting_agent")
 	c.do("POST", "/api/agent/v1/apply-report", agentproto.ApplyReport{Revision: op.DesiredRevision, Hash: op.DesiredHash, Status: "failed", Error: "fixture-private-apply-error"}, 204)
 	get("apply_failed")

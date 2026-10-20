@@ -92,7 +92,12 @@ func (in shareInput) apply(sh *domain.Share) error {
 		sh.Targets = []domain.ShareTarget{}
 	}
 	for i := range sh.Targets {
+		seenProtocols := map[string]bool{}
 		for _, p := range sh.Targets[i].Protocols {
+			if seenProtocols[p] {
+				return httpx.BadRequest("同一分享目标的协议不能重复")
+			}
+			seenProtocols[p] = true
 			ok := false
 			for _, d := range domain.DeployableProtocols {
 				if d == p {
@@ -104,6 +109,9 @@ func (in shareInput) apply(sh *domain.Share) error {
 			}
 		}
 	}
+	if err := domain.ValidateShareNodeQuotas(sh.Targets); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
 	sh.ExtraNodeIDs = in.ExtraNodeIDs
 	if sh.ExtraNodeIDs == nil {
 		sh.ExtraNodeIDs = []int64{}
@@ -112,7 +120,11 @@ func (in shareInput) apply(sh *domain.Share) error {
 		return httpx.BadRequest("配额不能为负数")
 	}
 	sh.QuotaBytes = in.QuotaBytes
-	mode, ok := domain.NormalizeBilling(in.BillingMode)
+	requestedMode := in.BillingMode
+	if requestedMode == "" && sh.ID > 0 {
+		requestedMode = sh.BillingMode
+	}
+	mode, ok := domain.NormalizeQuotaBilling(requestedMode)
 	if !ok {
 		return httpx.BadRequest("计费方式无效")
 	}
@@ -151,7 +163,7 @@ func (a *API) createShare(w http.ResponseWriter, r *http.Request) error {
 			// partially created: report but keep record for inspection
 			a.Logger.Warn("share created with provisioning error", "share", sh.ID, "err", err)
 		} else {
-			return err
+			return natAPIError(err)
 		}
 	}
 	a.audit(r, "share.create", sh.Name, map[string]any{"quota": sh.QuotaBytes, "targets": sh.Targets})
@@ -196,7 +208,7 @@ func (a *API) updateShare(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := a.Shares.Update(r.Context(), &sh); err != nil {
-		return err
+		return natAPIError(err)
 	}
 	a.audit(r, "share.update", sh.Name, nil)
 	a.Events.Publish("share.changed", map[string]any{"id": sh.ID})
@@ -357,7 +369,7 @@ func (a *API) connlogFilter(r *http.Request) connlog.Filter {
 		From:     parseTimeParam(q.Get("from")),
 		To:       parseTimeParam(q.Get("to")),
 		Limit:    httpx.QueryInt(r, "limit", 100),
-		Offset:   httpx.QueryInt(r, "offset", 0),
+		Offset:   httpx.QueryOffset(r, "offset", 0),
 	}
 	if q.Get("share_id") == "self" {
 		f.SelfOnly = true

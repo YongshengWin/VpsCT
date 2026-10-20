@@ -167,15 +167,8 @@ func (s *Store) previewTransit(ctx context.Context, q querier, in TransitRequest
 	if err != nil {
 		return v, n, landing, err
 	}
-	if n.Source != domain.NodeDeployed || n.ServerID == nil || *n.ServerID == in.LandingServerID || n.NetworkRevision != in.ExpectedRevision || n.Protocol != domain.ProtocolShadowsocks || n.Revoked {
-		return v, n, landing, fmt.Errorf("%w: 须选择不同服务器上的有效 SS-2022 入口，并核对网络版本", ErrTransitRequest)
-	}
-	var p struct {
-		Method string `json:"method"`
-	}
-	_ = json.Unmarshal(n.ServerParams, &p)
-	if p.Method != "2022-blake3-aes-128-gcm" {
-		return v, n, landing, fmt.Errorf("%w: 当前托管中转入口要求 SS-2022 AES-128", ErrTransitRequest)
+	if n.Source != domain.NodeDeployed || n.ServerID == nil || *n.ServerID == in.LandingServerID || n.NetworkRevision != in.ExpectedRevision || n.Core != domain.CoreSingBox || n.Protocol == domain.ProtocolWireGuard || !domain.ProtocolAllowed(n.Protocol, domain.CoreModeStable) || n.Revoked || !n.Enabled {
+		return v, n, landing, fmt.Errorf("%w: 须选择已部署且启用的 sing-box 代理节点（如 VLESS、Trojan、AnyTLS、SS），并核对网络版本；落地须为另一台服务器", ErrTransitRequest)
 	}
 	if in.LandingPort < 1025 || in.LandingPort > 65535 {
 		return v, n, landing, fmt.Errorf("%w: 落地端口须为 1025–65535", ErrTransitRequest)
@@ -225,6 +218,13 @@ func (s *Store) previewTransit(ctx context.Context, q querier, in TransitRequest
 		return v, n, landing, fmt.Errorf("%w: 落地地址须匹配配置的访问地址或 agent 报告的 IP", ErrTransitRequest)
 	}
 	v.Ready = entryState.view.Ready && landState.view.Ready && landing.Enabled && entryState.server.Enabled
+	var inboundParams map[string]any
+	_ = json.Unmarshal(n.ServerParams, &inboundParams)
+	if !agentproto.LegacyProxyInbound(agentproto.NodeSpec{Core: string(n.Core), Protocol: n.Protocol, Params: inboundParams}) {
+		ready := entryState.view.ProxyInboundVersion == agentproto.NetworkProxyInboundVersion
+		v.Checks = append(v.Checks, NetworkReadinessCheck{Code: "proxy_inbound_agent", Ready: ready, Message: "请先升级入口 agent，以支持 VLESS 等代理节点绑定中转出口"})
+		v.Ready = v.Ready && ready
+	}
 	v.Checks = append(entryState.view.Checks, landState.view.Checks...)
 	var landingDiagRaw string
 	if err = q.QueryRowContext(ctx, `SELECT diagnostics FROM agents WHERE server_id=?`, landing.ID).Scan(&landingDiagRaw); err != nil {
@@ -236,7 +236,7 @@ func (s *Store) previewTransit(ctx context.Context, q querier, in TransitRequest
 	message := "两端需支持 WireGuard，落地 agent 还需支持最终计量清理回执"
 	if protocol == "ss2022" {
 		protocolReady = corecompat.SS2022Outbound(entryState.view.PinnedCoreVersion) && entryState.view.EgressVersion == agentproto.NetworkEgressVersion && landState.view.BindingVersion == agentproto.NetworkBindingVersion && landingDiag.MeterInventoryVersion == 1
-		message = "SS-2022 入口需官方 sing-box 1.14.1 或兼容 1.14.x，两端 agent 需支持网络绑定与计量清理"
+		message = "SS-2022 后段传输需官方 sing-box 1.14.1 或兼容 1.14.x，两端 agent 需支持网络绑定与计量清理"
 	}
 	v.Checks = append(v.Checks, NetworkReadinessCheck{Code: "transit_protocol", Ready: protocolReady, Message: message})
 	v.Ready = v.Ready && protocolReady

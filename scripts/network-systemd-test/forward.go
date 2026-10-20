@@ -29,15 +29,19 @@ import (
 )
 
 func testForwardSystemd(ctx context.Context, st *store.Store, d *desired.Builder, server domain.Server, interfaces map[string]string, admin *fixtureAdmin) {
-	throughSOCKS := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-socks"
+	throughSOCKS := strings.HasPrefix(os.Getenv("NETWORK_SYSTEMD_CASE"), "forward-socks")
 	throughSSH := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-ssh"
-	throughWG := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-wireguard"
-	throughUDP := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-udp"
+	throughWG := strings.HasPrefix(os.Getenv("NETWORK_SYSTEMD_CASE"), "forward-wireguard")
+	throughUDP := strings.HasSuffix(os.Getenv("NETWORK_SYSTEMD_CASE"), "-udp") || os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-both" || os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-udp6"
+	stress := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-stress"
+	throughUDP = throughUDP || stress
+	udp6 := os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-udp6"
 	profile := domain.EgressProfile{ServerID: server.ID, Name: "forward wan1", Kind: "direct", Enabled: true}
 	raw, _ := json.Marshal(networkconfig.Direct{InterfaceID: interfaces["wan1"], Family: "dual", DNS: networkconfig.Resolver{Transport: "udp", Address: "203.0.113.10", Port: 15353}})
 	if throughSOCKS {
 		profile.Kind = "socks5"
 		upstream := networkconfig.SOCKS5{Server: "192.0.2.2", ServerPort: 11080, Authentication: "none", Family: "ipv4", DNS: networkconfig.Resolver{Transport: "tcp", Address: "203.0.113.10", Port: 15353}, Outer: networkconfig.Direct{InterfaceID: interfaces["wan0"], Family: "ipv4", DNS: networkconfig.Resolver{Transport: "udp", Address: "203.0.113.10", Port: 15353}}, ConnectTimeoutSeconds: 3}
+		upstream.UDP = throughUDP
 		raw, _ = json.Marshal(upstream)
 		writeJSON("/tmp/fixture-forward-socks.json", map[string]any{"log": map[string]any{"level": "error"}, "inbounds": []any{map[string]any{"type": "socks", "tag": "upstream", "listen": "192.0.2.2", "listen_port": 11080}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "landing-out", "inet4_bind_address": "198.51.100.2"}}, "route": map[string]any{"rules": []any{map[string]any{"inbound": []string{"upstream"}, "action": "route", "outbound": "landing-out"}}}})
 		stop := process(ctx, "ip", "netns", "exec", "landing", "/opt/ctlvps/bin/sing-box", "run", "-c", "/tmp/fixture-forward-socks.json")
@@ -126,6 +130,15 @@ func testForwardSystemd(ctx context.Context, st *store.Store, d *desired.Builder
 	if throughUDP {
 		cfg.Network, cfg.MaxTCPConnections, cfg.MaxUDPSessions, cfg.UDPIdleSeconds = "udp", 0, 8, 2
 	}
+	if stress {
+		cfg.MaxUDPSessions, cfg.UDPIdleSeconds = 1024, 8
+	}
+	if os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-both" || throughWG && throughUDP {
+		cfg.Network, cfg.MaxTCPConnections = "both", 8
+	}
+	if udp6 {
+		cfg.ListenAddress, cfg.TargetHost, cfg.SourceCIDRs = "2001:db8:1::1", "2001:db8:ffff::10", []string{"2001:db8:1::2/128"}
+	}
 	if os.Getenv("NETWORK_SYSTEMD_CASE") == "forward-dns" {
 		cfg.TargetHost = "forward-refresh.fixture"
 	}
@@ -195,7 +208,11 @@ func testForwardSystemd(ctx context.Context, st *store.Store, d *desired.Builder
 		if throughUDP {
 			network = "udp"
 		}
-		cmd := exec.CommandContext(c, "ip", "netns", "exec", "landing", "/fixtures/probe", "forward-client", network, fmt.Sprintf("192.0.2.1:%d", cfg.ListenPort), "192.0.2.2")
+		address, source := net.JoinHostPort(cfg.ListenAddress, fmt.Sprint(cfg.ListenPort)), "192.0.2.2"
+		if udp6 {
+			source = "2001:db8:1::2"
+		}
+		cmd := exec.CommandContext(c, "ip", "netns", "exec", "landing", "/fixtures/probe", "forward-client", network, address, source)
 		if throughUDP {
 			cmd.Stdin = strings.NewReader("probe\n")
 		}
@@ -209,12 +226,47 @@ func testForwardSystemd(ctx context.Context, st *store.Store, d *desired.Builder
 			b = []byte(payload)
 		}
 		want := "198.51.100.1"
+		if udp6 {
+			want = "2001:db8:2::1"
+		}
 		if throughSOCKS || throughSSH || throughWG {
 			want = "198.51.100.2"
 		}
 		return e == nil && json.Unmarshal(b, &result) == nil && result.Error == "" && result.Value == want
 	}
 	eventually("forward-only service uses selected WAN", probe)
+	if stress {
+		for i := 0; i < 7; i++ {
+			cfg.ListenPort = 25002 + i
+			submit(base, "create", fmt.Sprintf("%x", i), 0)
+		}
+		testUDPStress(ctx, st, server.ID)
+		return
+	}
+	if cfg.Network == "both" {
+		out, err := exec.CommandContext(ctx, "ip", "netns", "exec", "landing", "/fixtures/probe", "forward-client", "tcp", net.JoinHostPort(cfg.ListenAddress, fmt.Sprint(cfg.ListenPort)), "192.0.2.2").Output()
+		must(err)
+		want := "198.51.100.1"
+		if throughWG || throughSOCKS {
+			want = "198.51.100.2"
+		}
+		if !strings.Contains(string(out), fmt.Sprintf(`"value":%q`, want)) {
+			panic("TCP side of combined TCP+UDP listener failed")
+		}
+	}
+	if throughUDP {
+		source, want := "192.0.2.2", "198.51.100.1"
+		if udp6 {
+			source, want = "2001:db8:1::2", "2001:db8:2::1"
+		}
+		if throughSOCKS || throughWG {
+			want = "198.51.100.2"
+		}
+		testUDPForwardSessions(ctx, net.JoinHostPort(cfg.ListenAddress, fmt.Sprint(cfg.ListenPort)), source, want, throughWG)
+		if !udp6 && (!throughSOCKS && !throughWG || cfg.Network == "both") {
+			testUDPManagerFailure(ctx, probe, cfg.Network == "both", want)
+		}
+	}
 	eventually("independent forward usage", func() bool {
 		rx, tx, e := st.SumTraffic(ctx, store.SubjectForward, op.ResourceID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
 		return e == nil && rx > 0 && tx > 0

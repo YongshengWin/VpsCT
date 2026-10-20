@@ -36,12 +36,16 @@ export function ServerActions({ items }: { items: Action[] }) {
     buttons[next]?.focus();
   }
 
-  return <div ref={root} className="relative" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
+  return <div ref={root} className="relative" onBlur={(e) => {
+    // Safari may blur with no next focus target when tapping a menu button.
+    // Keep it mounted until click; outside pointer presses still close it.
+    if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) setOpen(false);
+  }}>
     <Button ref={trigger} size="sm" variant="outline" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined} onClick={() => setOpen(!open)} onKeyDown={(e) => { if (e.key === "ArrowDown") { e.preventDefault(); setOpen(true); } }}>
       <MoreHorizontal className="h-4 w-4" /> 更多
     </Button>
     {open && <div ref={menu} id={id} role="menu" aria-label="服务器更多操作" onKeyDown={navigate} className="absolute right-0 top-full z-30 mt-2 w-56 rounded-2xl border border-border/60 bg-card p-1.5 shadow-lift">
-      {items.map((item) => <button key={item.label} type="button" role="menuitem" disabled={item.disabled} className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:opacity-50 ${item.destructive ? "text-destructive" : "text-foreground"}`} onClick={() => { close(); item.onClick(); }}>
+      {items.map((item) => <button key={item.label} type="button" role="menuitem" disabled={item.disabled} className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent focus-visible:bg-accent focus-visible:outline-hidden disabled:opacity-50 ${item.destructive ? "text-destructive" : "text-foreground"}`} onClick={() => { close(); item.onClick(); }}>
         {item.icon}{item.label}
       </button>)}
     </div>}

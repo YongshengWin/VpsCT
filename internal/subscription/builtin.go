@@ -61,47 +61,47 @@ proxy-groups:
   - name: "🔍 Google"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Google.png"
-    proxies: ["🇯🇵 日本", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇯🇵 日本", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "▶️ YouTube"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/YouTube.png"
-    proxies: ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇯🇵 日本", "🇸🇬 新加坡", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇯🇵 日本", "🇸🇬 新加坡", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "🤖 ChatGPT"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/OpenAI.png"
-    proxies: ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
   - name: "📮 Claude"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Sereinfy/Clash@e450a2a33227ca42e56247823839230a0f2d6ab2/icons/anthropic.png"
-    proxies: ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
   - name: "✨ Gemini"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Google.png"
-    proxies: ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
   - name: "🎵 TikTok"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/TikTok.png"
-    proxies: ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", DIRECT]
   - name: "🐦 Twitter"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Twitter.png"
-    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "✈️ Telegram"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Telegram.png"
-    proxies: ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "📷 Instagram"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Instagram.png"
-    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "🐙 GitHub"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Koolson/Qure@master/IconSet/Color/GitHub.png"
-    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "🎧 Spotify"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Spotify.png"
-    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", DIRECT]
+    proxies: ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", DIRECT]
   - name: "🇭🇰 香港"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/HK.png"
@@ -126,12 +126,6 @@ proxy-groups:
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
     proxies: ["{{all|(?i)(美国|US|United ?States|🇺🇸)}}"]
-  - name: "🇦🇺 澳大利亚"
-    type: url-test
-    icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/AU.png"
-    url: "http://cp.cloudflare.com/generate_204"
-    interval: 300
-    proxies: ["{{all|(?i)(澳大利亚|澳洲|AU|Australia|🇦🇺)}}"]
   - name: "🇳🇱 荷兰"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/lipis/flag-icons@main/flags/1x1/nl.svg"
@@ -219,22 +213,21 @@ REJECT = reject
 [Proxy Group]
 ⚡️ smart = url-test,{{all}}
 ☑️ select = select,{{all}}
-🔍 Google = select,🇯🇵 日本,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-▶️ YouTube = select,🇯🇵 日本,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-🤖 ChatGPT = select,🇺🇸 美国,🇦🇺 澳大利亚,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
-📮 Claude = select,🇺🇸 美国,🇦🇺 澳大利亚,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
-✨ Gemini = select,🇺🇸 美国,🇦🇺 澳大利亚,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
-🎵 TikTok = select,🇺🇸 美国,🇦🇺 澳大利亚,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
-🐦 Twitter = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-✈️ Telegram = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-📷 Instagram = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-🐙 GitHub = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
-🎧 Spotify = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇦🇺 澳大利亚,🇳🇱 荷兰,DIRECT
+🔍 Google = select,🇯🇵 日本,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+▶️ YouTube = select,🇯🇵 日本,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+🤖 ChatGPT = select,🇺🇸 美国,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
+📮 Claude = select,🇺🇸 美国,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
+✨ Gemini = select,🇺🇸 美国,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
+🎵 TikTok = select,🇺🇸 美国,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇳🇱 荷兰,DIRECT
+🐦 Twitter = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+✈️ Telegram = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+📷 Instagram = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+🐙 GitHub = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇳🇱 荷兰,DIRECT
+🎧 Spotify = select,⚡️ smart,☑️ select,🇭🇰 香港,🇸🇬 新加坡,🇯🇵 日本,🇺🇸 美国,🇳🇱 荷兰,DIRECT
 🇭🇰 香港 = url-test,{{all|(?i)(香港|HK|Hong ?Kong|🇭🇰)}}
 🇸🇬 新加坡 = url-test,{{all|(?i)(新加坡|SG|Singapore|🇸🇬)}}
 🇯🇵 日本 = url-test,{{all|(?i)(日本|JP|Japan|🇯🇵)}}
 🇺🇸 美国 = url-test,{{all|(?i)(美国|US|United ?States|🇺🇸)}}
-🇦🇺 澳大利亚 = url-test,{{all|(?i)(澳大利亚|澳洲|AU|Australia|🇦🇺)}}
 🇳🇱 荷兰 = url-test,{{all|(?i)(荷兰|NL|Netherlands|🇳🇱)}}
 
 [Rule]
@@ -298,22 +291,21 @@ const builtinSingBoxTemplate = `{
   "outbounds": [
     { "type": "urltest", "tag": "⚡️ smart", "outbounds": ["{{all}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "selector", "tag": "☑️ select", "outbounds": ["⚡️ smart", "direct", "{{all}}"] },
-    { "type": "selector", "tag": "🔍 Google", "outbounds": ["🇯🇵 日本", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"], "default": "🇯🇵 日本" },
-    { "type": "selector", "tag": "▶️ YouTube", "outbounds": ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇯🇵 日本", "🇸🇬 新加坡", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"], "default": "🇭🇰 香港" },
-    { "type": "selector", "tag": "🤖 ChatGPT", "outbounds": ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
-    { "type": "selector", "tag": "📮 Claude", "outbounds": ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
-    { "type": "selector", "tag": "✨ Gemini", "outbounds": ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
-    { "type": "selector", "tag": "🎵 TikTok", "outbounds": ["🇺🇸 美国", "🇦🇺 澳大利亚", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
-    { "type": "selector", "tag": "🐦 Twitter", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"] },
-    { "type": "selector", "tag": "✈️ Telegram", "outbounds": ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"], "default": "🇭🇰 香港" },
-    { "type": "selector", "tag": "📷 Instagram", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"] },
-    { "type": "selector", "tag": "🐙 GitHub", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"] },
-    { "type": "selector", "tag": "🎧 Spotify", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰", "direct"] },
+    { "type": "selector", "tag": "🔍 Google", "outbounds": ["🇯🇵 日本", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇺🇸 美国", "🇳🇱 荷兰", "direct"], "default": "🇯🇵 日本" },
+    { "type": "selector", "tag": "▶️ YouTube", "outbounds": ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇯🇵 日本", "🇸🇬 新加坡", "🇺🇸 美国", "🇳🇱 荷兰", "direct"], "default": "🇭🇰 香港" },
+    { "type": "selector", "tag": "🤖 ChatGPT", "outbounds": ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
+    { "type": "selector", "tag": "📮 Claude", "outbounds": ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
+    { "type": "selector", "tag": "✨ Gemini", "outbounds": ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
+    { "type": "selector", "tag": "🎵 TikTok", "outbounds": ["🇺🇸 美国", "⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇳🇱 荷兰", "direct"], "default": "🇺🇸 美国" },
+    { "type": "selector", "tag": "🐦 Twitter", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "direct"] },
+    { "type": "selector", "tag": "✈️ Telegram", "outbounds": ["🇭🇰 香港", "⚡️ smart", "☑️ select", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "direct"], "default": "🇭🇰 香港" },
+    { "type": "selector", "tag": "📷 Instagram", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "direct"] },
+    { "type": "selector", "tag": "🐙 GitHub", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "direct"] },
+    { "type": "selector", "tag": "🎧 Spotify", "outbounds": ["⚡️ smart", "☑️ select", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "direct"] },
     { "type": "urltest", "tag": "🇭🇰 香港", "outbounds": ["{{all|(?i)(香港|HK|Hong ?Kong|🇭🇰)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "urltest", "tag": "🇸🇬 新加坡", "outbounds": ["{{all|(?i)(新加坡|SG|Singapore|🇸🇬)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "urltest", "tag": "🇯🇵 日本", "outbounds": ["{{all|(?i)(日本|JP|Japan|🇯🇵)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "urltest", "tag": "🇺🇸 美国", "outbounds": ["{{all|(?i)(美国|US|United ?States|🇺🇸)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
-    { "type": "urltest", "tag": "🇦🇺 澳大利亚", "outbounds": ["{{all|(?i)(澳大利亚|澳洲|AU|Australia|🇦🇺)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "urltest", "tag": "🇳🇱 荷兰", "outbounds": ["{{all|(?i)(荷兰|NL|Netherlands|🇳🇱)}}"], "url": "http://cp.cloudflare.com/generate_204", "interval": "300s" },
     { "type": "direct", "tag": "direct" }
   ],
@@ -388,7 +380,7 @@ func orzIcon(name string) string {
 // BuiltinPresets are ready-made proxy-group layouts for the generator.
 func BuiltinPresets() []domain.ProxyGroupPreset {
 	testURL := "http://cp.cloudflare.com/generate_204"
-	regions := []string{"🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇦🇺 澳大利亚", "🇳🇱 荷兰"}
+	regions := []string{"🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰"}
 	service := func(first ...string) []string {
 		seen := map[string]bool{}
 		var out []string
@@ -428,10 +420,10 @@ func BuiltinPresets() []domain.ProxyGroupPreset {
 				{Name: "☑️ select", Type: "select", Proxies: []string{"⚡️ smart", "DIRECT"}, IncludeAll: true, Icon: orzIcon("Global")},
 				{Name: "🔍 Google", Type: "select", Proxies: service("🇯🇵 日本"), Icon: orzIcon("Google")},
 				{Name: "▶️ YouTube", Type: "select", Proxies: service("🇯🇵 日本"), Icon: orzIcon("YouTube")},
-				{Name: "🤖 ChatGPT", Type: "select", Proxies: service("🇺🇸 美国", "🇦🇺 澳大利亚"), Icon: orzIcon("OpenAI")},
-				{Name: "📮 Claude", Type: "select", Proxies: service("🇺🇸 美国", "🇦🇺 澳大利亚"), Icon: "https://cdn.jsdelivr.net/gh/Sereinfy/Clash@e450a2a33227ca42e56247823839230a0f2d6ab2/icons/anthropic.png"},
-				{Name: "✨ Gemini", Type: "select", Proxies: service("🇺🇸 美国", "🇦🇺 澳大利亚"), Icon: orzIcon("Google")},
-				{Name: "🎵 TikTok", Type: "select", Proxies: service("🇺🇸 美国", "🇦🇺 澳大利亚"), Icon: orzIcon("TikTok")},
+				{Name: "🤖 ChatGPT", Type: "select", Proxies: service("🇺🇸 美国"), Icon: orzIcon("OpenAI")},
+				{Name: "📮 Claude", Type: "select", Proxies: service("🇺🇸 美国"), Icon: "https://cdn.jsdelivr.net/gh/Sereinfy/Clash@e450a2a33227ca42e56247823839230a0f2d6ab2/icons/anthropic.png"},
+				{Name: "✨ Gemini", Type: "select", Proxies: service("🇺🇸 美国"), Icon: orzIcon("Google")},
+				{Name: "🎵 TikTok", Type: "select", Proxies: service("🇺🇸 美国"), Icon: orzIcon("TikTok")},
 				{Name: "🐦 Twitter", Type: "select", Proxies: service(), Icon: orzIcon("Twitter")},
 				{Name: "✈️ Telegram", Type: "select", Proxies: service(), Icon: orzIcon("Telegram")},
 				{Name: "📷 Instagram", Type: "select", Proxies: service(), Icon: orzIcon("Instagram")},
@@ -441,7 +433,6 @@ func BuiltinPresets() []domain.ProxyGroupPreset {
 				{Name: "🇸🇬 新加坡", Type: "url-test", URL: testURL, Interval: 300, Filter: "(?i)新加坡|SG|Singapore|🇸🇬", Icon: orzIcon("SG")},
 				{Name: "🇯🇵 日本", Type: "url-test", URL: testURL, Interval: 300, Filter: "(?i)日本|JP|Japan|🇯🇵", Icon: orzIcon("JP")},
 				{Name: "🇺🇸 美国", Type: "url-test", URL: testURL, Interval: 300, Filter: "(?i)美国|US|United ?States|🇺🇸", Icon: orzIcon("US")},
-				{Name: "🇦🇺 澳大利亚", Type: "url-test", URL: testURL, Interval: 300, Filter: "(?i)澳大利亚|澳洲|AU|Australia|🇦🇺", Icon: orzIcon("AU")},
 				{Name: "🇳🇱 荷兰", Type: "url-test", URL: testURL, Interval: 300, Filter: "(?i)荷兰|NL|Netherlands|🇳🇱", Icon: "https://cdn.jsdelivr.net/gh/lipis/flag-icons@main/flags/1x1/nl.svg"},
 			},
 			Rules: []string{

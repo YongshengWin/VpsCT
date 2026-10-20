@@ -22,11 +22,21 @@ import (
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/openrc"
 	"ctlvps/internal/share"
 	"ctlvps/internal/store"
 )
 
 func startFixtureAgent() {
+	if openrc.Enabled() {
+		script, e := openrc.Script("ctlvps-agent.service")
+		must(e)
+		must(os.WriteFile("/etc/init.d/ctlvps-agent", []byte(script), 0755))
+		run("/usr/local/bin/ctlvps-agent", "openrc-sync")
+		run("rc-update", "add", "ctlvps-agent", "default")
+		run("rc-service", "ctlvps-agent", "start")
+		return
+	}
 	_, unit, ok := strings.Cut(string(assets.InstallAgent), "cat > /etc/systemd/system/ctlvps-agent.service <<EOF\n")
 	if !ok {
 		panic("installer unit missing")
@@ -43,6 +53,14 @@ func startFixtureAgent() {
 	must(os.WriteFile("/etc/systemd/system/ctlvps-agent.service", []byte(unit+"\n"), 0644))
 	run("systemctl", "daemon-reload")
 	run("systemctl", "start", "ctlvps-agent.service")
+}
+
+func stopFixtureAgent() {
+	if openrc.Enabled() {
+		run("rc-service", "ctlvps-agent", "stop")
+	} else {
+		run("systemctl", "stop", "ctlvps-agent.service")
+	}
 }
 
 type transitEnrollment struct{ URL, Token string }

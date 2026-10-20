@@ -54,7 +54,7 @@ func (a *API) interfaceHistory(w http.ResponseWriter, r *http.Request) error {
 	if _, err = a.Store.GetServer(r.Context(), id); err != nil {
 		return err
 	}
-	p, err := a.Store.InterfaceHistory(r.Context(), id, int64(httpx.QueryInt(r, "before", 0)), r.URL.Query().Get("archived") == "true", httpx.QueryInt(r, "limit", 20))
+	p, err := a.Store.InterfaceHistory(r.Context(), id, httpx.QueryInt64(r, "before", 0), r.URL.Query().Get("archived") == "true", httpx.QueryInt(r, "limit", 20))
 	if err != nil {
 		return err
 	}

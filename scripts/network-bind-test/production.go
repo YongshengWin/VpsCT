@@ -37,7 +37,10 @@ func clientProbe() {
 		return
 	}
 	if os.Args[3] == "udp" {
-		got, err := udpAt(port, os.Args[4])
+		// Native CI may schedule the client, proxy and IPv6 neighbor discovery
+		// beyond the raw fixture's 700ms budget. Keep the response deadline
+		// bounded below the caller's 4s process timeout.
+		got, err := udpAtWithin(port, os.Args[4], 2*time.Second)
 		must(err)
 		fmt.Print(got)
 		return
@@ -57,6 +60,8 @@ func clientProbe() {
 	fmt.Print(strings.TrimSpace(got))
 }
 
+var productionPID int
+
 func launchProduction(ctx context.Context, exe, name, namespace string, cfg map[string]any) func() {
 	data, err := json.Marshal(cfg)
 	must(err)
@@ -70,6 +75,7 @@ func launchProduction(ctx context.Context, exe, name, namespace string, cfg map[
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	must(cmd.Start())
+	productionPID = cmd.Process.Pid
 	return func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
 }
 

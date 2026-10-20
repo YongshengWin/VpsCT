@@ -249,7 +249,7 @@ export function ConnlogPage() {
               ))}
           </Select>
           <form
-            className="relative col-span-2 min-w-[11rem] sm:flex-1"
+            className="relative col-span-2 min-w-44 sm:flex-1"
             onSubmit={(e) => {
               e.preventDefault();
               filterHost(hostInput.trim());
@@ -409,7 +409,7 @@ export function ConnlogPage() {
                             {p.label}
                           </span>
                         </td>
-                        <td className="mono min-w-[14rem] break-all px-2 py-1.5 pr-4">
+                        <td className="mono min-w-56 break-all px-2 py-1.5 pr-4">
                           <button className="hover:underline" onClick={() => filterHost(e.dest_host)} title={host === e.dest_host ? "取消目标过滤" : "按此目标过滤"}>
                             {e.dest_host}
                           </button>
@@ -458,7 +458,7 @@ function SourceChip({
         type="button"
         onClick={onFilter}
         title={title ? `${title} · 点名称筛选` : "点名称筛选"}
-        className="max-w-[9rem] truncate text-xs font-medium"
+        className="max-w-36 truncate text-xs font-medium"
       >
         {label}
       </button>
@@ -469,7 +469,7 @@ function SourceChip({
 
 function FilterChip({ label, onClear }: { label: string; onClear: () => void }) {
   return (
-    <button type="button" onClick={onClear} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/30 bg-card px-2.5 py-1 text-xs font-medium text-foreground shadow-sm hover:border-primary hover:bg-primary/10" title="取消这项筛选">
+    <button type="button" onClick={onClear} className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-primary/30 bg-card px-2.5 py-1 text-xs font-medium text-foreground shadow-xs hover:border-primary hover:bg-primary/10" title="取消这项筛选">
       <span className="truncate">{label}</span>
       <X className="h-3.5 w-3.5 shrink-0 text-primary" />
     </button>

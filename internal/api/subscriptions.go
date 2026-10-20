@@ -10,6 +10,7 @@ import (
 	"ctlvps/internal/auth"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/subscription"
 	"ctlvps/internal/traffic"
 )
@@ -181,6 +182,14 @@ func (a *API) applySubInput(in subscriptionInput, s *domain.Subscription, creati
 		s.RuleProviders = in.RuleProviders
 	}
 	if in.NodeSelection != nil {
+		if len(in.NodeSelection.RouteIDs) > 256 {
+			return httpx.BadRequest("每个订阅最多选择 256 条专线")
+		}
+		for _, id := range in.NodeSelection.RouteIDs {
+			if !networkconfig.ValidIdentity(id) {
+				return httpx.BadRequest("专线编号无效")
+			}
+		}
 		s.NodeSelection = *in.NodeSelection
 	}
 	if s.Kind == domain.SubImported {
@@ -418,7 +427,7 @@ func (a *API) subscriptionAccessLog(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	list, err := a.Store.ListAccessLog(r.Context(), &id, httpx.QueryInt(r, "limit", 100), httpx.QueryInt(r, "offset", 0))
+	list, err := a.Store.ListAccessLog(r.Context(), &id, httpx.QueryInt(r, "limit", 100), httpx.QueryOffset(r, "offset", 0))
 	if err != nil {
 		return err
 	}

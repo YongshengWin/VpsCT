@@ -1,81 +1,206 @@
 name: CI
 on:
-  push:
-    branches: [main]
   pull_request:
-  workflow_call:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'UDP soak: 60s daily regression; 600s release acceptance'
+        type: choice
+        options: ['60', '600']
+        default: '600'
+      soak_sessions:
+        description: '1024 release baseline; 8192 experimental capacity diagnostic'
+        type: choice
+        options: ['1024', '8192']
+        default: '1024'
+env:
+  UDP_STRESS_SESSIONS: ${{ inputs.soak_sessions || '1024' }}
+  UDP_STRESS_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_seconds || contains(github.event.pull_request.labels.*.name, 'release-candidate') && '600' || '60' }}
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  checks:
+  lint:
     runs-on: ubuntu-24.04
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: ./.github/actions/ci-env
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Clean build and tests
-        run: bash scripts/check.sh
-      - name: Concurrent initialization and authentication
-        run: go test -race ./internal/auth ./internal/store ./internal/api ./internal/geoip ./internal/maintenance ./internal/agent ./internal/secureupdate ./internal/safehttp ./internal/backup ./internal/connlog
-      - name: Shell and workflow checks
+          bundle: 'false'
+      - name: Fast static and CI tool checks
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          if ! command -v shellcheck >/dev/null; then sudo apt-get update && sudo apt-get install -y shellcheck; fi
           shellcheck install.sh uninstall.sh scripts/*.sh scripts/installer-test/*.sh scripts/uninstaller-test/*.sh internal/assets/install-agent.sh
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - name: Check dependency notices
+          python3 scripts/test-ci-tools.py
+          bash scripts/test-installer.sh
+          bash scripts/test-uninstaller.sh
+  source:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    outputs:
+      tree: ${{ steps.bundle.outputs.tree }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+        with:
+          bundle: 'false'
+          node: 'true'
+      - name: Download locked module graph before expensive tests
+        run: bash scripts/ci-fetch-modules.sh
+      - name: Frontend, contracts, Go source and client tests
+        env:
+          CTLVPS_TEST_PROGRESS: '1'
+        run: bash scripts/check.sh
+      - name: Dependency notices
         run: |
-          go mod download all
           python3 scripts/third-party.py
           git diff --exit-code -- THIRD_PARTY_NOTICES.md third_party
           test -z "$(git ls-files --others --exclude-standard third_party)"
-      - name: Build release fixture
+      - name: Build shared AMD64 candidate without rebuilding frontend
         env:
           RELEASE_REPOSITORY: ${{ github.repository }}
-        run: make release VERSION=v0.0.0-ci REPOSITORY="$RELEASE_REPOSITORY"
-      - name: Installer integration (isolated container)
-        run: bash scripts/test-install-container.sh release/v0.0.0-ci
-      - name: Uninstaller integration (isolated systemd container)
-        run: bash scripts/test-uninstall-container.sh
-      - name: Web maintenance integration (isolated systemd container)
-        run: bash scripts/test-maintenance-container.sh release/v0.0.0-ci
-      - name: Proxy kernel isolation (disposable containers)
-        run: bash scripts/test-meter-container.sh
-      - name: Parser fuzz budget
-        run: go test ./internal/proxynode -run '^$' -fuzz FuzzParseAny -fuzztime 20s -parallel 2
-      - name: Real browser origin and CSP checks
+        run: make release-binaries VERSION=v0.1.999-ci REPOSITORY="$RELEASE_REPOSITORY"
+      - name: Verify official shared test fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          npm install --prefix "$RUNNER_TEMP/browser" --no-save playwright@1.62.1
-          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
-          go build -o "$RUNNER_TEMP/browser-controller" ./cmd/ctlvpsd
-          PLAYWRIGHT_MODULE_DIR="$RUNNER_TEMP/browser/node_modules" CTLVPS_TEST_BINARY="$RUNNER_TEMP/browser-controller" node scripts/security-browser.mjs
-      - name: Docker build and first-run smoke test
-        run: bash scripts/test-docker.sh
+          python3 scripts/fetch-network-test-fixtures.py .ci/fixtures --arch amd64 --manifest-only
+      - name: Bind shared build to this run and source tree
+        id: bundle
+        run: |
+          python3 scripts/ci-proof.py build "$RUNNER_TEMP/ci-output"
+          printf 'tree=%s\n' "$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-build
+          path: ${{ runner.temp }}/ci-output/
+          retention-days: 7
+          compression-level: 0
+          overwrite: true
+  race:
+    name: Race (${{ matrix.group }})
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [store, api, support]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+      - name: Race tests with live progress and bounded test timeout
+        env:
+          CI_CASE: ${{ matrix.group }}
+        run: bash scripts/ci-scenarios.sh race "$CI_CASE"
+  integration:
+    name: Integration (${{ matrix.kind }})
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [install, maintenance, meter, browser, docker, regressions]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+        with:
+          node: ${{ matrix.kind == 'browser' }}
+      - name: Isolated integration
+        env:
+          CI_CASE: ${{ matrix.kind }}
+        run: bash scripts/ci-scenarios.sh integration "$CI_CASE"
+  network:
+    name: Network (${{ matrix.kind }})
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [managed, direct, ssh, wireguard, udp]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+      - name: Native AMD64 network lifecycle
+        env:
+          CI_CASE: ${{ matrix.kind }}
+        run: bash scripts/ci-scenarios.sh network "$CI_CASE"
+  alpine:
+    name: Alpine (${{ matrix.kind }})
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [install, memory, protocols, maintenance]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+      - name: Native AMD64 Alpine lifecycle
+        env:
+          CI_CASE: ${{ matrix.kind }}
+        run: bash scripts/ci-scenarios.sh alpine "$CI_CASE"
+  soak:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+      - name: UDP baseline 1024 sessions (60s daily; 600s release)
+        run: bash scripts/ci-scenarios.sh soak udp
+  upgrade:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+      - name: Real historical web upgrade and unchanged subscription traffic
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/fetch-network-test-fixtures.py .ci/fixtures --arch amd64 --catalog .ci/fixtures/catalog.json --only sing-box
+          bash scripts/fetch-upgrade-fixture.sh v0.1.5 "$RUNNER_TEMP/web-upgrade-legacy"
+          SINGBOX_BIN="$PWD/.ci/fixtures/sing-box" bash scripts/test-web-upgrade-container.sh release/v0.1.999-ci "$RUNNER_TEMP/web-upgrade-legacy"
   security:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      - uses: ./.github/actions/ci-env
         with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: '24'
-          package-manager-cache: false
+          bundle: 'false'
+          node: 'true'
       - name: Secret scan (redacted)
         run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
       - name: Go vulnerability scan
@@ -83,38 +208,22 @@ jobs:
       - name: Frontend dependency audit
         working-directory: web
         run: npm audit --audit-level=high
-  network:
+  checks:
+    if: always()
+    needs: [lint, source, race, integration, network, alpine, soak, upgrade, security]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        with:
-          go-version-file: go.mod
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
-        with:
-          node-version: '24'
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Build embedded frontend
-        run: cd web && npm ci --no-audit --no-fund && npm run build
-      - name: Verify official AMD64 network test kernel
+      - name: Require every gate and record exact-source evidence
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          asset=sing-box-1.14.1-linux-amd64.tar.gz
-          digest=$(gh api repos/SagerNet/sing-box/releases/tags/v1.14.1 --jq ".assets[] | select(.name == \"$asset\") | .digest")
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/SagerNet/sing-box/releases/download/v1.14.1/$asset" -o "$RUNNER_TEMP/$asset"
-          printf '%s  %s\n' "${digest#sha256:}" "$RUNNER_TEMP/$asset" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
-          echo "SINGBOX_BIN=$RUNNER_TEMP/sing-box-1.14.1-linux-amd64/sing-box" >> "$GITHUB_ENV"
-      - name: AMD64 real agent and systemd network verification
-        env:
-          NETWORK_TEST_ARCH: amd64
-        run: |
-          for scenario in transit-ss2022 forward subscriptions; do
-            NETWORK_SYSTEMD_CASE="$scenario" bash scripts/test-network-systemd-container.sh
-          done
+          CI_RESULTS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-proof.py evidence "$RUNNER_TEMP/ci-evidence"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-evidence
+          path: ${{ runner.temp }}/ci-evidence/ci-evidence.json
+          retention-days: 7
+          overwrite: true

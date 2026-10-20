@@ -10,7 +10,40 @@ import (
 	"ctlvps/internal/netinventory"
 	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/networkguard"
+	"ctlvps/internal/udpsession"
 )
+
+func TestUDPForwardNeedsLocalManagerAndExplicitProtocol(t *testing.T) {
+	f := agentproto.ForwardSpec{ForwardID: 1, Revision: 1, Config: networkconfig.Forward{ListenMode: "all", ListenPort: 25001, Network: "both", TargetHost: "203.0.113.10", TargetPort: 443, SourceMode: "all", MaxTCPConnections: 2, MaxUDPSessions: 2, UDPIdleSeconds: 2}, RuntimeNetwork: &networkconfig.Resolved{CollectorID: strings.Repeat("a", 32), BootID: "fixture", Sequence: 1, ListenAddress: "::"}}
+	ds := &agentproto.DesiredState{Versions: map[string]agentproto.CoreVersion{"sing-box": {Version: "1.14.1"}}}
+	d := &SingBox{UDPAPISecret: strings.Repeat("a", 64)}
+	if _, err := d.BuildResourceConfig(ds, nil, []agentproto.ForwardSpec{f}); err == nil {
+		t.Fatal("missing UDP protocol accepted")
+	}
+	ds.ForwardUDPVersion = networkconfig.ForwardUDPVersion
+	d.UDPAPISecret = ""
+	if _, err := d.BuildResourceConfig(ds, nil, []agentproto.ForwardSpec{f}); err == nil {
+		t.Fatal("missing local manager accepted")
+	}
+	d.UDPAPISecret = strings.Repeat("a", 64)
+	cfg, err := d.BuildResourceConfig(ds, nil, []agentproto.ForwardSpec{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(cfg)
+	local, err := udpsession.ParseConfig(body)
+	if err != nil || len(local.Policies) != 1 || local.Policies[1].ListenPort != 25001 {
+		t.Fatal(local, err)
+	}
+	f.Blocked = true
+	cfg, err = d.BuildResourceConfig(ds, nil, []agentproto.ForwardSpec{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg["experimental"]; ok {
+		t.Fatal("unused local manager enabled")
+	}
+}
 
 func TestForwardCompilerSharesProcessWithoutNodeIdentityOrDNSFallback(t *testing.T) {
 	f := agentproto.ForwardSpec{ForwardID: 1, Revision: 1, Config: networkconfig.Forward{

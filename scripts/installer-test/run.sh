@@ -27,10 +27,14 @@ assert path.stat().st_mode & 0o777 == 0o600
 assert setup(path.read_text().strip()) == 200
 assert not path.exists()
 PY
-for arch in amd64 arm64; do
-  curl -fsS -H "Host: panel.example.test" "http://127.0.0.1:8080/dl/agent/linux-$arch" -o "/tmp/download-$arch"
-  cmp "/tmp/download-$arch" "/opt/ctlvps/agents/ctlvps-agent-linux-$arch"
-done
+curl -fsS -H "Host: panel.example.test" http://127.0.0.1:8080/dl/agent/linux-amd64 -o /tmp/download-amd64
+cmp /tmp/download-amd64 /opt/ctlvps/agents/ctlvps-agent-linux-amd64
+# The old AMD64 archive-layout requirement must never restore ARM execution.
+if /opt/ctlvps/agents/ctlvps-agent-linux-arm64 >/tmp/retired-arm.log 2>&1; then
+  echo 'Retired ARM marker unexpectedly succeeded' >&2; exit 1
+fi
+grep -q 'ARM support is suspended' /tmp/retired-arm.log
+[[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: panel.example.test" http://127.0.0.1:8080/dl/agent/linux-arm64)" == 404 ]]
 # A repeated fresh install must never overwrite data or config.
 if bash install.sh "${args[@]}" --site-url https://other.example.test --no-proxy >/dev/null 2>&1; then
   echo 'Existing installation was overwritten' >&2; exit 1
@@ -40,7 +44,7 @@ fi
 mkdir /bad-assets
 cp /assets/* /bad-assets/
 printf 'corruption' >> "/bad-assets/$(basename "$asset")"
-# Corrupt both architectures so this works on either host architecture.
+# Corrupt every candidate archive.
 for other in /bad-assets/*-linux-*.tar.gz; do printf 'corruption' >> "$other"; done
 if bash install.sh --repo "$repo" --version "$version" --assets-dir /bad-assets --update >/dev/null 2>&1; then
   echo 'Corrupt package was accepted' >&2; exit 1
@@ -51,7 +55,7 @@ curl -fsS -H "Host: panel.example.test" http://127.0.0.1:8080/healthz >/dev/null
 bash install.sh "${args[@]}" --update
 [[ "$(sha256sum /etc/ctlvps/ctlvpsd.env)" == "$old_config" ]]
 [[ "$(readlink -f /opt/ctlvps/current)" != "$old_release" ]]
-[[ -f /opt/ctlvps/agents/ctlvps-agent-linux-amd64 && -f /opt/ctlvps/agents/ctlvps-agent-linux-arm64 ]]
+[[ -f /opt/ctlvps/agents/ctlvps-agent-linux-amd64 ]]
 python3 - <<'PY'
 import json, pathlib, tarfile, urllib.request
 with urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8080/api/v1/auth/setup',headers={'Host':'panel.example.test'})) as r:
@@ -87,7 +91,7 @@ with tempfile.TemporaryDirectory() as directory:
     (out/'VERSION').write_text(broken_version+'\n')
     (directory/'ctlvpsd').write_text('#!/bin/sh\nif [ "${1:-}" = version ]; then echo "ctlvpsd test failure fixture"; exit 0; fi\nexit 1\n')
     (directory/'ctlvpsd').chmod(0o755)
-    for arch in ('amd64','arm64'):
+    for arch in ('amd64',):
         target=out/f'ctlvps-{broken_version}-linux-{arch}.tar.gz'
         with tarfile.open(target,'w:gz') as t:
             for path in sorted(directory.iterdir()): t.add(path,arcname=path.name)

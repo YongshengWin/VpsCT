@@ -32,11 +32,17 @@ func CompileForward(f agentproto.ForwardSpec, ds *agentproto.DesiredState) (Forw
 	if f.Blocked || f.Retired {
 		return result, errors.New("停用或退役转发不能生成监听")
 	}
+	if f.Config.MaxUDPSessions > agentbudget.ForwardUDPPerListener {
+		return result, errors.New("UDP 转发会话上限超过官方内核容量 1024")
+	}
 	if ds == nil || !agentproto.NetworkBindingSupported("singbox", ds.Versions["sing-box"].Version) {
 		return result, errors.New("所选内核版本尚未通过网络绑定验证")
 	}
 	if f.Config.Network != "tcp" && !corecompat.UDPForward(ds.Versions["sing-box"].Version) {
 		return result, errors.New(corecompat.UDPForwardUnavailable)
+	}
+	if f.Config.Network != "tcp" && ds.ForwardUDPVersion != networkconfig.ForwardUDPVersion {
+		return result, errors.New("UDP 固定转发缺少会话管理版本")
 	}
 	if f.RuntimeNetwork == nil {
 		return result, errors.New("固定转发网络尚未由本机解析")
@@ -167,6 +173,7 @@ func (d *SingBox) BuildResourceConfig(ds *agentproto.DesiredState, nodes []agent
 	ordered := append([]agentproto.ForwardSpec(nil), forwards...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ForwardID < ordered[j].ForwardID })
 	var compiled []ForwardCompilation
+	udpSessions := 0
 	for _, f := range ordered {
 		if err := f.Validate(); err != nil {
 			return nil, err
@@ -177,6 +184,10 @@ func (d *SingBox) BuildResourceConfig(ds *agentproto.DesiredState, nodes []agent
 		ids[f.ForwardID] = true
 		if f.Blocked || f.Retired {
 			continue
+		}
+		udpSessions += f.Config.MaxUDPSessions
+		if udpSessions > agentbudget.ForwardUDPSessions {
+			return nil, errors.New("UDP 转发总会话预算超过本机上限")
 		}
 		if ports[f.Config.ListenPort] {
 			return nil, errors.New("节点与固定转发监听端口冲突")
@@ -209,6 +220,16 @@ func (d *SingBox) BuildResourceConfig(ds *agentproto.DesiredState, nodes []agent
 		}
 		route["rules"] = append(route["rules"].([]any), c.Rules...)
 		route["rules"] = append(route["rules"].([]any), c.Route)
+	}
+	for _, f := range ordered {
+		if f.Blocked || f.Retired || f.Config.Network == "tcp" {
+			continue
+		}
+		if len(d.UDPAPISecret) != 64 {
+			return nil, errors.New("UDP 转发缺少本机会话管理认证")
+		}
+		cfg["experimental"] = map[string]any{"clash_api": map[string]any{"external_controller": "127.0.0.1:0", "secret": d.UDPAPISecret, "access_control_allow_origin": []string{"https://invalid.invalid"}}}
+		break
 	}
 	return cfg, nil
 }

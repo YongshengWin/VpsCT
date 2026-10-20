@@ -29,8 +29,8 @@ func TestOfficialCompatibilityFamilies(t *testing.T) {
 		if NetworkBinding(tc.version) != tc.binding || SS2022Outbound(tc.version) != tc.ss {
 			t.Errorf("wrong compatibility for %q", tc.version)
 		}
-		if UDPForward(tc.version) {
-			t.Fatalf("UDP qualification failure bypassed by %q", tc.version)
+		if UDPForward(tc.version) != tc.ss {
+			t.Fatalf("wrong UDP manager compatibility for %q", tc.version)
 		}
 	}
 }

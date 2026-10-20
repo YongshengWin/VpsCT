@@ -39,7 +39,7 @@ func (m *Manager) event(ctx context.Context, sh domain.Share, kind, detail strin
 }
 
 // Create persists a share, provisions its nodes and subscription.
-func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) {
+func (m *Manager) Create(ctx context.Context, sh *domain.Share) (tokenOut string, resultErr error) {
 	if err := m.Store.ValidateShareNetwork(ctx, sh.Targets); err != nil {
 		return "", err
 	}
@@ -50,6 +50,11 @@ func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) 
 		return "", errors.New("重置日必须在 1-28 之间（0 表示不重置，29–31 表示每月最后一天）")
 	}
 	sh.ResetDay = domain.NormalizeResetDay(sh.ResetDay)
+	mode, ok := domain.NormalizeQuotaBilling(sh.BillingMode)
+	if !ok {
+		return "", errors.New("计费模式必须为 dual、up、down 或 max")
+	}
+	sh.BillingMode = mode
 	now := m.Now()
 	sh.Status = domain.ShareActive
 	if sh.ResetDay > 0 {
@@ -60,6 +65,19 @@ func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) 
 	if err := m.Store.CreateShare(ctx, sh); err != nil {
 		return "", err
 	}
+	// No desired state has been published yet. Roll back a failed full allocation,
+	// including its subscription, rather than leaving a half-created share.
+	provisioned := false
+	defer func() {
+		if resultErr != nil && !provisioned {
+			cleanupErr := m.Store.DiscardUnpublishedShare(context.WithoutCancel(ctx), sh.ID)
+			resultErr = errors.Join(resultErr, cleanupErr)
+			if cleanupErr == nil {
+				sh.ID = 0
+				sh.SubscriptionID = nil
+			}
+		}
+	}()
 	token := auth.NewSubscriptionToken()
 	sub := &domain.Subscription{
 		Name:           sh.Name,
@@ -88,7 +106,11 @@ func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) 
 	if err := m.Store.UpdateShare(ctx, sh); err != nil {
 		return "", err
 	}
-	if err := m.EnsureNodes(ctx, sh); err != nil {
+	if err := m.ensureNodes(ctx, sh, false, false); err != nil {
+		return "", err
+	}
+	provisioned = true
+	if err := m.republishShareServers(ctx, sh.ID); err != nil {
 		return token, err
 	}
 	m.event(ctx, *sh, "created", fmt.Sprintf("quota=%d reset_day=%d", sh.QuotaBytes, sh.ResetDay))
@@ -97,6 +119,11 @@ func (m *Manager) Create(ctx context.Context, sh *domain.Share) (string, error) 
 
 // Update saves edits and reconciles nodes.
 func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
+	mode, ok := domain.NormalizeQuotaBilling(sh.BillingMode)
+	if !ok {
+		return errors.New("计费模式必须为 dual、up、down 或 max")
+	}
+	sh.BillingMode = mode
 	if err := m.Store.ValidateShareNetwork(ctx, sh.Targets); err != nil {
 		return err
 	}
@@ -104,15 +131,15 @@ func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
 	if err != nil {
 		return err
 	}
-	// keep runtime fields
-	sh.UsedUpload, sh.UsedDownload, sh.PeriodStart = prev.UsedUpload, prev.UsedDownload, prev.PeriodStart
 	sh.SubscriptionID = prev.SubscriptionID
-	if sh.Status == "" {
-		sh.Status = prev.Status
-	}
-	if err := m.Store.UpdateShare(ctx, sh); err != nil {
+	if err := m.ensureNodes(ctx, sh, false, true); err != nil {
 		return err
 	}
+	current, err := m.Store.GetShare(ctx, sh.ID)
+	if err != nil {
+		return err
+	}
+	*sh = current
 	if sub, err := m.Store.GetSubscriptionByShare(ctx, sh.ID); err == nil {
 		sub.Name = sh.Name
 		sub.TemplateID = sh.TemplateID
@@ -128,17 +155,28 @@ func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
 		}
 		_ = m.Store.UpdateSubscription(ctx, &sub)
 	}
-	if err := m.EnsureNodes(ctx, sh); err != nil {
+	if err := m.republishShareServers(ctx, sh.ID); err != nil {
 		return err
 	}
-	// quota may have been raised: re-evaluate
-	return m.evaluate(ctx, sh.ID)
+	// Changes to quota or mode are evaluated against the latest committed totals.
+	if err := m.evaluate(ctx, sh.ID); err != nil {
+		return err
+	}
+	current, err = m.Store.GetShare(ctx, sh.ID)
+	if err == nil {
+		*sh = current
+	}
+	return err
 }
 
 // EnsureNodes creates missing dedicated nodes for every (server, protocol)
 // target and revokes nodes whose target was removed, then republishes the
 // affected servers.
 func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
+	return m.ensureNodes(ctx, sh, true, false)
+}
+
+func (m *Manager) ensureNodes(ctx context.Context, sh *domain.Share, publish, saveSettings bool) error {
 	existing, err := m.Store.ListNodes(ctx, store.NodeFilter{ShareID: &sh.ID, IncludeRevoked: true})
 	if err != nil {
 		return err
@@ -155,6 +193,8 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 	}
 	want := map[key]bool{}
 	affected := map[int64]bool{}
+	creates, updates := []domain.Node{}, []domain.Node{}
+	reserved := map[int64]map[int]bool{}
 	for _, t := range sh.Targets {
 		server, err := m.Store.GetServer(ctx, t.ServerID)
 		if err != nil {
@@ -168,18 +208,24 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 					n.Revoked = false
 					n.Enabled = true
 					_ = provision.RegenerateCredentials(&n, server)
-					if err := m.Store.UpdateNode(ctx, &n); err != nil {
-						return err
-					}
+					updates = append(updates, n)
 					affected[t.ServerID] = true
 				}
 				continue
 			}
-			used, err := m.Store.UsedListenPorts(ctx, t.ServerID)
+			used := reserved[t.ServerID]
+			if used == nil {
+				used, err = m.Store.UsedListenPorts(ctx, t.ServerID)
+				if err != nil {
+					return err
+				}
+				reserved[t.ServerID] = used
+			}
+			nat, err := m.Store.NATPortConfig(ctx, t.ServerID)
 			if err != nil {
 				return err
 			}
-			port, err := provision.AllocatePort(used)
+			port, err := provision.AllocateNodePort(used, nat, proto, map[string]any{"transport": "TCP"})
 			if err != nil {
 				return err
 			}
@@ -193,9 +239,8 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 				node.OwnerUserID = *sh.UserID
 			}
 			node.Network = t.Network
-			if err := m.Store.CreateShareNode(ctx, &node); err != nil {
-				return err
-			}
+			creates = append(creates, node)
+			used[port] = true
 			affected[t.ServerID] = true
 		}
 	}
@@ -203,11 +248,19 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 		if !want[k] && !n.Revoked {
 			n.Revoked = true
 			n.Enabled = false
-			if err := m.Store.UpdateNode(ctx, &n); err != nil {
-				return err
-			}
+			updates = append(updates, n)
 			affected[k.server] = true
 		}
+	}
+	var settings *domain.Share
+	if saveSettings {
+		settings = sh
+	}
+	if err := m.Store.ApplyShareSettingsAndNodes(ctx, settings, creates, updates); err != nil {
+		return err
+	}
+	if !publish {
+		return nil
 	}
 	for sid := range affected {
 		if _, _, err := m.Desired.Publish(ctx, sid); err != nil {
@@ -265,12 +318,15 @@ func (m *Manager) ApplyDeltas(ctx context.Context, deltas []traffic.ShareDelta) 
 
 // evaluate applies the state machine to one share.
 func (m *Manager) evaluate(ctx context.Context, id int64) error {
+	return m.evaluateAttempt(ctx, id, 0)
+}
+
+func (m *Manager) evaluateAttempt(ctx context.Context, id int64, attempt int) error {
 	sh, err := m.Store.GetShare(ctx, id)
 	if err != nil {
 		return err
 	}
 	now := m.Now()
-	next := sh.Status
 	switch sh.Status {
 	case domain.ShareRevoked, domain.SharePaused:
 		return nil // manual states are sticky
@@ -279,35 +335,58 @@ func (m *Manager) evaluate(ctx context.Context, id int64) error {
 	if sh.ResetDay > 0 {
 		ps := traffic.PeriodStart(now, sh.ResetDay)
 		if ps.After(sh.PeriodStart) {
-			if err := m.Store.ResetShareUsage(ctx, sh.ID, ps); err != nil {
+			changed, err := m.Store.ResetShareUsageIfBefore(ctx, sh.ID, sh.ResetDay, ps)
+			if err != nil {
 				return err
 			}
-			sh.UsedUpload, sh.UsedDownload, sh.PeriodStart = 0, 0, ps
-			m.event(ctx, sh, "period_reset", ps.Format("2006-01-02"))
-			if sh.Status == domain.ShareExhausted {
-				next = domain.ShareActive
+			if changed {
+				m.event(ctx, sh, "period_reset", ps.Format("2006-01-02"))
+				if err := m.republishShareServers(ctx, sh.ID); err != nil {
+					return err
+				}
 			}
+			// Re-read both successful resets and resets already done by ingestion.
+			// Never evaluate a synthetic zero-count snapshot over committed usage.
+			if attempt < 2 {
+				return m.evaluateAttempt(ctx, id, attempt+1)
+			}
+			return nil
 		}
 	}
-	if sh.ExpiresAt != nil && now.After(*sh.ExpiresAt) {
+	next := sh.Status
+	if sh.ExpiresAt != nil && !now.Before(*sh.ExpiresAt) {
 		next = domain.ShareExpired
 	} else if sh.Status == domain.ShareExpired {
 		next = domain.ShareActive
 	}
-	if next != domain.ShareExpired && sh.QuotaBytes > 0 {
-		if domain.Total(sh.UsedUpload, sh.UsedDownload) >= sh.QuotaBytes {
+	if next != domain.ShareExpired {
+		if sh.QuotaBytes > 0 && domain.QuotaBilled(sh.BillingMode, sh.UsedUpload, sh.UsedDownload) >= sh.QuotaBytes {
 			next = domain.ShareExhausted
 		} else if next == domain.ShareExhausted {
 			next = domain.ShareActive
 		}
 	}
 	if next != sh.Status {
-		if err := m.Store.SetShareStatus(ctx, sh.ID, next); err != nil {
+		changed, err := m.Store.SetShareEvaluatedStatus(ctx, sh, next)
+		if err != nil {
 			return err
+		}
+		if !changed {
+			if attempt < 2 {
+				return m.evaluateAttempt(ctx, id, attempt+1)
+			}
+			return nil
 		}
 		sh.Status = next
 		m.event(ctx, sh, "status", string(next))
 		return m.republishShareServers(ctx, sh.ID)
+	}
+	for _, t := range sh.Targets {
+		for _, quota := range t.QuotaBytes {
+			if quota > 0 {
+				return m.republishShareServers(ctx, sh.ID)
+			}
+		}
 	}
 	return nil
 }
@@ -373,6 +452,9 @@ func (m *Manager) ResetUsage(ctx context.Context, id int64) error {
 		return err
 	}
 	m.event(ctx, sh, "manual_reset", "")
+	if err := m.republishShareServers(ctx, id); err != nil {
+		return err
+	}
 	return m.evaluate(ctx, id)
 }
 
@@ -488,31 +570,40 @@ func (m *Manager) Delete(ctx context.Context, id int64) error {
 
 // Usage summarises the current period for the API.
 type Usage struct {
-	Used      int64      `json:"used"`
-	Inbound   int64      `json:"inbound"`
-	Outbound  int64      `json:"outbound"`
-	Total     int64      `json:"total"`
-	OneWay    int64      `json:"one_way"`
-	TwoWay    int64      `json:"two_way"`
-	Quota     int64      `json:"quota"`
-	Percent   float64    `json:"percent"`
-	NextReset *time.Time `json:"next_reset,omitempty"`
-	Remaining int64      `json:"remaining"`
+	Used        int64      `json:"used"`
+	Billed      int64      `json:"billed"`
+	BillingMode string     `json:"billing_mode"`
+	Inbound     int64      `json:"inbound"`
+	Outbound    int64      `json:"outbound"`
+	Total       int64      `json:"total"`
+	OneWay      int64      `json:"one_way"`
+	TwoWay      int64      `json:"two_way"`
+	Quota       int64      `json:"quota"`
+	Percent     float64    `json:"percent"`
+	NextReset   *time.Time `json:"next_reset,omitempty"`
+	Remaining   int64      `json:"remaining"`
 }
 
 // UsageOf computes display figures for a share.
 func (m *Manager) UsageOf(sh domain.Share) Usage {
 	in, out := sh.UsedUpload, sh.UsedDownload
 	total := domain.Total(in, out)
+	mode, ok := domain.NormalizeQuotaBilling(sh.BillingMode)
+	if !ok {
+		mode = domain.BillingDual
+	}
+	billed := domain.QuotaBilled(mode, in, out)
 	u := Usage{
-		Used:      total,
-		Inbound:   in,
-		Outbound:  out,
-		Total:     total,
-		OneWay:    out,
-		TwoWay:    total,
-		Quota:     sh.QuotaBytes,
-		Remaining: -1,
+		Used:        billed,
+		Billed:      billed,
+		BillingMode: mode,
+		Inbound:     in,
+		Outbound:    out,
+		Total:       total,
+		OneWay:      out,
+		TwoWay:      total,
+		Quota:       sh.QuotaBytes,
+		Remaining:   -1,
 	}
 	if sh.QuotaBytes > 0 {
 		u.Percent = float64(u.Used) / float64(sh.QuotaBytes) * 100

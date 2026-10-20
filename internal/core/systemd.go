@@ -13,22 +13,36 @@ import (
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/boundedexec"
+	"ctlvps/internal/openrc"
 )
 
-// Systemd wraps systemctl.
+// Systemd retains the service facade used by core drivers. Its backend is
+// selected once for the running init system, before any unit is installed.
 type Systemd struct {
 	UnitDir string // /etc/systemd/system
+	openRC  bool
 }
 
 // NewSystemd returns the default wrapper.
-func NewSystemd() *Systemd { return &Systemd{UnitDir: "/etc/systemd/system"} }
+func NewSystemd() *Systemd {
+	if openrc.Enabled() {
+		return &Systemd{UnitDir: openrc.UnitDir, openRC: true}
+	}
+	return &Systemd{UnitDir: "/etc/systemd/system"}
+}
 
 // Available reports whether systemctl works.
 func (s *Systemd) Available(ctx context.Context) bool {
+	if s.openRC {
+		return openrc.Available(ctx)
+	}
 	return exec.CommandContext(ctx, "systemctl", "--version").Run() == nil
 }
 
 func (s *Systemd) ctl(ctx context.Context, args ...string) (string, error) {
+	if s.openRC {
+		return openrc.Control(ctx, args...)
+	}
 	out, stderr, err := boundedexec.Run(ctx, "", 1<<20, "systemctl", args...)
 	if err != nil {
 		return "", fmt.Errorf("systemctl: %w: %s", err, strings.TrimSpace(stderr))
@@ -40,6 +54,9 @@ func (s *Systemd) ctl(ctx context.Context, args ...string) (string, error) {
 func (s *Systemd) WriteUnit(name, content string) (bool, error) {
 	if !strings.HasPrefix(name, "ctlvps-") || strings.Contains(name, "..") || strings.ContainsAny(name, "\\\r\n\x00") || filepath.IsAbs(name) {
 		return false, fmt.Errorf("invalid managed unit name")
+	}
+	if s.openRC {
+		return openrc.InstallUnit(name, content)
 	}
 	return WriteIfChanged(filepath.Join(s.UnitDir, name), []byte(content), 0o644)
 }
@@ -112,18 +129,18 @@ func (s *Systemd) StopDisable(ctx context.Context, unit string) error {
 
 // IsActive reports whether the unit is running.
 func (s *Systemd) IsActive(ctx context.Context, unit string) bool {
-	out, _ := exec.CommandContext(ctx, "systemctl", "is-active", unit).Output()
-	return strings.TrimSpace(string(out)) == "active"
+	out, _ := s.ctl(ctx, "is-active", unit)
+	return strings.TrimSpace(out) == "active"
 }
 
 // Show reads the properties needed for CoreStatus.
 func (s *Systemd) Show(ctx context.Context, unit string) agentproto.CoreStatus {
 	st := agentproto.CoreStatus{}
-	out, err := exec.CommandContext(ctx, "systemctl", "show", unit, "-p", "ActiveState,NRestarts,MemoryCurrent,ExecMainStartTimestamp,Result,CPUUsageNSec").Output()
+	out, err := s.ctl(ctx, "show", unit, "-p", "ActiveState,NRestarts,MemoryCurrent,ExecMainStartTimestamp,Result,CPUUsageNSec")
 	if err != nil {
 		return st
 	}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
 			continue
@@ -153,11 +170,14 @@ func (s *Systemd) Show(ctx context.Context, unit string) agentproto.CoreStatus {
 // IPAccounting returns cumulative bytes received/sent by a unit's cgroup.
 // Ingress is VPS inbound, egress is VPS outbound. ok is false when unset.
 func (s *Systemd) IPAccounting(ctx context.Context, unit string) (in, out int64, ok bool) {
-	raw, err := exec.CommandContext(ctx, "systemctl", "show", unit, "-p", "IPIngressBytes", "-p", "IPEgressBytes").Output()
+	if s.openRC {
+		return 0, 0, false
+	}
+	raw, err := s.ctl(ctx, "show", unit, "-p", "IPIngressBytes", "-p", "IPEgressBytes")
 	if err != nil {
 		return 0, 0, false
 	}
-	return parseIPAccounting(string(raw))
+	return parseIPAccounting(raw)
 }
 
 func parseIPAccounting(show string) (in, out int64, ok bool) {
@@ -186,6 +206,9 @@ func parseIPAccounting(show string) (in, out int64, ok bool) {
 
 // JournalTail returns the last n log lines of a unit.
 func (s *Systemd) JournalTail(ctx context.Context, unit string, n int) []string {
+	if s.openRC {
+		return openrc.JournalTail(unit, n)
+	}
 	out, err := exec.CommandContext(ctx, "journalctl", "-u", unit, "-n", strconv.Itoa(n), "--no-pager", "-o", "cat", "-p", "warning").Output()
 	if err != nil {
 		return nil
@@ -201,12 +224,12 @@ func (s *Systemd) JournalTail(ctx context.Context, unit string, n int) []string 
 
 // ListUnits returns unit names matching a glob pattern.
 func (s *Systemd) ListUnits(ctx context.Context, pattern string) []string {
-	out, err := exec.CommandContext(ctx, "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", pattern).Output()
+	out, err := s.ctl(ctx, "list-units", "--all", "--plain", "--no-legend", "--no-pager", pattern)
 	if err != nil {
 		return nil
 	}
 	var names []string
-	for _, l := range strings.Split(string(out), "\n") {
+	for _, l := range strings.Split(out, "\n") {
 		f := strings.Fields(l)
 		if len(f) > 0 && strings.HasSuffix(f[0], ".service") {
 			names = append(names, f[0])
@@ -230,9 +253,18 @@ func ServiceUnit(desc, execStart string, t agentproto.Tuning, extra ...string) s
 		restart = 3
 	}
 	var b strings.Builder
+	slice := "ctlvps-proxy.slice"
+	for _, property := range extra {
+		if value, ok := strings.CutPrefix(property, "Slice="); ok {
+			slice = value
+		}
+	}
 	fmt.Fprintf(&b, "[Unit]\nDescription=%s\nAfter=network-online.target nss-lookup.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n", desc)
-	fmt.Fprintf(&b, "[Service]\nType=simple\nUser=root\nSlice=ctlvps-proxy.slice\nExecStart=%s\nRestart=always\nRestartSec=%d\nLimitNOFILE=%d\nMemoryMax=%dM\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nNoNewPrivileges=true\nProtectSystem=strict\nReadWritePaths=-/var/log/ctlvps -/var/lib/ctlvps-agent\nProtectHome=true\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=100\n", execStart, restart, nofile, memMax)
+	fmt.Fprintf(&b, "[Service]\nType=simple\nUser=root\nSlice=%s\nExecStart=%s\nRestart=always\nRestartSec=%d\nLimitNOFILE=%d\nMemoryMax=%dM\nCapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nAmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW\nNoNewPrivileges=true\nProtectSystem=strict\nReadWritePaths=-/var/log/ctlvps -/var/lib/ctlvps-agent\nProtectHome=true\nPrivateTmp=true\nProtectKernelTunables=true\nProtectControlGroups=true\nRestrictSUIDSGID=true\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK\nLogRateLimitIntervalSec=30s\nLogRateLimitBurst=100\n", slice, execStart, restart, nofile, memMax)
 	for _, e := range extra {
+		if strings.HasPrefix(e, "Slice=") {
+			continue
+		}
 		b.WriteString(e + "\n")
 	}
 	b.WriteString("\n[Install]\nWantedBy=multi-user.target\n")
@@ -252,6 +284,7 @@ func (s *Systemd) AccountingSnapshot(ctx context.Context, units []string) (map[s
 	if len(units) == 0 {
 		return out, nil
 	}
+
 	args := append([]string{"show", "-p", "Id,InvocationID,IPIngressBytes,IPEgressBytes"}, units...)
 	raw, err := s.ctl(ctx, args...)
 	if err != nil {
@@ -297,6 +330,17 @@ func (s *Systemd) StartUnits(ctx context.Context, units []string) error {
 func SnellSlice(nodeID int64) string { return fmt.Sprintf("ctlvps-proxy-n%d.slice", nodeID) }
 
 func (s *Systemd) EnsureSnellMeter(ctx context.Context, n agentproto.NodeSpec) (bool, error) {
+	if s.openRC {
+		if n.Core != "mieru" || n.NodeID <= 0 {
+			return false, fmt.Errorf("OpenRC only supports mieru process accounting")
+		}
+		name := SnellSlice(n.NodeID)
+		changed, err := s.WriteUnit(name, "[Unit]\nDescription=VpsCT node accounting\n[Slice]\nIPAccounting=yes\n")
+		if err != nil {
+			return false, err
+		}
+		return changed, openrc.EnsureMeter(name)
+	}
 	if n.NodeID <= 0 {
 		return false, fmt.Errorf("invalid Snell node identity")
 	}
@@ -337,7 +381,22 @@ func (s *Systemd) EnsureProxyBudget(ctx context.Context, t agentproto.Tuning) er
 
 func (s *Systemd) InSlice(ctx context.Context, unit, slice string) bool {
 	out, err := s.ctl(ctx, "show", unit, "--property=Slice", "--value")
-	return err == nil && strings.TrimSpace(out) == slice
+	if err != nil || strings.TrimSpace(out) != slice {
+		return false
+	}
+	group, err := s.ControlGroup(ctx, unit)
+	if err != nil {
+		return false
+	}
+	parent, err := s.ControlGroup(ctx, slice)
+	return err == nil && directCgroupChild(group, parent, unit)
+}
+
+func directCgroupChild(group, parent, unit string) bool {
+	return strings.HasPrefix(parent, "/") && parent != "/" &&
+		filepath.Clean(parent) == parent && filepath.Clean(group) == group &&
+		!strings.ContainsAny(parent+group, "\r\n\x00") &&
+		group == parent+"/"+unit && filepath.Base(unit) == unit
 }
 
 // ControlGroup resolves an existing managed slice, never a panel-provided path.

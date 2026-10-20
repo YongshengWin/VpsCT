@@ -11,6 +11,6 @@ extra=()
 if [[ -n "${SINGBOX_BIN:-}" ]]; then
   extra=(-v "$SINGBOX_BIN:/test-sing-box:ro" -e CTLVPS_SINGBOX=/test-sing-box)
 fi
-for test_name in TestKernelNodeAccounting TestKernelEgressBoundary; do
+for test_name in TestKernelNodeAccounting TestKernelEgressBoundary TestKernelNAT; do
  docker run "${extra[@]}" --rm --privileged --cgroupns=private --network none -e CTLVPS_KERNEL_TEST=1 -v "$PWD:/work:ro" -v "$work:/test:ro" ctlvps-meter-test:local /test/nft.test -test.run "^${test_name}$" -test.v
 done

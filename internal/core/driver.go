@@ -53,5 +53,20 @@ type ResourceDriver interface {
 	ApplyResources(context.Context, *agentproto.DesiredState, []agentproto.NodeSpec, []agentproto.ForwardSpec) (bool, error)
 }
 
+// ActivationFinalizer joins a core's local activation with the agent's network
+// admission checks. A successful Apply keeps its recovery point until these
+// checks pass; a failed admission restores that core independently of peers.
+// Rollback may keep services stopped when authorization changed; a nil error
+// confirms restored files, not permission to publish an available resource.
+type ActivationFinalizer interface {
+	FinishActivation(context.Context, bool) error
+}
+
+// RetainedActivation proves that an installation failure has not invalidated
+// the already running service. It cannot admit new credentials or endpoints.
+type RetainedActivation interface {
+	RetainedReady(context.Context, *agentproto.DesiredState, []agentproto.NodeSpec, []agentproto.ForwardSpec) bool
+}
+
 // LogPath returns the sing-box log file (used by conntail).
 func (p Paths) LogPath() string { return filepath.Join(p.LogDir, "sing-box.log") }

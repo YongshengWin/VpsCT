@@ -21,6 +21,39 @@ var ErrListenPortConflict = errors.New("该监听端口已被节点、转发或�
 var ErrForwardCapacity = errors.New("该服务器的转发数量已达上限，请先完成停用和清理")
 var ErrForwardRetired = errors.New("转发正在清理，不能重新启用或编辑")
 
+func checkForwardUDPBudget(ctx context.Context, q querier, f domain.PortForward) error {
+	if !f.Enabled || f.Retired || f.Config.Network == "tcp" {
+		return nil
+	}
+	if f.Config.MaxUDPSessions > agentbudget.ForwardUDPPerListener {
+		return errors.New("官方内核的 UDP 转发会话上限为 1024，请减少后再启用")
+	}
+	rows, err := q.QueryContext(ctx, `SELECT config FROM port_forwards WHERE server_id=? AND id<>? AND enabled=1 AND retired=0`, f.ServerID, f.ID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	total := f.Config.MaxUDPSessions
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return err
+		}
+		config, err := networkconfig.DecodeForward([]byte(raw))
+		if err != nil {
+			return err
+		}
+		total += config.MaxUDPSessions
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if total > agentbudget.ForwardUDPSessions {
+		return errors.New("该服务器 UDP 转发总会话预算超过 8192，请减少各转发的会话上限")
+	}
+	return nil
+}
+
 func (s *Store) NetworkForwardVersion(ctx context.Context, serverID int64) (int, error) {
 	var version int
 	err := s.db.QueryRowContext(ctx, `SELECT forward_version FROM server_network_requirements WHERE server_id=?`, serverID).Scan(&version)
@@ -156,6 +189,12 @@ func (s *Store) createPortForward(ctx context.Context, tx *sql.Tx, f domain.Port
 	if err := checkForwardEgress(ctx, tx, f); err != nil {
 		return f, err
 	}
+	if err := s.validateNATForward(ctx, tx, f); err != nil {
+		return f, err
+	}
+	if err := checkForwardUDPBudget(ctx, tx, f); err != nil {
+		return f, err
+	}
 	profile, revision := forwardEgressIDs(f)
 	now := s.Now()
 	res, err := tx.ExecContext(ctx, `INSERT INTO port_forwards(server_id,name,config,listen_port,egress_profile_id,egress_revision,enabled,revision,retired,created_at,updated_at)
@@ -205,6 +244,12 @@ func (s *Store) updatePortForward(ctx context.Context, tx *sql.Tx, id, expected 
 		return f, err
 	}
 	if err := checkForwardEgress(ctx, tx, f); err != nil {
+		return f, err
+	}
+	if err := s.validateNATForward(ctx, tx, f); err != nil {
+		return f, err
+	}
+	if err := checkForwardUDPBudget(ctx, tx, f); err != nil {
 		return f, err
 	}
 	profile, revision := forwardEgressIDs(f)

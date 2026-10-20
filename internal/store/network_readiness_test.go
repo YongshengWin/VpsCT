@@ -152,6 +152,7 @@ func TestNetworkReadinessUsesObservedCapabilitiesAndAtomicAdmission(t *testing.T
 	ctx := context.Background()
 	in, diag, snapshot := readyNetworkFixture(t, s)
 	n, _ := s.GetNode(ctx, in.NodeID)
+	initialGeneration, _ := s.NetworkGeneration(ctx, *n.ServerID)
 	before := snapshot.SampledAt
 	view, err := s.PreviewNodeNetwork(ctx, n.ID, in.Network)
 	if err != nil || !view.Ready || !view.RequiresLocalValidation || view.PinnedCoreVersion != domain.DefaultSingBoxVersion {
@@ -166,7 +167,7 @@ func TestNetworkReadinessUsesObservedCapabilitiesAndAtomicAdmission(t *testing.T
 	if _, err = s.RequestReadyNodeNetwork(ctx, in, domain.AuditEvent{}); !errors.Is(err, ErrNetworkNotReady) {
 		t.Fatal("stale successful preview bypassed current policy", err)
 	}
-	if gen, _ := s.NetworkGeneration(ctx, *n.ServerID); gen != 0 {
+	if gen, _ := s.NetworkGeneration(ctx, *n.ServerID); gen != initialGeneration {
 		t.Fatal("failed readiness check changed desired generation")
 	}
 	diag.SecurityPaused = false

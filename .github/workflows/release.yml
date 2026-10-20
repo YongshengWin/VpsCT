@@ -4,12 +4,23 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+  actions: read
 jobs:
-  checks:
-    uses: ./.github/workflows/ci.yml
-  package:
-    needs: checks
+  verify-ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the exact release source tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/verify-release-ci.py
+  package:
+    needs: verify-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -22,12 +33,30 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Build versioned packages
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: make release VERSION="$RELEASE_VERSION" REPOSITORY="$RELEASE_REPOSITORY"
+      - name: Fresh security audit before publication
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+          cd web && npm audit --audit-level=high
+      - name: Verify the final packaged web upgrade
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          bash scripts/fetch-upgrade-fixture.sh v0.1.5 "$RUNNER_TEMP/web-upgrade-legacy"
+          asset=sing-box-1.14.1-linux-amd64.tar.gz
+          digest=$(gh api repos/SagerNet/sing-box/releases/tags/v1.14.1 --jq ".assets[] | select(.name == \"$asset\") | .digest")
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          curl -fLsS --proto '=https' --proto-redir '=https' "https://github.com/SagerNet/sing-box/releases/download/v1.14.1/$asset" -o "$RUNNER_TEMP/$asset"
+          printf '%s  %s\n' "${digest#sha256:}" "$RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          SINGBOX_BIN="$RUNNER_TEMP/sing-box-1.14.1-linux-amd64/sing-box" bash scripts/test-web-upgrade-container.sh "release/$RELEASE_VERSION" "$RUNNER_TEMP/web-upgrade-legacy"
       - name: Prepare release notes
         env:
           RELEASE_VERSION: ${{ github.ref_name }}

@@ -14,7 +14,7 @@ import (
 
 const nodeCols = `id, name, protocol, server, port, params, server_params, source, server_id, listen_port, core, share_id, external_sub_id, chain_front_node_id, enabled, owner_user_id, tags, sort_order, revoked, created_at, updated_at,
  (SELECT policy FROM node_networks WHERE node_id=nodes.id),
- (SELECT revision FROM node_networks WHERE node_id=nodes.id)`
+ (SELECT revision FROM node_networks WHERE node_id=nodes.id), original_name`
 
 func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
 	var n domain.Node
@@ -24,7 +24,7 @@ func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error
 	var network sql.NullString
 	var networkRevision sql.NullInt64
 	if err := sc.Scan(&n.ID, &n.Name, &n.Protocol, &n.Server, &n.Port, s.scanSecret("nodes.params", &params), s.scanSecret("nodes.server_params", &serverParams), &n.Source, &serverID, &n.ListenPort, &n.Core,
-		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated, &network, &networkRevision); err != nil {
+		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated, &network, &networkRevision, &n.OriginalName); err != nil {
 		return n, err
 	}
 	n.Params = rawOrEmpty(params)
@@ -70,13 +70,16 @@ func (s *Store) nodeArgs(n *domain.Node) []any {
 
 // CreateNode inserts a node.
 func (s *Store) CreateNode(ctx context.Context, n *domain.Node) error {
-	if n.Network != nil {
+	if n.Network != nil || n.Source == domain.NodeDeployed {
 		return s.Tx(ctx, func(tx *sql.Tx) error { return s.createNode(ctx, tx, n) })
 	}
 	return s.createNode(ctx, s.db, n)
 }
 
 func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error {
+	if err := s.validateNATNode(ctx, q, *n); err != nil {
+		return err
+	}
 	if n.Protocol == domain.ProtocolWireGuard && n.Source == domain.NodeDeployed {
 		if n.ServerID == nil {
 			return errors.New("WireGuard 接入缺少服务器")
@@ -131,18 +134,67 @@ func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error
 
 // UpdateNode saves all editable fields.
 func (s *Store) UpdateNode(ctx context.Context, n *domain.Node) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error { return s.updateNode(ctx, tx, n) })
+}
+
+func (s *Store) updateNode(ctx context.Context, q querier, n *domain.Node) error {
+	old, err := s.scanNode(q.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, n.ID))
+	if err != nil {
+		return err
+	}
+	// Capture the upstream identity once, before the first local rename.
+	n.OriginalName = old.OriginalName
+	if old.Source == domain.NodeImported && old.Name != n.Name && n.OriginalName == "" {
+		n.OriginalName = old.Name
+		if _, err := q.ExecContext(ctx, `UPDATE nodes SET original_name=? WHERE id=?`, n.OriginalName, n.ID); err != nil {
+			return err
+		}
+	}
+	candidate := *n
+	candidate.Network = old.Network
+	if old.Network != nil {
+		candidate.Server = old.Server
+	}
+	if candidate.Enabled && !candidate.Revoked && (!old.Enabled || old.Revoked || old.Source != candidate.Source || old.ListenPort != candidate.ListenPort || old.Protocol != candidate.Protocol || !natNodeTransportsEqual(old, candidate) || old.Server != candidate.Server || (old.ServerID == nil) != (candidate.ServerID == nil) || (old.ServerID != nil && candidate.ServerID != nil && *old.ServerID != *candidate.ServerID)) {
+		if err := s.validateNATNode(ctx, q, candidate); err != nil {
+			return err
+		}
+	}
 	now := s.Now()
 	args := append(s.nodeArgs(n), fmtTime(now), n.ID)
-	// Ordinary edits never write the independently versioned network policy
-	// or its access address, including stale forms and credential rotations.
-	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=CASE WHEN EXISTS(SELECT 1 FROM node_networks WHERE node_id=nodes.id AND policy<>'null') THEN server ELSE ? END,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...)
+	// Ordinary edits never write independently versioned network policy or address.
+	_, err = q.ExecContext(ctx, `UPDATE nodes SET name=?,protocol=?,server=CASE WHEN EXISTS(SELECT 1 FROM node_networks WHERE node_id=nodes.id AND policy<>'null') THEN server ELSE ? END,port=?,params=?,server_params=?,source=?,server_id=?,listen_port=?,core=?,share_id=?,external_sub_id=?,chain_front_node_id=?,enabled=?,owner_user_id=?,tags=?,sort_order=?,revoked=?,updated_at=? WHERE id=?`, args...)
 	n.UpdatedAt = now
 	return err
 }
 
 // DeleteNode removes a node.
 func (s *Store) DeleteNode(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, id)
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		if err := requireNoAccessRoutes(ctx, tx, id, false); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, id)
+		return err
+	})
+}
+
+// PruneOrphanChains repairs historical deletions that left a virtual chain
+// referencing a missing front. A missing/ambiguous landing origin alone is not
+// enough evidence: historical chains may only retain their copied endpoint.
+func (s *Store) PruneOrphanChains(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `WITH RECURSIVE removed(id) AS (
+		SELECT chain.id FROM nodes chain
+		WHERE chain.source='chain' AND chain.chain_front_node_id IS NOT NULL
+		AND chain.chain_front_node_id<>0 AND NOT EXISTS (
+			SELECT 1 FROM nodes front WHERE front.id=chain.chain_front_node_id
+		)
+		UNION
+		SELECT chain.id FROM nodes chain JOIN removed ON chain.chain_front_node_id=removed.id
+		WHERE chain.source='chain'
+		UNION
+		SELECT origin.chain_id FROM node_chain_origins origin JOIN removed ON origin.landing_id=removed.id
+	) DELETE FROM nodes WHERE id IN (SELECT id FROM removed)`)
 	return err
 }
 
@@ -222,7 +274,7 @@ func (s *Store) ListNodes(ctx context.Context, f NodeFilter) ([]domain.Node, err
 }
 
 // ReplaceExternalNodes atomically swaps the imported node set of one
-// external subscription, preserving ids of nodes whose name is unchanged so
+// external subscription, matching upstream names independently of local names so
 // that generated subscriptions referencing them keep working.
 func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []domain.Node) (added, updated, removed int, err error) {
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
@@ -237,7 +289,11 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 				rows.Close()
 				return err
 			}
-			existing[n.Name] = n
+			key := n.OriginalName
+			if key == "" {
+				key = n.Name
+			}
+			existing[key] = n
 		}
 		rows.Close()
 		now := fmtTime(s.Now())
@@ -252,6 +308,10 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 			seen[n.Name] = true
 			if old, ok := existing[n.Name]; ok {
 				n.ID = old.ID
+				if old.OriginalName != "" {
+					n.Name = old.Name
+					n.OriginalName = old.OriginalName
+				}
 				n.Tags = old.Tags
 				n.SortOrder = old.SortOrder
 				n.Enabled = old.Enabled
@@ -272,7 +332,18 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 		}
 		for name, old := range existing {
 			if !seen[name] {
-				if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, old.ID); err != nil {
+				// A referenced external landing cannot be deleted while its entry is
+				// live. Retain a revoked tombstone so the whole feed can still
+				// synchronize and the reconciler can close that entry safely.
+				var referenced bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM access_routes WHERE landing_node_id=? AND stage<>'retired')`, old.ID).Scan(&referenced); err != nil {
+					return err
+				}
+				if referenced {
+					if _, err := tx.ExecContext(ctx, `UPDATE nodes SET enabled=0,revoked=1,updated_at=? WHERE id=?`, now, old.ID); err != nil {
+						return err
+					}
+				} else if _, err := tx.ExecContext(ctx, `DELETE FROM nodes WHERE id=?`, old.ID); err != nil {
 					return err
 				}
 				removed++
@@ -383,6 +454,17 @@ func (s *Store) SplitInlineChains(ctx context.Context) error {
 func (s *Store) UpdateNodeCredentials(ctx context.Context, n *domain.Node) error {
 	now := fmtTime(s.Now())
 	return s.Tx(ctx, func(tx *sql.Tx) error {
+		old, err := s.scanNode(tx.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, n.ID))
+		if err != nil {
+			return err
+		}
+		candidate := old
+		candidate.ServerParams = n.ServerParams
+		if old.Enabled && !old.Revoked && !natNodeTransportsEqual(old, candidate) {
+			if err := s.validateNATNode(ctx, tx, candidate); err != nil {
+				return err
+			}
+		}
 		res, err := tx.ExecContext(ctx, `UPDATE nodes SET params=?,server_params=?,core=?,updated_at=? WHERE id=?`,
 			s.seal("nodes.params", string(n.Params)), s.seal("nodes.server_params", string(n.ServerParams)), n.Core, now, n.ID)
 		if err != nil {

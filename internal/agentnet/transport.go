@@ -35,6 +35,7 @@ type request struct {
 	NetworkSSHVersion       int `json:",omitempty"`
 	NetworkWireGuardVersion int `json:",omitempty"`
 	NetworkForwardVersion   int `json:",omitempty"`
+	ForwardUDPVersion       int `json:",omitempty"`
 }
 type response struct {
 	Status int
@@ -103,6 +104,12 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 				return nil, errors.New("unsupported forwarding request version")
 			}
 			in.NetworkForwardVersion = networkconfig.ForwardVersion
+		}
+		if version := r.Header.Get(networkconfig.ForwardUDPHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.ForwardUDPVersion) || in.NetworkForwardVersion != networkconfig.ForwardVersion {
+				return nil, errors.New("unsupported UDP forwarding request version")
+			}
+			in.ForwardUDPVersion = networkconfig.ForwardUDPVersion
 		}
 	}
 	b, err := json.Marshal(in)
@@ -253,6 +260,12 @@ func Entry(args []string) (bool, error) {
 		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
 			r.Header.Set(networkconfig.ForwardHeader, fmt.Sprint(in.NetworkForwardVersion))
 		}
+	}
+	if in.ForwardUDPVersion != 0 {
+		if in.ForwardUDPVersion != networkconfig.ForwardUDPVersion || in.NetworkForwardVersion != networkconfig.ForwardVersion || in.Public || in.Method != http.MethodGet || u.Path != "/api/agent/v1/desired" {
+			return true, errors.New("unsupported UDP forwarding request version")
+		}
+		r.Header.Set(networkconfig.ForwardUDPHeader, fmt.Sprint(in.ForwardUDPVersion))
 	}
 	c := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: &http.Transport{Proxy: nil, TLSHandshakeTimeout: 5 * time.Second, ResponseHeaderTimeout: 10 * time.Second, MaxResponseHeaderBytes: 32 << 10}}
 	if in.Public {

@@ -287,14 +287,27 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 				b.Template = &t
 			}
 		}
-		if sh.Status != domain.ShareActive {
-			b.InfoNodes = []string{shareStatusLine(sh.Status)}
+		if sh.Status != domain.ShareActive || (sh.ExpiresAt != nil && !now.Before(*sh.ExpiresAt)) || (sh.QuotaBytes > 0 && domain.QuotaBilled(sh.BillingMode, sh.UsedUpload, sh.UsedDownload) >= sh.QuotaBytes) {
+			status := sh.Status
+			if status == domain.ShareActive && sh.ExpiresAt != nil && !now.Before(*sh.ExpiresAt) {
+				status = domain.ShareExpired
+			} else if status == domain.ShareActive {
+				status = domain.ShareExhausted
+			}
+			b.InfoNodes = []string{shareStatusLine(status)}
 			return b, nil
 		}
 		nodes, err = s.Store.ListNodes(ctx, store.NodeFilter{ShareID: sub.ShareID, OnlyEnabled: true})
 		if err != nil {
 			return nil, err
 		}
+		available := nodes[:0]
+		for _, n := range nodes {
+			if !sh.NodeExhausted(n) {
+				available = append(available, n)
+			}
+		}
+		nodes = available
 		if len(sh.ExtraNodeIDs) > 0 {
 			extra, err := s.Store.ListNodes(ctx, store.NodeFilter{IDs: sh.ExtraNodeIDs, OnlyEnabled: true})
 			if err == nil {
@@ -306,7 +319,33 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 		if err != nil {
 			return nil, err
 		}
-		b.Userinfo = s.subscriptionUserinfo(ctx, sub, nodes, now)
+		quotaNodes := append([]domain.Node{}, nodes...)
+		counted := map[int64]bool{}
+		for _, n := range quotaNodes {
+			counted[n.ID] = true
+		}
+		for _, id := range sub.NodeSelection.RouteIDs {
+			r, e := s.Store.AccessRoute(ctx, id)
+			if errors.Is(e, store.ErrNotFound) {
+				continue
+			}
+			if e != nil {
+				return nil, e
+			}
+			if counted[r.Request.LandingNodeID] {
+				continue
+			}
+			n, e := s.Store.GetNode(ctx, r.Request.LandingNodeID)
+			if errors.Is(e, store.ErrNotFound) {
+				continue
+			}
+			if e != nil {
+				return nil, e
+			}
+			counted[n.ID] = true
+			quotaNodes = append(quotaNodes, n)
+		}
+		b.Userinfo = s.subscriptionUserinfo(ctx, sub, quotaNodes, now)
 		if b.Userinfo != nil && b.Userinfo.Total > 0 && b.Userinfo.Remaining() == 0 {
 			nodes = nil
 		}
@@ -315,6 +354,14 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 		byID := map[int64]domain.Node{}
 		var standalones []domain.Node
 		for _, n := range nodes {
+			projected, usable, err := s.subscriptionNode(ctx, n)
+			if err != nil {
+				return nil, err
+			}
+			if !usable {
+				continue
+			}
+			n = projected
 			if n.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(n)) {
 				continue
 			}
@@ -344,6 +391,36 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 			b.Groups = ResolveGroups(sub.ProxyGroups, b.Proxies, b.Chains, nameByID)
 		}
 	}
+	if sub.Kind == domain.SubGenerated && !(b.Userinfo != nil && b.Userinfo.Total > 0 && b.Userinfo.Remaining() == 0) {
+		seenRoutes := map[string]bool{}
+		for _, id := range sub.NodeSelection.RouteIDs {
+			if seenRoutes[id] {
+				continue
+			}
+			seenRoutes[id] = true
+			n, usable, err := s.AccessRouteNode(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if sub.NodeSelection.Filter != "" {
+				if re, e := regexp.Compile(sub.NodeSelection.Filter); e == nil && !re.MatchString(n.Name) {
+					continue
+				}
+			}
+			if sub.NodeSelection.ExcludeFilter != "" {
+				if re, e := regexp.Compile(sub.NodeSelection.ExcludeFilter); e == nil && re.MatchString(n.Name) {
+					continue
+				}
+			}
+			if usable {
+				b.Proxies = append(b.Proxies, ProxyFor(n, nil))
+			}
+		}
+		b.Proxies = proxynode.DedupeNames(b.Proxies)
+		if len(sub.ProxyGroups) > 0 {
+			b.Groups = ResolveGroups(sub.ProxyGroups, b.Proxies, b.Chains, nameByID)
+		}
+	}
 	if sub.ShowInfoNodes && b.Userinfo != nil {
 		b.InfoNodes = b.Userinfo.InfoLines(now)
 	}
@@ -360,6 +437,10 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 		if err != nil || !fn.Enabled || fn.Revoked || (fn.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(fn))) {
 			return
 		}
+		fn, usable, err := s.subscriptionNode(ctx, fn)
+		if err != nil || !usable {
+			return
+		}
 		fp := ProxyFor(fn, hosts)
 		b.Proxies = append(b.Proxies, fp)
 		b.Proxies = proxynode.DedupeNames(b.Proxies)
@@ -372,6 +453,10 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 	if !okL {
 		ln, err := s.Store.GetNode(ctx, landingID)
 		if err != nil || !ln.Enabled || ln.Revoked || (ln.Source == domain.NodeImported && proxynode.IsSubscriptionInfo(proxynode.FromDomain(ln))) {
+			return
+		}
+		ln, usable, err := s.subscriptionNode(ctx, ln)
+		if err != nil || !usable {
 			return
 		}
 		landing = ln

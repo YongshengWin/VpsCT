@@ -47,7 +47,11 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		parts = append(parts, "ss", host, port)
 		add("encrypt-method", p.Str("cipher"))
 		add("password", p.Str("password"))
-		addBool("udp-relay", true)
+		if udp, exists := p.Params["udp"]; exists && !toBool(udp) {
+			parts = append(parts, "udp-relay=false")
+		} else {
+			addBool("udp-relay", true)
+		}
 		if p.Str("plugin") == "obfs" {
 			o := p.Sub("plugin-opts")
 			add("obfs", fmt.Sprint(o["mode"]))

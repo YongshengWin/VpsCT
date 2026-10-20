@@ -45,7 +45,7 @@ func (a *API) getEgressProfile(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	view, err := a.Store.EgressProfileView(r.Context(), id, httpx.QueryInt(r, "limit", 50), httpx.QueryInt(r, "offset", 0))
+	view, err := a.Store.EgressProfileView(r.Context(), id, httpx.QueryInt(r, "limit", 50), httpx.QueryOffset(r, "offset", 0))
 	if err != nil {
 		return networkOperationError(err)
 	}
@@ -101,7 +101,7 @@ func (a *API) saveEgressProfile(w http.ResponseWriter, r *http.Request, action s
 	if in.Enabled == nil || in.ExpectedRevision == nil {
 		return httpx.BadRequest("需要明确的启用状态和出口编辑版本；创建时版本为 0")
 	}
-	if in.Kind != "direct" && in.Kind != "socks5" && in.Kind != "ssh" && in.Kind != "wireguard" {
+	if in.Kind != "direct" && in.Kind != "socks5" && in.Kind != "ssh" && in.Kind != "wireguard" && in.Kind != "ss2022" {
 		return httpx.BadRequest("不支持该出口类型")
 	}
 	req := store.EgressProfileRequest{ID: in.OperationID, Action: action, ExpectedRevision: *in.ExpectedRevision, Name: in.Name, Kind: in.Kind, Enabled: *in.Enabled, Config: in.Config, ExpectedImpact: in.ExpectedImpact, Credentials: in.Credentials}
@@ -179,7 +179,7 @@ func (a *API) previewEgress(w http.ResponseWriter, r *http.Request, create bool)
 	if (create && in.Action != "create") || (!create && in.Action != "update" && in.Action != "delete") {
 		return httpx.BadRequest("出口预览操作无效")
 	}
-	if in.Action != "delete" && in.Kind != "direct" && in.Kind != "socks5" && in.Kind != "ssh" && in.Kind != "wireguard" {
+	if in.Action != "delete" && in.Kind != "direct" && in.Kind != "socks5" && in.Kind != "ssh" && in.Kind != "wireguard" && in.Kind != "ss2022" {
 		return httpx.BadRequest("不支持该出口类型")
 	}
 	req := store.EgressProfileRequest{Action: in.Action, ExpectedRevision: *in.ExpectedRevision, Name: in.Name, Kind: in.Kind, Config: in.Config, Credentials: in.Credentials}

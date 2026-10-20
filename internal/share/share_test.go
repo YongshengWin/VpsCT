@@ -101,7 +101,7 @@ func TestShareLifecycle(t *testing.T) {
 	if got.Status != domain.ShareActive || got.UsedUpload != 300 {
 		t.Fatalf("%+v", got)
 	}
-	// exceed quota: exhausted + blocked in desired state (sum bills outbound only)
+	// exceed quota: legacy sum uses inbound+outbound and blocks desired nodes
 	if err := m.ApplyDeltas(ctx, []traffic.ShareDelta{{ShareID: sh.ID, Up: 300, Down: 800}}); err != nil {
 		t.Fatal(err)
 	}

@@ -68,3 +68,36 @@ func TestOfficialAgentCommandFailureAndQuoting(t *testing.T) {
 		})
 	}
 }
+
+func TestOfficialAgentCommandBootstrapsRootAlpineWithoutSudo(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"id":   "#!/bin/sh\nprintf '0\\n'\n",
+		"apk":  "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$BOOTSTRAP_FILE\"\n",
+		"curl": "#!/bin/sh\nexit 0\n",
+		"bash": "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$ARGS_FILE\"\n",
+		"sudo": "#!/bin/sh\nexit 99\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("sh", "-c", officialAgentCommand("https://panel.example", "", true))
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"), "TMPDIR="+dir,
+		"BOOTSTRAP_FILE="+filepath.Join(dir, "bootstrap"), "ARGS_FILE="+filepath.Join(dir, "args"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("root bootstrap: %v %s", err, out)
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(dir, "bootstrap"))
+	if err != nil || string(bootstrap) != "add\n--no-cache\nbash\ncurl\nca-certificates\n" {
+		t.Fatal("Alpine bootstrap dependencies changed", err)
+	}
+	args, err := os.ReadFile(filepath.Join(dir, "args"))
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if err != nil || len(lines) != 4 || lines[1] != "--server" || lines[2] != "https://panel.example" || lines[3] != "--update" {
+		t.Fatalf("update arguments changed: %q %v", lines, err)
+	}
+	if _, err := os.Stat(lines[0]); !os.IsNotExist(err) {
+		t.Fatal("temporary installer was not cleaned up")
+	}
+}

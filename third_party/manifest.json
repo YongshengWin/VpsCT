@@ -2,11 +2,11 @@
   {
     "ecosystem": "go-runtime",
     "name": "Go standard library and runtime",
-    "version": "go1.26.8",
+    "version": "go1.26.9",
     "license": "BSD-3-Clause",
     "notices": [
-      "third_party/go-runtime/go1.26.8/LICENSE",
-      "third_party/go-runtime/go1.26.8/PATENTS"
+      "third_party/go-runtime/go1.26.9/LICENSE",
+      "third_party/go-runtime/go1.26.9/PATENTS"
     ]
   },
   {
@@ -713,10 +713,10 @@
   {
     "ecosystem": "go",
     "name": "golang.org/x/net",
-    "version": "v0.58.0",
+    "version": "v0.60.0",
     "license": "See license text",
     "notices": [
-      "third_party/go/golang.org_x_net_v0.58.0/LICENSE"
+      "third_party/go/golang.org_x_net_v0.60.0/LICENSE"
     ]
   },
   {
@@ -1693,10 +1693,10 @@
   {
     "ecosystem": "npm",
     "name": "tailwind-merge",
-    "version": "2.6.1",
+    "version": "3.7.0",
     "license": "MIT",
     "notices": [
-      "third_party/npm/tailwind-merge_2.6.1/LICENSE.md"
+      "third_party/npm/tailwind-merge_3.7.0/LICENSE.md"
     ]
   },
   {

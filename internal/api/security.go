@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -64,6 +65,9 @@ func isWrite(r *http.Request) bool {
 
 func (a *API) security(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" && r.URL.Query().Get("ready") == "1" {
+			r = withLocalReadinessAccess(r)
+		}
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
@@ -142,9 +146,37 @@ func (a *API) security(next http.Handler) http.Handler {
 		if r.URL.Path != "/healthz" {
 			r.Host = requestHost
 		}
+		// Only a verified developer key permits non-browser requests without
+		// Origin/CSRF. Cookies retain the existing browser boundary.
+		keyAuthenticated := false
+		if strings.HasPrefix(r.URL.Path, "/api/v1/") && len(r.Header.Values("Authorization")) != 0 {
+			if !a.apiKeyEntryLimiter.Allow(httpx.ClientIP(r, false)) {
+				w.Header().Set("Retry-After", "60")
+				httpx.WriteError(w, httpx.E(429, "rate_limited", "API key 请求过于频繁"))
+				return
+			}
+			key, _, err := a.apiKeyIdentity(r)
+			if err != nil {
+				httpx.WriteError(w, err)
+				return
+			}
+			if !a.apiKeyLimiter.Allow(strconvI(key.ID)) {
+				w.Header().Set("Retry-After", "60")
+				httpx.WriteError(w, httpx.E(429, "rate_limited", "API key 请求过于频繁"))
+				return
+			}
+			switch r.URL.Path {
+			case "/api/v1/auth/setup", "/api/v1/auth/login", "/api/v1/auth/login/2fa", "/api/v1/auth/logout":
+				httpx.WriteError(w, httpx.E(403, "session_required", "此操作需要登录面板账户"))
+				return
+			}
+			r = r.WithContext(context.WithValue(r.Context(), apiKeyContextKey, key))
+			keyAuthenticated = true
+		}
 		if strings.HasPrefix(r.URL.Path, "/api/v1/") && isWrite(r) {
 			origin, e := url.Parse(r.Header.Get("Origin"))
-			if e != nil || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") || safehttp.Origin(origin) != safehttp.Origin(target) || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			requireOrigin := !keyAuthenticated || r.Header.Get("Origin") != ""
+			if r.Header.Get("Sec-Fetch-Site") == "cross-site" || requireOrigin && (e != nil || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") || safehttp.Origin(origin) != safehttp.Origin(target)) {
 				a.securityEvent(r, "origin_denied")
 				httpx.WriteError(w, httpx.E(403, "invalid_origin", "请求来源验证失败，请从面板页面操作"))
 				return
@@ -184,7 +216,7 @@ func (a *API) security(next http.Handler) http.Handler {
 				return
 			}
 		}
-		if isWrite(r) && (strings.HasPrefix(r.URL.Path, "/api/v1/auth/") || strings.HasPrefix(r.URL.Path, "/api/v1/users") || strings.Contains(r.URL.Path, "maintenance")) {
+		if isWrite(r) && (strings.HasPrefix(r.URL.Path, "/api/v1/auth/") || strings.HasPrefix(r.URL.Path, "/api/v1/users") || strings.HasPrefix(r.URL.Path, "/api/v1/api-keys") || strings.Contains(r.URL.Path, "maintenance")) {
 			if !a.passwordGate.Acquire() {
 				w.Header().Set("Retry-After", "2")
 				httpx.WriteError(w, httpx.E(429, "rate_limited", "验证繁忙，请稍后重试"))

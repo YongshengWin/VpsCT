@@ -84,6 +84,15 @@ func protected(path string) ([]byte, error) {
 	defer f.Close()
 	return safehttp.ReadBounded(f, 1<<20)
 }
+
+// ReadProtectedConfig reads a root-owned regular configuration file through the
+// same no-symlink and parent-permission checks as the local security policy.
+// Missing files retain their original error so callers can define an opt-in
+// feature's default without treating unsafe or malformed files as absent.
+func ReadProtectedConfig(path string) ([]byte, error) {
+	return protected(path)
+}
+
 func protectedParents(path string) error {
 	for {
 		st, e := os.Lstat(path)

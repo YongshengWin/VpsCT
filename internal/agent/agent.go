@@ -22,9 +22,12 @@ import (
 	"ctlvps/internal/conntail"
 	"ctlvps/internal/core"
 	"ctlvps/internal/diag"
+	"ctlvps/internal/maintenance"
+	"ctlvps/internal/natconfig"
 	"ctlvps/internal/netinventory"
 	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/nft"
+	"ctlvps/internal/openrc"
 	"ctlvps/internal/proxyguard"
 	"ctlvps/internal/secureupdate"
 )
@@ -56,15 +59,21 @@ type Agent struct {
 	networkRetryAt      time.Time
 	HoldUpdates         bool // locally pin a canary; pauses binary synchronization and web maintenance
 
-	stateMu     sync.Mutex // serializes the main loop and connlog state persistence
-	mu          sync.Mutex
-	desired     *agentproto.DesiredState
-	lastDiag    diag.Host
-	lastDiagAt  time.Time
-	clockSkewMs int64
-	applying    bool
-	bootID      string
-	selfSHA     string
+	stateMu       sync.Mutex // serializes the main loop and connlog state persistence
+	mu            sync.Mutex
+	desired       *agentproto.DesiredState
+	lastDiag      diag.Host
+	lastDiagAt    time.Time
+	clockSkewMs   int64
+	applying      bool
+	udpSessions   agentproto.ForwardUDPStatus // guarded by mu
+	bootID        string
+	selfSHA       string
+	applyFailure  applyFailureLog       // guarded by stateMu; retries still run every poll
+	natReady      bool                  // this process has installed verified whole or partial NAT intent
+	natStatus     *agentproto.NATStatus // observed authority, guarded by mu
+	natAppliedKey string                // exact selected configuration verified by this process
+	natController *natconfig.Config     // latest authorized remote NAT intent, guarded by mu
 }
 
 // New wires the agent for a state directory.
@@ -86,6 +95,9 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 		"singbox": core.NewSingBox(paths, sd),
 		"snell":   core.NewSnell(paths, sd),
 		"mieru":   core.NewMita(paths, sd),
+	}
+	if openrc.Enabled() {
+		delete(a.Drivers, "snell")
 	}
 	a.Tail = conntail.New(paths.LogPath())
 	a.Tail.Enabled = func() bool {
@@ -129,6 +141,9 @@ func Enroll(ctx context.Context, stateDir, serverURL, token, version string) (*S
 		return nil, err
 	}
 	st := &State{ServerURL: c.BaseURL, AgentToken: resp.AgentToken, ServerID: resp.ServerID, ServerName: resp.ServerName, PollIntervalSec: resp.PollIntervalSec, EnrolledAt: time.Now().UTC(), CounterNonce: nonce()}
+	if openrc.Enabled() {
+		st.OpenRCVersion = 1
+	}
 	if err := st.Save(stateDir); err != nil {
 		return nil, err
 	}
@@ -151,6 +166,36 @@ func nonce() string {
 
 // Run executes the main loop until ctx is cancelled.
 func (a *Agent) Run(ctx context.Context) error {
+	if !openrc.Enabled() {
+		if err := validateSystemdMeterState(a.State); err != nil {
+			return err
+		}
+	}
+	if openrc.Enabled() {
+		if err := validateOpenRCState(a.State); err != nil {
+			return err
+		}
+		if a.State.OpenRCVersion == 0 {
+			a.State.OpenRCVersion = 1
+			if err := a.State.Save(a.StateDir); err != nil {
+				a.State.OpenRCVersion = 0
+				return err
+			}
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		release, err := maintenance.NewManager().WaitStartupConfigurationLock(refreshCtx)
+		if err == nil {
+			err = openrc.RefreshHelpers(refreshCtx)
+			if err == nil {
+				err = openrc.MarkAgentReady()
+			}
+			release()
+		}
+		cancel()
+		if err != nil {
+			return fmt.Errorf("refresh OpenRC helpers: %w", err)
+		}
+	}
 	if err := a.loadNetworkDesired(); err != nil && !os.IsNotExist(err) {
 		a.Logger.Warn("network recovery cache unavailable", "err", err)
 	}
@@ -192,6 +237,10 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.converge(ctx, true)
 	}
 	a.stateMu.Unlock()
+	udpCtx, cancelUDP := context.WithCancel(ctx)
+	udpDone := make(chan struct{})
+	go func() { defer close(udpDone); a.udpSessionLoop(udpCtx) }()
+	defer func() { cancelUDP(); <-udpDone }()
 	refreshCtx, cancelRefresh := context.WithCancel(ctx)
 	refreshDone := make(chan struct{})
 	go func() { defer close(refreshDone); a.networkRefreshLoop(refreshCtx) }()
@@ -277,7 +326,7 @@ func (a *Agent) portCounters(ctx context.Context) ([]agentproto.PortCounter, err
 			return nil, fmt.Errorf("accounting unavailable for %s", u)
 		}
 		n := byUnit[u]
-		out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: "systemd-v1", Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: true})
+		out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: processMeterSource(), Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: true})
 	}
 	if !a.State.MeteringV1 && a.State.LegacySettled {
 		for _, n := range a.State.MeterNodes {
@@ -431,6 +480,7 @@ func (a *Agent) prepareMetering(ctx context.Context, ds *agentproto.DesiredState
 }
 
 func (a *Agent) heartbeat(ctx context.Context) error {
+	a.refreshLocalNAT(ctx)
 	if err := a.flushForwardReceipt(ctx); err != nil {
 		return err
 	}
@@ -472,6 +522,9 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	}
 	a.mu.Lock()
 	hb.AppliedRevision, hb.AppliedHash, hb.ApplyError = a.State.AppliedRevision, a.State.AppliedHash, a.State.ApplyError
+	hb.NodeApplicationRevision, hb.NodeApplicationHash = a.State.NodeApplicationRevision, a.State.NodeApplicationHash
+	hb.NodeApplications = append([]agentproto.NodeApplication(nil), a.State.NodeApplications...)
+	hb.NodeApplicationSequence = a.State.NodeApplicationSequence
 	if agentwork.Pending() {
 		hb.ApplyStatus = "pending"
 	} else if hb.ApplyError != "" {
@@ -559,7 +612,7 @@ func (a *Agent) heartbeat(ctx context.Context) error {
 	needInitialApply := a.desired == nil
 	currentDesired := a.desired
 	a.mu.Unlock()
-	if policy, err := secureupdate.LoadPolicy(); currentDesired != nil && err == nil && !policy.PauseConfig && secureupdate.Allow("agent.configure") == nil {
+	if policy, err := secureupdate.LoadPolicy(); currentDesired != nil && a.State.ApplyError == "" && resp.DesiredRevision == a.State.AppliedRevision && resp.DesiredHash == a.State.AppliedHash && err == nil && !policy.PauseConfig && secureupdate.Allow("agent.configure") == nil {
 		if release, err := lockConfiguration(); err == nil {
 			if err := a.NFT.EnsureResourceIngress(ctx, currentDesired.Nodes, currentDesired.Forwards); err != nil {
 				a.State.ApplyError = "节点端口开放失败: " + err.Error()
@@ -593,6 +646,9 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		OOMEvents: h.OOMEvents, Nftables: h.Nftables, Systemd: h.Systemd, TimeSync: h.TimeSync, Warnings: h.Warnings,
 		BinarySHA256: a.selfSHA,
 	}
+	if runtime.GOOS == "linux" {
+		d.NAT = a.natDiagnostics()
+	}
 	d.SecurityVersion = 1
 	if a.State.MeteringV1 {
 		d.MeterInventoryVersion = 1
@@ -603,6 +659,15 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 	d.NetworkBillingError = a.billingError
 	d.NetworkBindingErrors, d.NetworkGuardError = a.bindings.status()
 	d.NetworkForwardErrors = a.bindings.forwardStatus()
+	a.mu.Lock()
+	udp := a.udpSessions
+	a.mu.Unlock()
+	if runtime.GOOS == "linux" {
+		if udp.State == "" {
+			udp.State = "starting"
+		}
+		d.ForwardUDP = &udp
+	}
 	if runtime.GOOS == "linux" {
 		d.NetworkBillingVersion = agentproto.NetworkBillingVersion
 		d.NetworkBindingVersion = agentproto.NetworkBindingVersion
@@ -610,11 +675,13 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		d.ForwardDNSVersion = 1
 		d.ForwardPrivateVersion = 1
 		d.NetworkEgressVersion = agentproto.NetworkEgressVersion
+		d.NetworkProxyInboundVersion = agentproto.NetworkProxyInboundVersion
 		d.MitaVersion = networkconfig.MitaVersion
 		d.NetworkSSHVersion = agentproto.NetworkSSHVersion
 		d.NetworkWireGuardVersion = agentproto.NetworkWireGuardVersion
 		d.NetworkForwardVersion = agentproto.NetworkForwardVersion
 		d.ForwardTransportVersion = 1
+		d.ForwardUDPVersion = networkconfig.ForwardUDPVersion
 		d.NetworkTransportVersion = agentproto.NetworkTransportVersion
 	}
 	if policy, e := secureupdate.LoadPolicy(); e == nil {
@@ -795,6 +862,10 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 		return
 	}
 	defer release()
+	if err := a.rememberNATIntent(ds); err != nil {
+		a.Logger.Warn("persist NAT application intent", "err", err)
+		return
+	}
 	if err := a.rememberNetworkIntent(ds); err != nil {
 		a.Logger.Warn("persist network application intent", "err", err)
 		return
@@ -814,9 +885,17 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 	if !force && hasDesired && ds.Revision == a.State.AppliedRevision && ds.Hash == a.State.AppliedHash && a.State.ApplyError == "" && !a.bindings.needsApply() && proxyguard.Ready() == nil {
 		return
 	}
-	a.Logger.Info("applying desired state", "revision", ds.Revision, "nodes", len(ds.Nodes))
+	if a.applyFailure.matches(ds.Revision, ds.Hash) {
+		a.Logger.Debug("retrying desired state", "revision", ds.Revision)
+	} else {
+		a.Logger.Info("applying desired state", "revision", ds.Revision, "nodes", len(ds.Nodes))
+	}
 	details, err := a.apply(ctx, ds)
 	rep := agentproto.ApplyReport{Revision: ds.Revision, Hash: ds.Hash, Status: "applied", Details: details}
+	if a.State.NodeApplicationRevision == ds.Revision && a.State.NodeApplicationHash == ds.Hash {
+		rep.NodeApplications = a.State.NodeApplications
+		rep.NodeApplicationSequence = a.State.NodeApplicationSequence
+	}
 	if err != nil {
 		rep.Status, rep.Error = "failed", err.Error()
 		if errors.Is(err, agentwork.ErrPending) {
@@ -824,9 +903,12 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 		}
 		a.State.ApplyError = err.Error()
 		if !errors.Is(err, agentwork.ErrPending) {
-			a.Logger.Error("apply failed", "revision", ds.Revision, "err", err)
+			if a.applyFailure.record(ds.Revision, ds.Hash, err.Error(), time.Now()) {
+				a.Logger.Error("apply failed", "revision", ds.Revision, "code", applyFailureCode(err.Error()), "err", err)
+			}
 		}
 	} else {
+		a.applyFailure = applyFailureLog{}
 		a.State.AppliedRevision, a.State.AppliedHash = ds.Revision, ds.Hash
 		a.State.ApplyError = ""
 		a.mu.Lock()
@@ -834,7 +916,10 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 		a.mu.Unlock()
 		a.Logger.Info("applied", "revision", ds.Revision, "details", details)
 	}
-	_ = a.State.Save(a.StateDir)
+	if err := a.State.Save(a.StateDir); err != nil {
+		a.Logger.Error("persist application result", "err", err)
+		return
+	}
 	if local != nil {
 		return
 	} // next heartbeat reports the local apply result
@@ -845,12 +930,44 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 
 // apply converges the host. It keeps going after per-core failures so one
 // broken core does not take the others down, and returns a joined error.
-func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]string, error) {
-	var details []string
+func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details []string, applyErr error) {
+	natConverged := false
+	defer func() {
+		if applyErr != nil && !natConverged {
+			a.natReady = false
+			applyErr = errors.Join(applyErr, a.clearNAT(ctx))
+			if a.State.NATVersion > 0 {
+				applyErr = errors.Join(applyErr, a.invalidateNATApplications())
+			}
+		}
+	}()
 	var errs []error
 	note := func(format string, args ...any) { details = append(details, fmt.Sprintf(format, args...)) }
+	if openrc.Enabled() {
+		if err := validateOpenRCDesired(ds, a.State); err != nil {
+			return details, err
+		}
+		local := *ds
+		if _, err := os.Stat("/etc/alpine-release"); err == nil {
+			local.Tuning = alpineProxyTuning(ds.Tuning, effectiveMemoryTotal())
+			if local.Tuning != ds.Tuning {
+				note("Alpine 小内存限制：代理 %d MiB，Go %d MiB", local.Tuning.MemoryMaxMB, local.Tuning.GoMemLimitMB)
+			}
+		}
+		ds = &local
+		// A fresh OpenRC installation has never had process-accounted units.
+		// Persist this before identities, including when the first apply fails.
+		a.State.MeteringV1 = true
+	}
 
 	// Persist meter identities before any process can start producing bytes.
+	if openrc.Enabled() {
+		for _, n := range ds.Nodes {
+			if n.Core == "mieru" {
+				a.State.OpenRCMieruVersion = 1
+			}
+		}
+	}
 	if err := a.State.rememberMeters(ds.Nodes); err != nil {
 		return nil, err
 	}
@@ -864,6 +981,21 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 	}
 	success := false
 	defer func() { restore(success) }()
+	finalizableCores := map[string]bool{}
+	attemptedCores := map[string]bool{}
+	bindingsAdmissionFailed := false
+	egressAdmissionFailed := false
+	preparedNodes := ds.Nodes
+	defer func() {
+		if err := a.finishApplications(ds, preparedNodes, finalizableCores, attemptedCores, bindingsAdmissionFailed, egressAdmissionFailed); err != nil {
+			applyErr = errors.Join(applyErr, err)
+			success = false
+			natConverged = false
+		}
+		if bindingsAdmissionFailed {
+			success = false
+		}
+	}()
 	if !a.NFT.Available(ctx) {
 		return details, fmt.Errorf("nftables is required for shared-process node accounting")
 	}
@@ -922,6 +1054,13 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		}
 	}
 	if e := a.NFT.EnsureResourceEgress(ctx, ds.Nodes, groups, ds.Forwards, forwardGroup); e != nil {
+		egressAdmissionFailed = true
+		for _, n := range ds.Nodes {
+			attemptedCores[n.Core] = true
+		}
+		if len(ds.Forwards) > 0 {
+			attemptedCores["singbox"] = true
+		}
 		return details, fmt.Errorf("proxy egress protection unavailable: %w", e)
 	}
 	// Quota/retirement and root egress policy have already been enforced.
@@ -932,9 +1071,14 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 	if a.bindings != nil {
 		bindingTx, err = a.bindings.prepare(ctx, ds, groups)
 		if err != nil {
+			bindingsAdmissionFailed = true
+			for name := range a.bindingAffectedCores(ds) {
+				attemptedCores[name] = true
+			}
 			return details, errors.Join(fmt.Errorf("network protection: %w", err), a.stopBindingCores(ds))
 		}
 		coreNodes, coreForwards = bindingTx.nodes, bindingTx.forwards
+		preparedNodes = coreNodes
 		errs = append(errs, bindingTx.failures...)
 	} else {
 		if ds.NetworkForwardVersion > 0 {
@@ -965,8 +1109,13 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		byCore[n.Core] = append(byCore[n.Core], n)
 	}
 	appliedCores := map[string]bool{}
+	retainedCores := map[string]bool{}
 	for name, drv := range a.Drivers {
 		nodes := byCore[name]
+		forwards := coreForwards
+		if name != "singbox" {
+			forwards = nil
+		}
 		live := 0
 		for _, n := range nodes {
 			if !n.Blocked {
@@ -981,12 +1130,25 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 			v, ok := ds.Versions[key]
 			if !ok {
 				errs = append(errs, fmt.Errorf("missing trusted core version"))
+				if retained, ok := drv.(core.RetainedActivation); ok && retained.RetainedReady(ctx, ds, nodes, forwards) {
+					appliedCores[name], retainedCores[name] = true, true
+				} else {
+					attemptedCores[name] = true
+					errs = append(errs, drv.Stop(ctx))
+				}
 				continue
 			}
 			{
 				if changed, err := drv.EnsureInstalled(ctx, v); err != nil {
 					errs = append(errs, err)
 					note("%s: install failed: %v", name, err)
+					if retained, ok := drv.(core.RetainedActivation); ok && retained.RetainedReady(ctx, ds, nodes, forwards) {
+						appliedCores[name], retainedCores[name] = true, true
+						note("%s: verified current resources retained while installation waits", name)
+					} else {
+						attemptedCores[name] = true
+						errs = append(errs, drv.Stop(ctx))
+					}
 					continue
 				} else if changed {
 					note("%s: installed %s", name, v.Version)
@@ -995,6 +1157,7 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		}
 		var changed bool
 		var err error
+		attemptedCores[name] = true
 		if managed, ok := drv.(core.ResourceDriver); ok && name == "singbox" {
 			changed, err = managed.ApplyResources(ctx, ds, nodes, coreForwards)
 		} else if name == "singbox" && len(coreForwards) > 0 {
@@ -1005,6 +1168,13 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", name, err))
 			note("%s: apply failed: %v", name, err)
+			if retained, ok := drv.(core.RetainedActivation); ok && retained.RetainedReady(ctx, ds, nodes, forwards) {
+				appliedCores[name], retainedCores[name] = true, true
+				delete(attemptedCores, name)
+				note("%s: verified previous resources restored", name)
+			} else {
+				errs = append(errs, drv.Stop(ctx))
+			}
 			continue
 		}
 		if changed {
@@ -1012,14 +1182,50 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) ([]strin
 		}
 		appliedCores[name] = true
 	}
+	bindingsSafe := true
 	if bindingTx != nil {
 		if err := bindingTx.finish(ctx, appliedCores); err != nil {
+			bindingsAdmissionFailed = true
+			bindingsSafe = false
+			for name := range a.bindingAffectedCores(ds) {
+				attemptedCores[name] = true
+			}
 			errs = append(errs, fmt.Errorf("network activation: %w", err), a.stopBindingCores(ds))
 		}
 	}
-	if len(errs) == 0 {
-		if err := a.NFT.EnsureResourceIngress(ctx, ds.Nodes, ds.Forwards); err != nil {
+	if bindingsSafe {
+		// A failed independent core cannot prevent successful cores from opening
+		// their verified resources. Failed resources remain closed/pending.
+		ingressNodes := append([]agentproto.NodeSpec(nil), coreNodes...)
+		for i := range ingressNodes {
+			if !appliedCores[ingressNodes[i].Core] {
+				ingressNodes[i].Blocked = true
+			}
+		}
+		ingressForwards := append([]agentproto.ForwardSpec(nil), coreForwards...)
+		if !appliedCores["singbox"] {
+			for i := range ingressForwards {
+				ingressForwards[i].Blocked = true
+			}
+		}
+		if err := a.NFT.EnsureResourceIngress(ctx, ingressNodes, ingressForwards); err != nil {
+			for name := range retainedCores {
+				attemptedCores[name] = true
+			}
 			errs = append(errs, fmt.Errorf("节点端口开放失败: %w", err))
+		} else if err := a.syncNATForDesired(ctx, ds, ingressNodes, ingressForwards); err != nil {
+			for name := range retainedCores {
+				attemptedCores[name] = true
+			}
+			errs = append(errs, err)
+		} else {
+			natConverged = true
+			a.natReady = true
+			for name, applied := range appliedCores {
+				if !retainedCores[name] {
+					finalizableCores[name] = applied
+				}
+			}
 		}
 	}
 	if len(errs) == 0 && a.NFT.Exists(ctx) {
@@ -1118,4 +1324,11 @@ func (a *Agent) StatusSummary(ctx context.Context) string {
 		b += fmt.Sprintf("port %-6d rx=%d tx=%d\n", c.Port, c.Rx, c.Tx)
 	}
 	return b
+}
+
+func processMeterSource() string {
+	if openrc.Enabled() {
+		return "openrc-cgroup-v1"
+	}
+	return "systemd-v1"
 }

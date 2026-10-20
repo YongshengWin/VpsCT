@@ -244,3 +244,52 @@ func TestInterfaceArchiveRetainsIdentity(t *testing.T) {
 		t.Fatal("identity failed to return", err)
 	}
 }
+
+func TestManagedTransitAcceptsVLESSAndRequiresNewAgent(t *testing.T) {
+	for _, protocol := range []string{"vless", "trojan", "anytls", "hysteria2", "tuic", "ss"} {
+		t.Run(protocol, func(t *testing.T) {
+			s := openTest(t)
+			ctx := context.Background()
+			entry, diag, _ := readyNetworkFixture(t, s)
+			land, _, _ := readyNetworkFixture(t, s)
+			n, _ := s.GetNode(ctx, entry.NodeID)
+			ln, _ := s.GetNode(ctx, land.NodeID)
+			n.Protocol = protocol
+			n.ServerParams = []byte(`{"method":"aes-128-gcm","handshake_server":"handshake.example.test"}`)
+			if err := s.UpdateNode(ctx, &n); err != nil {
+				t.Fatal(err)
+			}
+			dns := networkconfig.Resolver{Transport: "udp", Address: "203.0.113.53", Port: 53}
+			in := TransitRequest{ID: strings.Repeat("c", 32), Protocol: "wireguard", Family: "ipv4", EntryNodeID: n.ID, ExpectedRevision: n.NetworkRevision, LandingServerID: *ln.ServerID, LandingAddress: "198.51.100.2", LandingPort: 51820, Outer: networkconfig.Direct{Family: "ipv4", DNS: dns}, DNS: dns}
+			sv, _ := s.GetServer(ctx, *ln.ServerID)
+			sv.PublicHost = in.LandingAddress
+			if err := s.UpdateServer(ctx, &sv); err != nil {
+				t.Fatal(err)
+			}
+			diag.NetworkEgressVersion = 1
+			diag.NetworkWireGuardVersion = 1
+			diag.MeterInventoryVersion = 1
+			writeNetworkDiagnostics(t, s, *n.ServerID, diag)
+			writeNetworkDiagnostics(t, s, *ln.ServerID, diag)
+			preview, err := s.PreviewManagedTransit(ctx, in)
+			if err != nil || preview.Ready {
+				t.Fatal("old agent admitted new inbound", err)
+			}
+			diag.NetworkProxyInboundVersion = 1
+			writeNetworkDiagnostics(t, s, *n.ServerID, diag)
+			preview, err = s.PreviewManagedTransit(ctx, in)
+			if err != nil || !preview.Ready {
+				t.Fatal("new agent rejected proxy inbound", err, preview.Checks)
+			}
+			in.ExpectedImpact = preview.Token
+			transit, err := s.CreateManagedTransit(ctx, in, domain.AuditEvent{})
+			if err != nil || transit.EntryNodeID != n.ID {
+				t.Fatal("transit failed", err)
+			}
+			got, _ := s.GetNode(ctx, n.ID)
+			if got.Protocol != protocol || string(got.ServerParams) != string(n.ServerParams) {
+				t.Fatal("changed the front protocol or credentials")
+			}
+		})
+	}
+}

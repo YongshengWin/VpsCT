@@ -69,7 +69,11 @@ func (s *Store) PublishDesired(ctx context.Context, expected int64, candidate *a
 		if err != nil {
 			return err
 		}
-		if generation != candidate.NetworkGeneration {
+		candidateGeneration := candidate.PublicationGeneration
+		if candidateGeneration == 0 {
+			candidateGeneration = candidate.NetworkGeneration
+		}
+		if generation != candidateGeneration {
 			return ErrDesiredConflict
 		}
 		if generation > 0 {
@@ -89,8 +93,15 @@ func (s *Store) PublishDesired(ctx context.Context, expected int64, candidate *a
 			return err
 		}
 		force = force || republish
-		if latest.Revision > 0 && latest.Hash == candidate.Hash && !force {
+		var publicationCurrent bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM server_network_generations WHERE server_id=? AND generation=published_generation)`, candidate.ServerID).Scan(&publicationCurrent); err != nil {
+			return err
+		}
+		if latest.Revision > 0 && latest.Hash == candidate.Hash && !force && publicationCurrent {
 			out = latest
+			if err := s.captureNodeCandidates(ctx, tx, out); err != nil {
+				return err
+			}
 			return s.attachNetworkOperations(ctx, tx, out, generation)
 		}
 		ds := *candidate
@@ -113,6 +124,9 @@ func (s *Store) PublishDesired(ctx context.Context, expected int64, candidate *a
 		}
 		out = domain.DesiredState{ID: id, ServerID: ds.ServerID, Revision: ds.Revision, Payload: payload, Hash: ds.Hash, Status: domain.DesiredPending, CreatedAt: now}
 		created = true
+		if err := s.captureNodeCandidates(ctx, tx, out); err != nil {
+			return err
+		}
 		return s.attachNetworkOperations(ctx, tx, out, generation)
 	})
 	if err != nil {

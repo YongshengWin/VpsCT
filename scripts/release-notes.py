@@ -25,9 +25,9 @@ print(f'''# VpsCT {version}
 
 ## 1. 安装控制端
 
-**本版不需要发布签名密钥、信任根或预置验证器。** 本页命令安装 **{version}**。始终安装最新正式版的通用命令见 [README](https://github.com/{repo}#11-安装面板)。
+**本版不需要发布签名密钥、信任根或预置验证器。** 本页命令安装 **{version}**。始终安装最新正式版的通用命令见 [README](https://github.com/{repo}#31-安装面板)。
 
-支持 Debian / Ubuntu、Linux amd64 / arm64。以下默认安装方式会自动配置 HTTPS，需要域名解析正确，且 80/443 端口空闲、可从公网访问。
+仅支持 Linux AMD64（x86_64）；原生控制端要求 Debian / Ubuntu。ARM 支持暂停，历史独立 ARM 附件已撤下，待真实机器验证后恢复。以下默认安装方式会自动配置 HTTPS，需要域名解析正确，且 80/443 端口空闲、可从公网访问。
 
 ```bash
 curl -fLsS --proto '=https' --proto-redir '=https' {base}/install.sh -o install-vpsct.sh &&

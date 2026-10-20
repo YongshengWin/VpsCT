@@ -4,6 +4,7 @@ package agent
 
 import (
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 	"encoding/hex"
 	"encoding/json"
@@ -22,6 +23,10 @@ type MeterIdentity struct {
 }
 
 type State struct {
+	ForwardUDPVersion       int                              `json:"forward_udp_version,omitempty"`
+	OpenRCMieruVersion      int                              `json:"openrc_mieru_version,omitempty"`
+	OpenRCVersion           int                              `json:"openrc_version,omitempty"`
+	NATVersion              int                              `json:"nat_version,omitempty"`
 	ListenBindingVersion    int                              `json:"listen_binding_version,omitempty"`
 	ForwardDNSVersion       int                              `json:"forward_dns_version,omitempty"`
 	ForwardPrivateVersion   int                              `json:"forward_private_version,omitempty"`
@@ -46,18 +51,22 @@ type State struct {
 	PendingSettlement       *agentproto.Heartbeat            `json:"pending_settlement,omitempty"`
 	MeterNodes              []MeterIdentity                  `json:"meter_nodes,omitempty"`
 
-	MeteringV1      bool      `json:"metering_v1,omitempty"`
-	ServerURL       string    `json:"server_url"`
-	AgentToken      string    `json:"agent_token"`
-	ServerID        int64     `json:"server_id"`
-	ServerName      string    `json:"server_name"`
-	PollIntervalSec int       `json:"poll_interval_sec"`
-	AppliedRevision int64     `json:"applied_revision"`
-	AppliedHash     string    `json:"applied_hash"`
-	ApplyError      string    `json:"apply_error,omitempty"`
-	CounterNonce    string    `json:"counter_nonce"` // changes whenever the nft table is recreated
-	ConnlogSeq      int64     `json:"connlog_seq"`
-	EnrolledAt      time.Time `json:"enrolled_at"`
+	MeteringV1              bool                         `json:"metering_v1,omitempty"`
+	ServerURL               string                       `json:"server_url"`
+	AgentToken              string                       `json:"agent_token"`
+	ServerID                int64                        `json:"server_id"`
+	ServerName              string                       `json:"server_name"`
+	PollIntervalSec         int                          `json:"poll_interval_sec"`
+	AppliedRevision         int64                        `json:"applied_revision"`
+	AppliedHash             string                       `json:"applied_hash"`
+	ApplyError              string                       `json:"apply_error,omitempty"`
+	NodeApplicationRevision int64                        `json:"node_application_revision,omitempty"`
+	NodeApplicationHash     string                       `json:"node_application_hash,omitempty"`
+	NodeApplicationSequence int64                        `json:"node_application_sequence,omitempty"`
+	NodeApplications        []agentproto.NodeApplication `json:"node_applications,omitempty"`
+	CounterNonce            string                       `json:"counter_nonce"` // changes whenever the nft table is recreated
+	ConnlogSeq              int64                        `json:"connlog_seq"`
+	EnrolledAt              time.Time                    `json:"enrolled_at"`
 }
 
 // StatePath returns the state file path.
@@ -101,10 +110,19 @@ func LoadState(dir string) (*State, error) {
 	if s.NetworkBindingVersion != 0 && s.NetworkBindingVersion != agentproto.NetworkBindingVersion {
 		return nil, errors.New("unsupported persisted network binding version")
 	}
+	if s.NATVersion < 0 || s.NATVersion > agentproto.NATVersion {
+		return nil, errors.New("unsupported persisted NAT version")
+	}
+	if s.OpenRCMieruVersion < 0 || s.OpenRCMieruVersion > 1 || s.OpenRCVersion < 0 || s.OpenRCVersion > 1 {
+		return nil, errors.New("unsupported persisted OpenRC version")
+	}
 	for _, version := range []int{s.ListenBindingVersion, s.ForwardDNSVersion, s.ForwardPrivateVersion, s.ForwardTransportVersion} {
 		if version < 0 || version > 1 {
 			return nil, errors.New("unsupported persisted network feature version")
 		}
+	}
+	if s.ForwardUDPVersion < 0 || s.ForwardUDPVersion > networkconfig.ForwardUDPVersion {
+		return nil, errors.New("unsupported persisted UDP feature version")
 	}
 	if s.NetworkEgressVersion != 0 && (s.NetworkEgressVersion != agentproto.NetworkEgressVersion || s.NetworkBindingVersion != agentproto.NetworkBindingVersion) {
 		return nil, errors.New("unsupported persisted network egress version")

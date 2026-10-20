@@ -38,8 +38,9 @@ type Binding struct {
 }
 
 type Plan struct {
-	Token    string    `json:"token"`
-	Bindings []Binding `json:"bindings"`
+	UDPVersion int       `json:"udp_version,omitempty"`
+	Token      string    `json:"token"`
+	Bindings   []Binding `json:"bindings"`
 }
 
 func New(bindings []Binding) (Plan, error) {
@@ -48,6 +49,11 @@ func New(bindings []Binding) (Plan, error) {
 		return Plan{}, err
 	}
 	p := Plan{Token: hex.EncodeToString(token[:]), Bindings: bindings}
+	for _, b := range bindings {
+		if b.Forward != nil && b.Forward.MaxUDPSessions > 0 {
+			p.UDPVersion = networkconfig.ForwardUDPVersion
+		}
+	}
 	if err := p.Validate(); err != nil {
 		return Plan{}, err
 	}
@@ -57,6 +63,9 @@ func New(bindings []Binding) (Plan, error) {
 func SetName(id int64) string { return fmt.Sprintf("n%d_ready", id) }
 
 func (p Plan) Validate() error {
+	if p.UDPVersion != 0 && p.UDPVersion != networkconfig.ForwardUDPVersion {
+		return errors.New("unsupported UDP guard version")
+	}
 	// An in-flight replacement may fence both retired and new identities.
 	if !networkconfig.ValidIdentity(p.Token) || len(p.Bindings) > 2*(agentbudget.ActiveNodes+agentbudget.ActiveForwards) {
 		return errors.New("invalid network guard plan")
@@ -162,6 +171,14 @@ func (p Plan) Validate() error {
 				}
 			}
 		}
+		if h := b.Applied.Handshake; h != nil {
+			if b.Applied.SOCKS5 == nil || b.Core != "singbox" || h.Host == "" {
+				return errors.New("Reality handshake lacks a guarded proxy")
+			}
+			if err := h.Validate(); err != nil {
+				return err
+			}
+		}
 		if endpoint := b.Applied.SOCKS5; endpoint != nil {
 			if b.Core != "singbox" || b.Applied.Direct == nil {
 				return errors.New("SOCKS5 guard requires singbox and a resolved outer binding")
@@ -232,6 +249,13 @@ func (p Plan) HealthyResources(snapshot *agentproto.NetworkSnapshot, now time.Ti
 				continue
 			}
 		}
+		if h := b.Applied.Handshake; h != nil {
+			if err := netinventory.ValidateSOCKS5Endpoint(networkconfig.ResolvedSOCKS5{Address: h.Address, Port: h.Port}, snapshot); err != nil {
+				failures[resource] = err.Error()
+				continue
+			}
+			r.Handshake = h
+		}
 		r.ForwardTarget = b.Applied.ForwardTarget
 		if r.CollectorID != b.Applied.CollectorID || r.BootID != b.Applied.BootID || r.Sequence < b.Applied.Sequence {
 			failures[resource] = "接口观测身份已变化，等待重新应用"
@@ -254,6 +278,10 @@ func (p Plan) HealthyResources(snapshot *agentproto.NetworkSnapshot, now time.Ti
 func (p Plan) SamePaths(next Plan) bool {
 	strip := func(list []Binding) []Binding {
 		for i := range list {
+			if h := list[i].Applied.Handshake; h != nil {
+				copy := h.WithoutDNSLifetime()
+				list[i].Applied.Handshake = &copy
+			}
 			if pin := list[i].Applied.ForwardTarget; pin != nil {
 				copy := pin.WithoutDNSLifetime()
 				list[i].Applied.ForwardTarget = &copy

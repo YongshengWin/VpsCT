@@ -9,17 +9,37 @@ echo "==> web dependencies and build (required before Go embeds the SPA)"
 echo "==> go vet"
 go vet ./...
 
+echo "==> agent API contract freshness"
+go run ./scripts/generate-agent-contracts.go -check
+
+echo "==> agent skill HTTP client safety"
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/vpsct/scripts -p 'test_*.py'
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills -p 'test_install*.py'
+
 echo "==> go test"
-go test ./... -count=1
+test_parallelism=${CTLVPS_TEST_PARALLELISM:-}
+# Keep the Go default unless the caller selects bounded package concurrency.
+if [[ -n "$test_parallelism" ]]; then
+  [[ "$test_parallelism" =~ ^[1-9][0-9]*$ ]] || { echo 'CTLVPS_TEST_PARALLELISM must be a positive integer' >&2; exit 1; }
+  if [[ ${CTLVPS_TEST_PROGRESS:-0} == 1 ]]; then
+    python3 scripts/ci-go-test.py -p "$test_parallelism" ./... -count=1 -timeout=5m
+  else
+    go test -p "$test_parallelism" ./... -count=1 -timeout=5m
+  fi
+else
+  if [[ ${CTLVPS_TEST_PROGRESS:-0} == 1 ]]; then
+    python3 scripts/ci-go-test.py ./... -count=1 -timeout=5m
+  else
+    go test ./... -count=1 -timeout=5m
+  fi
+fi
 
 echo "==> go build (with embedded web)"
 check_dir=$(mktemp -d)
 trap 'rm -rf "$check_dir"' EXIT
 CGO_ENABLED=0 go build -o "$check_dir/ctlvpsd" ./cmd/ctlvpsd
-for arch in amd64 arm64; do
-  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvpsd-linux-$arch" ./cmd/ctlvpsd
-  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvps-agent-linux-$arch" ./cmd/ctlvps-agent
-done
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$check_dir/ctlvpsd-linux-amd64" ./cmd/ctlvpsd
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$check_dir/ctlvps-agent-linux-amd64" ./cmd/ctlvps-agent
 
 echo "==> installer validation"
 bash -n install.sh uninstall.sh

@@ -196,8 +196,8 @@ function CoresTab() {
       <details className="mt-4 rounded-xl border border-border/70 px-3 py-2">
         <summary className="cursor-pointer text-sm font-medium text-muted-foreground">高级：下载校验（SHA-256，可留空）</summary>
         <div className="mt-3 grid gap-3">
-          <Field label="sing-box SHA-256" hint="amd64=哈希,arm64=哈希"><Input className="mono" value={s.value("core.singbox_sha256")} onChange={(e) => s.set("core.singbox_sha256", e.target.value)} placeholder="可留空" /></Field>
-          <Field label="mita SHA-256" hint="amd64=哈希,arm64=哈希；默认版本留空使用内置官方校验和。"><Input className="mono" value={s.value("core.mita_sha256")} onChange={e=>s.set("core.mita_sha256",e.target.value)} /></Field>
+          <Field label="sing-box SHA-256" hint="amd64=哈希"><Input className="mono" value={s.value("core.singbox_sha256")} onChange={(e) => s.set("core.singbox_sha256", e.target.value)} placeholder="可留空" /></Field>
+          <Field label="mita SHA-256" hint="amd64=哈希；默认版本留空使用内置官方校验和。"><Input className="mono" value={s.value("core.mita_sha256")} onChange={e=>s.set("core.mita_sha256",e.target.value)} /></Field>
           <Field label="snell-server SHA-256"><Input className="mono" value={s.value("core.snell_sha256")} onChange={(e) => s.set("core.snell_sha256", e.target.value)} placeholder="可留空" /></Field>
         </div>
       </details>
@@ -247,7 +247,7 @@ function SecurityTab() {
         <CardHeader><CardTitle>最近订阅访问</CardTitle></CardHeader>
         <CardContent>
           {access.isLoading ? <Spinner /> : !access.data?.length ? <p className="text-sm text-muted-foreground">无</p> : (
-            <div className="max-h-[32rem] overflow-auto">
+            <div className="max-h-128 overflow-auto">
               <Table>
                 <thead><tr className="border-b"><Th>时间</Th><Th>IP</Th><Th>格式</Th><Th>状态</Th><Th></Th></tr></thead>
                 <tbody>{access.data.map((l) => (

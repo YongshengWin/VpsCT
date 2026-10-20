@@ -49,7 +49,7 @@ export function CoreUpgradeNotice() {
       <p className="mt-1 text-sm leading-6 text-muted-foreground">{data.pin_compatible ? `${count} 台服务器尚未确认完成，请查看实际版本与运行状态。` : `SS-2022 出口需要官方 ${data.recommended_version} 或兼容的 1.14.x。${count} 台服务器待检查；暂不使用此功能可关闭提示。`}</p>
       <Link to="/settings?tab=cores" className="mt-2 inline-block text-sm font-medium text-primary hover:underline">{data.pin_compatible ? "查看升级状态" : "查看升级建议"} →</Link>
     </div>
-    <button type="button" aria-label="关闭本次内核升级提示" title="本浏览器不再提示同一条升级建议；设置页仍可查看" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary" onClick={() => {
+    <button type="button" aria-label="关闭本次内核升级提示" title="本浏览器不再提示同一条升级建议；设置页仍可查看" className="rounded-md p-1.5 text-muted-foreground hover:bg-accent focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary" onClick={() => {
       setDismissed(key);
       try { localStorage.setItem(key, "1"); } catch { /* Keep the current session dismissible. */ }
     }}><X className="h-4 w-4" /></button>
@@ -75,10 +75,10 @@ export function CoreUpgradeDetails({ onSelect, selectedVersion }: { onSelect: (v
     {data.servers.length > 0 ? <div className="mt-5">
       <p className="mb-2 text-sm font-medium">共 {data.servers.length} 台服务器</p>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <button type="button" onClick={() => setFilter("all")} className="rounded-xl border border-border/70 p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"><span className="block text-xl font-semibold tabular-nums">{data.servers.length}</span><span className="text-xs text-muted-foreground">全部服务器</span></button>
+        <button type="button" onClick={() => setFilter("all")} className="rounded-xl border border-border/70 p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary"><span className="block text-xl font-semibold tabular-nums">{data.servers.length}</span><span className="text-xs text-muted-foreground">全部服务器</span></button>
         {(Object.keys(statusLabels) as CoreServerStatus[]).map(status => {
           const count = data.servers.filter(s => s.status === status).length;
-          return <button key={status} type="button" disabled={!count} onClick={() => setFilter(status)} className="rounded-xl border border-border/70 p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-default disabled:opacity-50">
+          return <button key={status} type="button" disabled={!count} onClick={() => setFilter(status)} className="rounded-xl border border-border/70 p-3 text-left transition-colors hover:bg-accent/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-default disabled:opacity-50">
             <span className="block text-xl font-semibold tabular-nums">{count}</span>
             <span className="text-xs text-muted-foreground">{statusLabels[status]}</span>
           </button>;
@@ -121,7 +121,7 @@ function CoreServerDialog({ servers, initialFilter, onClose }: { servers: CoreSe
     </div>
     <ul aria-label="服务器搜索结果" className="divide-y divide-border/60">
       {view.rows.map(s => <li key={s.id} className="flex items-center justify-between gap-3 py-3">
-        <div className="min-w-0"><Link to={`/servers/${s.id}`} onClick={onClose} className="block break-words text-sm font-medium hover:text-primary">{s.name}</Link><p className="mt-1 text-xs text-muted-foreground">编号 {s.id} · {s.version || "版本未知"}</p></div>
+        <div className="min-w-0"><Link to={`/servers/${s.id}`} onClick={onClose} className="block wrap-break-word text-sm font-medium hover:text-primary">{s.name}</Link><p className="mt-1 text-xs text-muted-foreground">编号 {s.id} · {s.version || "版本未知"}</p></div>
         <span title={s.message} className={`shrink-0 text-xs ${s.status === "ready" ? "text-emerald-600 dark:text-emerald-400" : s.status === "error" ? "text-destructive" : "text-muted-foreground"}`}>{statusLabels[s.status]}</span>
       </li>)}
     </ul>

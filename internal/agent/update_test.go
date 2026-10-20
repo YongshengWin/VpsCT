@@ -61,6 +61,9 @@ func TestApplySelfUpdate(t *testing.T) {
 	v := secureupdate.Verifier{Policy: secureupdate.Policy{MetadataURL: metadataServer.URL}, Root: root, Dir: filepath.Join(dir, "cache"), Client: metadataServer.Client()}
 	oldVerifier := verifyRelease
 	verifyRelease = func(ctx context.Context, component, version string, b io.ReadSeeker) error {
+		if version != "v1.0.0" {
+			t.Fatalf("update verification drifted to another release: %q", version)
+		}
 		return v.VerifyReader(ctx, component, version, runtime.GOARCH, b)
 	}
 	t.Cleanup(func() { verifyRelease = oldVerifier })
@@ -70,7 +73,7 @@ func TestApplySelfUpdate(t *testing.T) {
 	t.Cleanup(func() { executablePath = old })
 
 	if err := applySelfUpdateInline(context.Background(), srv.URL, agentproto.AgentUpdateSpec{
-		SHA256: sha, URL: "/agent",
+		Version: "v1.0.0 (fixture)", SHA256: sha, URL: "/agent",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +114,7 @@ func TestFailedStreamingUpdatePreservesExecutable(t *testing.T) {
 			if failure == "checksum" {
 				digest = strings.Repeat("0", 64)
 			}
-			if err := applySelfUpdateInline(context.Background(), "https://example.test", agentproto.AgentUpdateSpec{SHA256: digest, URL: "/dl/agent/linux-fixture"}); err == nil {
+			if err := applySelfUpdateInline(context.Background(), "https://example.test", agentproto.AgentUpdateSpec{Version: "v1.0.0", SHA256: digest, URL: "/dl/agent/linux-fixture"}); err == nil {
 				t.Fatal("failure accepted")
 			}
 			got, _ := os.ReadFile(target)

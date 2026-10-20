@@ -20,7 +20,7 @@ info() { printf '==> %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64 / arm64）
+VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64）
 
 首次安装并配置 Caddy HTTPS：
   sudo bash install.sh --domain panel.example.com
@@ -126,9 +126,25 @@ restore_previous() {
   [[ -f "$PREVIOUS/VERIFIED-SHA256" && ! -L "$PREVIOUS/VERIFIED-SHA256" ]] || return 1
   "$WORK/backup-tool" check-recovery "$WORK/recovery.json" || return 1
   [[ ! -L "$INSTALL_DIR/data" ]] || return 1
-  rm -rf --one-file-system -- "$INSTALL_DIR/data" || return 1
+  # Authenticate and fully extract the recovery copy before touching live data.
+  # Keep the failed upgrade's data for diagnosis and another recovery attempt.
   "$WORK/backup-tool" backup open /etc/ctlvps/secrets.key "$BACKUP/data.tar.gz.enc" "$WORK/restore.tar.gz" || return 1
-  tar -xzf "$WORK/restore.tar.gz" -C "$INSTALL_DIR" || return 1
+  local restore_dir
+  restore_dir=$(mktemp -d "$INSTALL_DIR/.restore.XXXXXXXX") || return 1
+  if ! tar -xzf "$WORK/restore.tar.gz" -C "$restore_dir" || [[ ! -d "$restore_dir/data" || -L "$restore_dir/data" ]]; then
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  if [[ -e "$BACKUP/failed-upgrade-data" ]] || ! mv -- "$INSTALL_DIR/data" "$BACKUP/failed-upgrade-data"; then
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  if ! mv -- "$restore_dir/data" "$INSTALL_DIR/data"; then
+    mv -- "$BACKUP/failed-upgrade-data" "$INSTALL_DIR/data" || true
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  rm -rf --one-file-system -- "$restore_dir"
   cp -- "$BACKUP/ctlvpsd.env" "$ENV_FILE" || return 1
   if ! grep -q "^CTLVPS_SECRETS_KEY_FILE=" "$ENV_FILE"; then printf "\nCTLVPS_SECRETS_KEY_FILE=/etc/ctlvps/secrets.key\n" >> "$ENV_FILE"; fi
   cp -- "$BACKUP/ctlvpsd.service" "$SERVICE_FILE" || return 1
@@ -140,7 +156,7 @@ restore_previous() {
   systemctl start ctlvpsd || return 1
   local attempt
   for ((attempt = 0; attempt < 30; attempt++)); do
-    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 2 "http://$LISTEN/healthz" > /dev/null; then
+    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 6 "http://$LISTEN/healthz?ready=1" > /dev/null; then
       if [[ -f "$BACKUP/ctlvps-maintenance.service" ]]; then systemctl restart ctlvps-maintenance || return 1; fi
       return 0
     fi
@@ -151,6 +167,11 @@ restore_previous() {
 
 check_environment() {
   [[ "$(uname -s)" == Linux ]] || die '仅支持 Linux'
+  case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) die "ARM 支持已暂停；当前仅支持 Linux AMD64" ;;
+    *) die '不支持的 CPU 架构' ;;
+  esac
   [[ "$(id -u)" == 0 ]] || die '请使用 root 或 sudo 运行'
   command -v systemctl >/dev/null || die '需要 systemd'
   [[ -d /run/systemd/system ]] || die 'systemd 必须正在运行'
@@ -159,11 +180,6 @@ check_environment() {
   # shellcheck disable=SC1091
   distro=$(. /etc/os-release; printf '%s' "${ID:-}")
   case "$distro" in debian|ubuntu) ;; *) die '首版支持 Debian / Ubuntu；其他系统请手动部署' ;; esac
-  case "$(uname -m)" in
-    x86_64|amd64) ARCH=amd64 ;;
-    aarch64|arm64) ARCH=arm64 ;;
-    *) die '不支持的 CPU 架构' ;;
-  esac
   command -v flock >/dev/null || die '缺少 flock，请安装 util-linux'
   exec 9>/run/lock/ctlvps-install.lock
   flock -n 9 || die '已有另一个安装器正在运行'
@@ -340,7 +356,7 @@ main() {
   tar --extract --gzip --file "$WORK/$asset" --directory "$WORK/package" --no-same-owner --no-same-permissions
   printf "%s\n" "$expected" > "$WORK/package/VERIFIED-SHA256"
   local file
-  for file in ctlvpsd agents/ctlvps-agent-linux-amd64 agents/ctlvps-agent-linux-arm64 ctlvpsd.service VERSION REPOSITORY; do
+  for file in ctlvpsd agents/ctlvps-agent-linux-amd64 ctlvpsd.service VERSION REPOSITORY; do
     [[ -f "$WORK/package/$file" && ! -L "$WORK/package/$file" ]] || die "发行包缺少常规文件：$file"
   done
   [[ "$(cat "$WORK/package/VERSION")" == "$VERSION" && "$(cat "$WORK/package/REPOSITORY")" == "$REPOSITORY" ]] || die '发行包版本或仓库不匹配'
@@ -434,7 +450,7 @@ EOF
   # --now does not restart an already active service; upgrades were stopped above.
   local ready=0 attempt
   for ((attempt = 0; attempt < 30; attempt++)); do
-    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 2 "http://$LISTEN/healthz" > /dev/null; then
+    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 6 "http://$LISTEN/healthz?ready=1" > /dev/null; then
       ready=1; break
     fi
     sleep 1

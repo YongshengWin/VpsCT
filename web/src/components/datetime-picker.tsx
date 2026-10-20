@@ -213,7 +213,7 @@ export function DateTimeInput({ value, onChange, withTime = true, placeholder, d
         onClick={() => (open ? hide() : show())}
         onKeyDown={onKeyDown}
         className={cn(
-          "flex h-10 w-full items-center gap-2.5 rounded-xl border border-transparent bg-muted px-3.5 text-left text-sm tabular-nums transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-10 w-full items-center gap-2.5 rounded-xl border border-transparent bg-muted px-3.5 text-left text-sm tabular-nums transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
           selected && "pr-9",
         )}
       >
@@ -241,7 +241,7 @@ export function DateTimeInput({ value, onChange, withTime = true, placeholder, d
             ref={popRef}
             role="dialog"
             data-floating=""
-            className="fixed z-[60] animate-fade-up rounded-2xl border border-border/60 bg-card p-3 shadow-lift dark:border-border"
+            className="fixed z-60 animate-fade-up rounded-2xl border border-border/60 bg-card p-3 shadow-lift dark:border-border"
             style={{ left: pos.left, top: pos.top, width: POP_W }}
           >
             {/* month navigation */}
@@ -466,7 +466,7 @@ export function ResetDayInput({ value, onChange, placeholder = "不重置", disa
         data-state={open ? "open" : "closed"}
         onClick={() => (open ? hide() : show())}
         className={cn(
-          "flex h-10 w-full items-center gap-2.5 rounded-xl border border-transparent bg-muted px-3.5 text-left text-sm tabular-nums transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-10 w-full items-center gap-2.5 rounded-xl border border-transparent bg-muted px-3.5 text-left text-sm tabular-nums transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
           day > 0 && "pr-9",
         )}
       >
@@ -491,7 +491,7 @@ export function ResetDayInput({ value, onChange, placeholder = "不重置", disa
             ref={popRef}
             role="dialog"
             data-floating=""
-            className="fixed z-[60] animate-fade-up rounded-2xl border border-border/60 bg-card p-3 shadow-lift dark:border-border"
+            className="fixed z-60 animate-fade-up rounded-2xl border border-border/60 bg-card p-3 shadow-lift dark:border-border"
             style={{ left: pos.left, top: pos.top, width: RESET_POP_W }}
           >
             <p className="px-1 text-sm font-bold">每月哪一天重置</p>

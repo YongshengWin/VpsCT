@@ -19,6 +19,7 @@ import (
 	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 	"ctlvps/internal/store"
+	"ctlvps/internal/traffic"
 )
 
 const agentKey ctxKey = 2
@@ -130,6 +131,9 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if err := agentproto.ValidateNetworkDiagnostics(hb.Diagnostics); err != nil {
 		return httpx.BadRequest(err.Error())
 	}
+	if err := agentproto.ValidateNAT(hb.Diagnostics.NAT); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
 	if hb.NetworkBillingRevision < 0 || hb.NetworkBillingRevision > 1<<53 || len(hb.Diagnostics.NetworkBillingError) > 512 {
 		return httpx.BadRequest("计费上报字段无效")
 	}
@@ -197,12 +201,25 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if err := a.Store.Heartbeat(ctx, ac.Agent.ID, hb.Version, ipv4, ipv6, metrics, diag); err != nil {
 		return err
 	}
-	if hb.AppliedRevision > 0 || hb.ApplyError != "" {
-		_ = a.Store.SetAgentApplied(ctx, ac.Agent.ID, hb.AppliedRevision, hb.AppliedHash, hb.ApplyError)
-	}
+	a.reconcileAgentMaintenance(ctx, ac.Server.ID, agentReportedSHA(hb, hb.Diagnostics))
 	status := hb.ApplyStatus
-	if hb.ApplyError != "" {
+	if hb.ApplyError != "" && status != "pending" {
 		status = "failed"
+	}
+	if len(hb.NodeApplications) > 0 {
+		if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.NodeApplicationRevision, hb.NodeApplicationHash, status, hb.NodeApplications, hb.NodeApplicationSequence); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+	} else if status == "applied" {
+		if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, nil, 0); err != nil {
+			return httpx.BadRequest(err.Error())
+		}
+	}
+	if err := a.Store.RecordAgentApplication(ctx, ac.Agent.ID, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, hb.ApplyError, hb.NodeApplicationSequence); err != nil {
+		if !errors.Is(err, store.ErrStaleApplication) {
+			return httpx.BadRequest(err.Error())
+		}
+		status = "pending"
 	}
 	if err := a.Store.RecordNetworkApply(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status); err != nil {
 		return err
@@ -265,27 +282,89 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 
 // checkServerQuota alerts (and optionally blocks) when a VPS exceeds its quota.
 func (a *API) checkServerQuota(ctx context.Context, s domain.Server) {
+	// Authentication may have loaded this record before a concurrent admin edit.
+	// Re-evaluate the current policy, and never save the old full server record.
+	current, err := a.Store.GetServer(ctx, s.ID)
+	if err != nil {
+		return
+	}
+	s = current
 	if s.QuotaBytes <= 0 {
 		return
+	}
+	observedAt := a.Traffic.Now()
+	periodStart := traffic.PeriodStart(observedAt, s.QuotaResetDay)
+	var calibration *store.ServerUsageCalibration
+	if !periodStart.IsZero() {
+		c, found, err := a.Store.GetServerUsageCalibration(ctx, s.ID, periodStart)
+		if err != nil {
+			return
+		}
+		if found {
+			calibration = &c
+		}
 	}
 	u, err := a.Traffic.ServerUsage(ctx, s)
 	if err != nil {
 		return
 	}
+	if observedAt.UTC().Format("2006-01-02") != a.Traffic.Now().UTC().Format("2006-01-02") ||
+		(!periodStart.IsZero() && !periodStart.Equal(u.PeriodStart)) {
+		return
+	}
+	// ServerUsage reads calibration separately from the raw counters. If the
+	// reading changed during those reads, do not act on a mixed snapshot.
+	if calibration == nil {
+		if u.QuotaCalibratedUsageBytes != nil || u.QuotaCalibratedAt != nil {
+			return
+		}
+	} else {
+		c := calibration
+		if u.QuotaCalibratedUsageBytes == nil || *u.QuotaCalibratedUsageBytes != c.CalibratedBytes ||
+			u.QuotaCalibrationObservedBytes == nil || *u.QuotaCalibrationObservedBytes != c.ObservedBytes ||
+			u.QuotaCalibratedAt == nil || !u.QuotaCalibratedAt.Equal(c.CalibratedAt) {
+			return
+		}
+		if c.HasProviderDirections {
+			if u.QuotaCalibratedInboundBytes == nil || *u.QuotaCalibratedInboundBytes != c.ProviderUpBytes ||
+				u.QuotaCalibratedOutboundBytes == nil || *u.QuotaCalibratedOutboundBytes != c.ProviderDownBytes {
+				return
+			}
+		} else if u.QuotaCalibratedInboundBytes != nil || u.QuotaCalibratedOutboundBytes != nil {
+			return
+		}
+	}
 	pct := a.Store.GetSettingInt(ctx, domain.SettingQuotaAlertPct, 80)
 	if a.Notify != nil && u.Percent >= float64(pct) {
-		key := fmt.Sprintf("quota:%d:%s", s.ID, u.PeriodStart.Format("2006-01-02"))
+		key := fmt.Sprintf("quota:%d:%s:%s:%d", s.ID, u.PeriodStart.Format("2006-01-02"), s.QuotaBilling, s.QuotaBytes)
 		if u.OverQuota {
 			key += ":over"
 		}
-		a.Notify.SendDedup(ctx, key, 24*time.Hour, fmt.Sprintf("⚠️ %s 本期流量已用 %.1f%% (%s / %s)", s.Name, u.Percent, humanBytes(u.Billed), humanBytes(u.Quota)))
+		a.Notify.SendDedup(ctx, key, 24*time.Hour, fmt.Sprintf("⚠️ %s 本期%s流量已用 %.1f%% (%s / %s)", s.Name, serverQuotaBillingLabel(s.QuotaBilling), u.Percent, humanBytes(u.Billed), humanBytes(u.Quota)))
 	}
 	action := a.Store.GetSetting(ctx, "quota.action", "alert")
 	if u.OverQuota && (action == "disable" || action == "stop") && s.Enabled {
-		s.Enabled = false
-		_ = a.Store.UpdateServer(ctx, &s)
+		changed, err := a.Store.DisableServerIfQuotaUnchanged(ctx, store.ServerQuotaSnapshot{
+			Server: s, ObservedAt: observedAt, PeriodStart: u.PeriodStart, Calibration: calibration,
+		}, a.Traffic.Now)
+		if err != nil || !changed {
+			return
+		}
 		_, _, _ = a.Desired.Publish(ctx, s.ID)
 		_ = a.Store.AddAudit(ctx, domain.AuditEvent{Action: "server.auto_disable", Target: s.Name, Detail: mustJSON(map[string]any{"billed": u.Billed, "quota": u.Quota})})
+	}
+}
+
+func serverQuotaBillingLabel(mode string) string {
+	switch mode {
+	case domain.BillingUp:
+		return "入站计费"
+	case domain.BillingDown:
+		return "出站计费"
+	case domain.BillingMax:
+		return "较大方向计费"
+	default:
+		return "入站+出站计费"
 	}
 }
 
@@ -413,6 +492,9 @@ func (a *API) agentDesired(w http.ResponseWriter, r *http.Request) error {
 	if forwardVersion > 0 && r.Header.Get(agentproto.NetworkForwardHeader) != fmt.Sprint(forwardVersion) {
 		return httpx.E(409, "agent_upgrade_required", "此服务器存在固定转发或清理任务，需要支持该配置版本的 agent")
 	}
+	if ds.ForwardUDPVersion > 0 && r.Header.Get(networkconfig.ForwardUDPHeader) != fmt.Sprint(networkconfig.ForwardUDPVersion) {
+		return httpx.E(409, "agent_upgrade_required", "UDP 固定转发需要支持会话管理的新 agent，请先升级")
+	}
 	if q := r.URL.Query().Get("if_not_revision"); q != "" && q == fmt.Sprint(rec.Revision) {
 		w.WriteHeader(http.StatusNotModified)
 		return nil
@@ -429,23 +511,28 @@ func (a *API) agentApplyReport(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.Decode(r, &rep); err != nil {
 		return err
 	}
+	status := rep.Status
+	if rep.Error != "" && status != "pending" {
+		status = "failed"
+	}
+	if err := a.Store.RecordNodeApplications(r.Context(), ac.Server.ID, rep.Revision, rep.Hash, status, rep.NodeApplications, rep.NodeApplicationSequence); err != nil {
+		return httpx.BadRequest(err.Error())
+	}
+	if err := a.Store.RecordAgentApplication(r.Context(), ac.Agent.ID, ac.Server.ID, rep.Revision, rep.Hash, rep.Status, rep.Error, rep.NodeApplicationSequence); err != nil {
+		if errors.Is(err, store.ErrStaleApplication) {
+			httpx.NoContent(w)
+			return nil
+		}
+		return httpx.BadRequest(err.Error())
+	}
 	st := domain.DesiredApplied
-	if rep.Status == "pending" {
+	if status == "pending" {
 		st = domain.DesiredPending
-	} else if rep.Status != "applied" {
+	} else if status != "applied" {
 		st = domain.DesiredFailed
 	}
 	if err := a.Store.MarkDesiredState(r.Context(), ac.Server.ID, rep.Revision, st, rep.Error); err != nil {
 		return err
-	}
-	if st != domain.DesiredPending {
-		if err := a.Store.SetAgentApplied(r.Context(), ac.Agent.ID, rep.Revision, rep.Hash, rep.Error); err != nil {
-			return err
-		}
-	}
-	status := rep.Status
-	if rep.Error != "" {
-		status = "failed"
 	}
 	if err := a.Store.RecordNetworkApply(r.Context(), ac.Server.ID, rep.Revision, rep.Hash, status); err != nil {
 		return err

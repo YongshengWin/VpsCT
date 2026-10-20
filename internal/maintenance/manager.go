@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentbudget"
+	"ctlvps/internal/openrc"
 	"ctlvps/internal/secureupdate"
 	"golang.org/x/sys/unix"
 )
@@ -146,7 +147,12 @@ func (m *Manager) Recover() {
 			return true
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		active := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit(j.ID)).Run() == nil
+		active := false
+		if openrc.Enabled() {
+			active = openrc.MaintenanceActive(j.ID)
+		} else {
+			active = exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", unit(j.ID)).Run() == nil
+		}
 		cancel()
 		if !active {
 			j.Status, j.Stage, j.Message = "interrupted", "interrupted", "执行进程已中断，请检查本机维护日志后重新发起"
@@ -162,6 +168,9 @@ func unit(id string) string { return "ctlvps-maintenance-job-" + id + ".service"
 func (m *Manager) Start(s Spec) (Job, error) {
 	if err := s.Validate(); err != nil {
 		return Job{}, err
+	}
+	if openrc.Enabled() && s.Role != "agent" {
+		return Job{}, errors.New("OpenRC only supports agent maintenance")
 	}
 	if m.Dir == Directory {
 		if err := secureupdate.Allow(s.Role + "." + s.Action); err != nil {
@@ -231,6 +240,8 @@ func (m *Manager) Start(s Spec) (Job, error) {
 	if err == nil {
 		if m.Launch != nil {
 			err = m.Launch(s.ID, worker)
+		} else if openrc.Enabled() {
+			err = launchOpenRC(s.ID, worker)
 		} else {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
@@ -245,7 +256,7 @@ func (m *Manager) Start(s Spec) (Job, error) {
 		}
 	}
 	if err != nil {
-		j.Status, j.Stage, j.Message = "failed", "dispatch", "无法启动独立维护进程，请检查 systemd 日志"
+		j.Status, j.Stage, j.Message = "failed", "dispatch", "无法启动独立维护进程，请检查本机维护日志"
 		_ = writeJSON(m.path(s.ID, "status.json"), j)
 		return j, errors.New(j.Message)
 	}
@@ -277,6 +288,9 @@ func Supported() bool {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return false
 	}
+	if openrc.Enabled() {
+		return openrc.CheckEnvironment(context.Background()) == nil
+	}
 	if _, err := os.Stat("/run/systemd/system"); err != nil {
 		return false
 	}
@@ -289,13 +303,19 @@ func Entry(args []string) (bool, error) {
 	if len(args) == 0 {
 		return false, nil
 	}
-	if args[0] != "maintenance-worker" && args[0] != "maintenance-serve" {
+	if args[0] != "maintenance-openrc-host" && args[0] != "maintenance-openrc-worker" && args[0] != "maintenance-worker" && args[0] != "maintenance-serve" {
 		return false, nil
 	}
 	if !Supported() {
-		return true, fmt.Errorf("网页维护仅支持 root/systemd 默认安装")
+		return true, fmt.Errorf("网页维护需要 root 和受支持的默认服务安装")
 	}
-	if args[0] == "maintenance-serve" && len(args) == 1 {
+	if args[0] == "maintenance-openrc-host" && len(args) == 2 && idPattern.MatchString(args[1]) && openrc.Enabled() {
+		return true, openRCHost(args[1])
+	}
+	if args[0] == "maintenance-openrc-worker" && len(args) == 2 && idPattern.MatchString(args[1]) && openrc.Enabled() {
+		return true, openRCWorker(args[1])
+	}
+	if args[0] == "maintenance-serve" && len(args) == 1 && !openrc.Enabled() {
 		return true, Serve()
 	}
 	if args[0] == "maintenance-worker" && len(args) == 2 && idPattern.MatchString(args[1]) {

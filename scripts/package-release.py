@@ -27,7 +27,7 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
         parser.error('repository must be OWNER/REPO')
     required = [*ROOT_DOCUMENTS, 'third_party/manifest.json', 'docs/operations.md', 'uninstall.sh']
-    required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64', 'arm64')]
+    required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64',)]
     for name in required:
         if not (ROOT / name).is_file():
             parser.error(f'missing release input: {name}')
@@ -42,7 +42,7 @@ def main():
     (out / 'uninstall.sh').chmod(0o755)
     agent_installer = (ROOT / 'internal/assets/install-agent.sh').read_text().replace("RELEASE_VERSION='__VERSION__'", f"RELEASE_VERSION='{args.version}'")
     (out / 'install-agent.sh').write_text(agent_installer)
-    for arch in ('amd64', 'arm64'):
+    for arch in ('amd64',):
         with tempfile.TemporaryDirectory() as tmp:
             package = pathlib.Path(tmp)
             shutil.copy2(ROOT / f'bin/ctlvpsd-linux-{arch}', package / 'ctlvpsd')
@@ -50,9 +50,16 @@ def main():
             shutil.copy2(out / 'install.sh', package / 'install.sh')
             shutil.copy2(out / 'install-agent.sh', package / 'install-agent.sh')
             (package / 'agents').mkdir()
-            for agent_arch in ('amd64', 'arm64'):
+            for agent_arch in ('amd64',):
                 name = f'ctlvps-agent-linux-{agent_arch}'
                 shutil.copy2(ROOT / 'bin' / name, package / 'agents' / name)
+            # v0.1.2-v0.1.6 AMD64 installers require this path to exist before
+            # switching releases. Retain an explicit refusal script, never an
+            # ARM binary or an installable ARM release, for that archive layout.
+            (package / 'agents/ctlvps-agent-linux-arm64').write_text(
+                '#!/bin/sh\n'
+                'echo "VpsCT ARM support is suspended; only Linux AMD64 is supported." >&2\n'
+                'exit 1\n')
             shutil.copy2(ROOT / 'deploy/ctlvpsd.service', package / 'ctlvpsd.service')
             shutil.copy2(ROOT / 'deploy/ctlvps-maintenance.service', package / 'ctlvps-maintenance.service')
             shutil.copy2(ROOT / 'deploy/ctlvpsd.env.example', package / 'ctlvpsd.env.example')
@@ -61,6 +68,7 @@ def main():
                 shutil.copy2(ROOT / name, package / name)
             shutil.copytree(ROOT / 'third_party', package / 'third_party')
             shutil.copytree(ROOT / 'docs', package / 'docs')
+            shutil.copytree(ROOT / 'skills', package / 'skills', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             (package / 'VERSION').write_text(args.version + '\n')
             (package / 'REPOSITORY').write_text(args.repository + '\n')
             def metadata(info):
@@ -72,7 +80,7 @@ def main():
             with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
                 for path in sorted(package.iterdir()):
                     archive.add(path, arcname=path.name, filter=metadata)
-    for arch in ('amd64','arm64'):
+    for arch in ('amd64',):
         shutil.copy2(ROOT / f'bin/ctlvps-agent-linux-{arch}', out / f'ctlvps-agent-linux-{arch}')
         shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
@@ -83,7 +91,7 @@ def main():
             'product': 'VpsCT', 'component': component, 'version': version,
             'arch': arch, 'epoch': args.security_epoch}})
     signed(out / 'install.sh', 'installer', args.version, 'all')
-    for arch in ('amd64', 'arm64'):
+    for arch in ('amd64',):
         signed(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'controller', args.version, arch)
         signed(out / f'ctlvps-agent-linux-{arch}', 'agent', args.version, arch)
         signed(out / f'ctlvps-verify-linux-{arch}', 'verifier', args.version, arch)

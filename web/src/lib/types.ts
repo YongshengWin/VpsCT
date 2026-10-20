@@ -1,4 +1,6 @@
 import type { NodeNetworkPolicy } from "./network";
+import type { BillingMode } from "./traffic-billing";
+import type { NATReport, NATSummary } from "./nat";
 
 export type Role = "admin" | "user";
 
@@ -94,6 +96,8 @@ export interface CoreStatus {
 }
 
 export interface Diagnostics {
+ forward_udp?: import("./udp-status").UDPStatus;
+	 nat?: NATReport;
 	 network_forward_errors?: Record<string, string>;
   network_billing_version?: number;
   network_billing_error?: string;
@@ -157,12 +161,20 @@ export interface Agent {
 export interface ServerUsage {
   server_id: number;
   period_start: string;
+  next_reset?: string;
   up: number;
   down: number;
   inbound?: number;
   outbound?: number;
   total?: number;
   billed: number;
+  billing_mode?: BillingMode;
+  billed_estimated?: boolean;
+  quota_calibrated_usage_bytes?: number;
+  quota_calibrated_at?: string;
+  quota_calibration_observed_bytes?: number;
+  quota_calibrated_inbound_bytes?: number;
+  quota_calibrated_outbound_bytes?: number;
   one_way: number;
   two_way: number;
   quota: number;
@@ -170,7 +182,11 @@ export interface ServerUsage {
   over_quota: boolean;
 }
 
+export type ServerQuotaBilling = BillingMode;
+
 export interface Server {
+  is_nat: boolean;
+  nat?: NATSummary;
   id: number;
   name: string;
   region: string;
@@ -179,7 +195,7 @@ export interface Server {
   notes: string;
   quota_bytes: number;
   quota_reset_day: number;
-  quota_billing: string;
+  quota_billing: ServerQuotaBilling;
   core_mode: "stable" | "lean";
   ipv4_only: boolean;
   cert_mode: string;
@@ -196,6 +212,7 @@ export interface Server {
 }
 
 export interface Node {
+  original_name?: string;
   network?: NodeNetworkPolicy | null;
   network_revision?: number;
  traffic?: { inbound: number; outbound: number; total: number; days: number; has_data: boolean; first_sample?: string; last_sample?: string };
@@ -272,6 +289,7 @@ export interface ChainSpec {
 }
 
 export interface NodeSelection {
+  route_ids?: string[];
   include_all?: boolean;
   node_ids: number[];
   external_sub_ids: number[];
@@ -335,6 +353,7 @@ export interface Preset {
 }
 
 export interface ShareTarget {
+  quota_bytes?: Record<string, number>;
   network?: import("@/lib/network").NodeNetworkPolicy;
   server_id: number;
   protocols: string[];
@@ -347,9 +366,10 @@ export interface Share {
   name: string;
   user_id?: number | null;
   targets: ShareTarget[];
+  node_usage?: Record<string, [number, number]>;
   extra_node_ids: number[];
   quota_bytes: number;
-  billing_mode: string;
+  billing_mode: BillingMode;
   reset_day: number;
   used_upload: number;
   used_download: number;
@@ -361,7 +381,7 @@ export interface Share {
   notes: string;
   subscription_id?: number | null;
   created_at: string;
-  usage: { used: number; inbound?: number; outbound?: number; total?: number; one_way: number; two_way: number; quota: number; percent: number; next_reset?: string; remaining: number };
+  usage: { used: number; billed?: number; billing_mode?: BillingMode; inbound?: number; outbound?: number; total?: number; one_way: number; two_way: number; quota: number; percent: number; next_reset?: string; remaining: number };
   subscription?: Subscription;
   nodes?: Node[];
   user_name?: string;

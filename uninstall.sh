@@ -4,9 +4,11 @@ set -euo pipefail
 
 ROLE='' PURGE=0 YES=0 DRY_RUN=0 REMOVE_CADDY=0
 ROOT='' # Only changed by sourced, isolated tests; never read from the environment.
+INIT=systemd
 UNITS=() REMOVE=() KEEP=()
-NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0 NFT_NETWORK_PRESENT=0 NFT_FORWARDS_PRESENT=0 NFT_ADMISSION_PRESENT=0 CADDY_DOMAIN=''
+NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0 NFT_NETWORK_PRESENT=0 NFT_FORWARDS_PRESENT=0 NFT_ADMISSION_PRESENT=0 NFT_NAT_PRESENT=0 CADDY_DOMAIN=''
 NFT_INGRESS_HANDLES=()
+OPENRC_SERVICES=(ctlvps-agent ctlvps-proxy-guard ctlvps-singbox ctlvps-singbox-private ctlvps-service-host)
 
 die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
@@ -15,7 +17,7 @@ controller() { [[ "$ROLE" == controller || "$ROLE" == all ]]; }
 agent() { [[ "$ROLE" == agent || "$ROLE" == all ]]; }
 usage() {
   cat <<'EOF'
-VpsCT 卸载器（Linux / systemd 默认安装路径，兼容 v0.1.0）
+VpsCT 卸载器（Linux / systemd；Alpine OpenRC 支持 agent）
 
   sudo bash uninstall.sh --controller       卸载控制端，保留数据和环境配置
   sudo bash uninstall.sh --agent            卸载 agent 及其部署的服务，保留配置和数据
@@ -31,7 +33,7 @@ VpsCT 卸载器（Linux / systemd 默认安装路径，兼容 v0.1.0）
 示例：sudo bash uninstall.sh --all --purge --remove-caddy --yes
 不会删除另一端、远端服务器、面板记录、系统通用软件包或自行另存的备份。
 Caddy 软件包、全局运行数据和 ctlvps 系统账户保留；共享或改写过的 Caddy 配置需手动处理。
-Docker、自定义程序/数据路径、systemd 覆盖配置不在自动卸载范围内。
+Docker、自定义程序/数据路径或服务覆盖配置不在自动卸载范围内。
 EOF
 }
 
@@ -60,12 +62,14 @@ safe_path() {
   local target=$1 parent mounts mount
   [[ "$target" == "$ROOT"/opt/ctlvps/* || "$target" == "$ROOT"/etc/ctlvps/* ||
      "$target" == "$ROOT"/etc/ctlvps-proxy ||
+     "$target" =~ ^"$ROOT"/etc/init.d/ctlvps-(agent|proxy-guard|service-host|singbox(-private)?|mita@[0-9]+)$ ||
      "$target" == "$ROOT"/etc/systemd/system/ctlvps-proxy-guard.timer ||
      "$target" == "$ROOT"/etc/systemd/system/ctlvps*.service ||
      "$target" == "$ROOT"/etc/systemd/system/ctlvps-proxy.slice ||
      "$target" =~ ^"$ROOT"/etc/systemd/system/ctlvps-proxy-(n[0-9]+|public|private)\.slice$ ||
      "$target" =~ ^"$ROOT"/etc/systemd/system/ctlvps-(snell|mita)@[0-9]+\.service\.d/meter\.conf$ ||
      "$target" == "$ROOT"/run/ctlvps-proxy ||
+     "$target" == "$ROOT"/run/ctlvps-openrc ||
      "$target" == "$ROOT"/usr/local/bin/ctlvps-agent ||
      "$target" == "$ROOT"/usr/local/libexec/ctlvps-agent-uninstall.sh ||
      "$target" == "$ROOT"/var/lib/ctlvps-agent || "$target" == "$ROOT"/var/lib/ctlvps-proxy || "$target" == "$ROOT"/var/log/ctlvps ||
@@ -81,6 +85,91 @@ safe_path() {
   while IFS= read -r mount; do
     [[ "$mount" != "$target" && "$mount" != "$target/"* ]] || die "清理范围内存在挂载点：$target"
   done <<< "$mounts"
+}
+
+openrc_cgroup_empty() {
+  local unit=$1 group parent events line populated=''
+  # These paths match the runtime's fixed cgroup identities. Checking the root
+  # also catches a remaining worker or child group outside the service leaves.
+  case "$unit" in
+    ctlvps-mita@*.service)
+      "$(path /usr/local/bin/ctlvps-agent)" openrc-empty "$unit"
+      return $? ;;
+    ctlvps.slice) group=/sys/fs/cgroup/ctlvps.slice ;;
+    ctlvps-agent.service|ctlvps-proxy-guard.service|ctlvps-service-host.service|ctlvps-proxy-check-public.service|ctlvps-proxy-check-private.service)
+      group="/sys/fs/cgroup/ctlvps.slice/$unit" ;;
+    ctlvps-proxy.slice) group=/sys/fs/cgroup/ctlvps.slice/ctlvps-proxy.slice ;;
+    ctlvps-proxy-public.slice|ctlvps-proxy-private.slice)
+      group="/sys/fs/cgroup/ctlvps.slice/ctlvps-proxy.slice/$unit" ;;
+    ctlvps-singbox.service)
+      group=/sys/fs/cgroup/ctlvps.slice/ctlvps-proxy.slice/ctlvps-proxy-public.slice/ctlvps-singbox.service ;;
+    ctlvps-singbox-private.service)
+      group=/sys/fs/cgroup/ctlvps.slice/ctlvps-proxy.slice/ctlvps-proxy-private.slice/ctlvps-singbox-private.service ;;
+    *) die '拒绝检查范围外的 OpenRC cgroup' ;;
+  esac
+  group=$(path "$group")
+  parent=$group
+  while [[ "$parent" != "$ROOT" && -n "$parent" ]]; do
+    [[ ! -L "$parent" ]] || die 'OpenRC cgroup 路径为软链接，尚未删除文件'
+    parent=${parent%/*}
+  done
+  [[ -e "$group" ]] || return 0
+  [[ -d "$group" && -f "$group/cgroup.events" && ! -L "$group/cgroup.events" ]] || die '无法安全读取 OpenRC cgroup 状态，尚未删除文件'
+  events=$(cat "$group/cgroup.events") || die '无法读取 OpenRC cgroup 状态，尚未删除文件'
+  while IFS= read -r line; do
+    case "$line" in
+      'populated 0'|'populated 1')
+        [[ -z "$populated" ]] || die 'OpenRC cgroup 状态重复，尚未删除文件'
+        populated=${line#populated } ;;
+      populated*) die 'OpenRC cgroup 状态无效，尚未删除文件' ;;
+    esac
+  done <<< "$events"
+  [[ -n "$populated" ]] || die 'OpenRC cgroup 缺少进程状态，尚未删除文件'
+  [[ "$populated" == 0 ]]
+}
+
+check_openrc_groups_empty() {
+  local name
+  for name in "${OPENRC_SERVICES[@]}"; do
+    openrc_cgroup_empty "$name.service" || die "$name 的受管 cgroup 仍有进程，尚未删除文件或防火墙规则"
+  done
+  for name in ctlvps-proxy-check-public.service ctlvps-proxy-check-private.service ctlvps-proxy-public.slice ctlvps-proxy-private.slice ctlvps-proxy.slice ctlvps.slice; do
+    openrc_cgroup_empty "$name" || die "$name 的受管 cgroup 仍有进程，尚未删除文件或防火墙规则"
+  done
+}
+
+plan_openrc_agent() {
+  local name file unit launcher
+  for file in "$(path /etc/init.d)"/ctlvps-mita@*; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    name=${file##*/}
+    [[ "$name" =~ ^ctlvps-mita@[1-9][0-9]*$ ]] || die "发现非标准 mieru 服务：$name"
+    OPENRC_SERVICES=("$name" "${OPENRC_SERVICES[@]}")
+  done
+  launcher=$(path /usr/local/bin/ctlvps-agent)
+  # Fixed names only. The verifier checks complete generated contents, ownership
+  # and absence of conf.d overrides before rc-service executes any shell code.
+  # The service host must remain available until all proxy/guard tasks stop.
+  for name in "${OPENRC_SERVICES[@]}"; do
+    file="$(path /etc/init.d)/$name"
+    unit="$name.service"
+    if [[ ! -e "$file" && ! -L "$file" ]]; then
+      # A missing script cannot stop the outside supervisor safely; reject the
+      # orphan before any mutation rather than running arbitrary recovery code.
+      openrc_cgroup_empty "$unit" || die "$name 缺少受管 OpenRC 脚本但 cgroup 仍有进程，请先安全恢复受管服务；尚未停服或删除文件"
+      continue
+    fi
+    [[ -f "$launcher" && ! -L "$launcher" ]] || die 'OpenRC 服务需要默认路径的 agent 验证，尚未停服或删除文件'
+    "$launcher" openrc-verify "$unit" || die "$name 不是未修改的受管 OpenRC 服务，尚未停服或删除文件"
+    UNITS+=("$unit")
+    add_remove "$file"
+  done
+  for file in "$(path /etc/init.d)"/ctlvps-singbox* "$(path /etc/init.d)"/ctlvps-snell* "$(path /etc/init.d)"/ctlvps-mita*; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    name=${file##*/}
+    [[ "$name" == ctlvps-singbox || "$name" == ctlvps-singbox-private || "$name" =~ ^ctlvps-mita@[1-9][0-9]*$ ]] || die "发现不受支持的 OpenRC 节点服务：$name"
+  done
+  add_remove "$(path /run/ctlvps-openrc)"
 }
 
 add_remove() {
@@ -126,6 +215,9 @@ add_unit() {
 
 plan_agent() {
   local listed files status unit rest file name expected port
+  if [[ "$INIT" == openrc ]]; then
+    plan_openrc_agent
+  else
   add_unit ctlvps-proxy-guard.timer
   add_unit ctlvps-proxy-guard.service '/usr/local/bin/ctlvps-agent proxy-guard'
   add_unit ctlvps-agent.service '/usr/local/bin/ctlvps-agent run --state /var/lib/ctlvps-agent'
@@ -169,13 +261,14 @@ plan_agent() {
     add_unit "$name"
     add_remove "$file"
   done
+  fi
   add_remove "$(path /run/ctlvps-proxy)"
   add_remove "$(path /usr/local/bin/ctlvps-agent)"
   if [[ "$PURGE" -eq 1 ]]; then add_remove "$(path /usr/local/libexec/ctlvps-agent-uninstall.sh)"; fi
   for name in sing-box snell-server mita; do
     for file in "$name" "$name.version" "$name.trusted" "$name.tmp"; do add_remove "$(path /opt/ctlvps/bin)/$file"; done
   done
-  for file in /etc/ctlvps/sing-box /etc/ctlvps/sing-box.json /etc/ctlvps/snell /etc/ctlvps/mita /etc/ctlvps/proxy /etc/ctlvps-proxy /var/lib/ctlvps-proxy /var/lib/ctlvps-agent /var/log/ctlvps; do
+  for file in /etc/ctlvps/openrc /etc/ctlvps/sing-box /etc/ctlvps/sing-box.json /etc/ctlvps/snell /etc/ctlvps/mita /etc/ctlvps/proxy /etc/ctlvps/agent-nat.json /etc/ctlvps-proxy /var/lib/ctlvps-proxy /var/lib/ctlvps-agent /var/log/ctlvps; do
     data_path "$(path "$file")"
   done
   if command -v nft >/dev/null; then
@@ -188,6 +281,7 @@ plan_agent() {
       [[ "$table" != ctlvps_network ]] || NFT_NETWORK_PRESENT=1
       [[ "$table" != ctlvps_forwards ]] || NFT_FORWARDS_PRESENT=1
       [[ "$table" != ctlvps_forward_admission ]] || NFT_ADMISSION_PRESENT=1
+      [[ "$table" != ctlvps_nat ]] || NFT_NAT_PRESENT=1
     done <<< "$listed"
     local ingress line handle
     if ingress=$(nft -a list chain inet filter input 2>/dev/null); then
@@ -245,12 +339,12 @@ plan_caddy() {
 }
 
 plan() {
-  UNITS=() REMOVE=() KEEP=() NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0 NFT_NETWORK_PRESENT=0
+  UNITS=() REMOVE=() KEEP=() NFT_PRESENT=0 NFT_NODES_PRESENT=0 NFT_EGRESS_PRESENT=0 NFT_NETWORK_PRESENT=0 NFT_NAT_PRESENT=0
   NFT_INGRESS_HANDLES=()
   agent && plan_agent
   controller && plan_controller
   plan_caddy
-  info "卸载范围：$ROLE；删除数据：$PURGE；移除独占 HTTPS 站点：$REMOVE_CADDY"
+  info "卸载范围：${ROLE}；删除数据：${PURGE}；移除独占 HTTPS 站点：${REMOVE_CADDY}"
   if [[ ${#UNITS[@]} -gt 0 ]]; then printf '停止并禁用：\n'; printf '  %s\n' "${UNITS[@]}"; fi
   printf '删除（不存在的路径将跳过）：\n'; printf '  %s\n' "${REMOVE[@]}"
   if [[ ${#KEEP[@]} -gt 0 ]]; then printf '保留：\n'; printf '  %s\n' "${KEEP[@]}"; fi
@@ -259,6 +353,7 @@ plan() {
   [[ "$NFT_NETWORK_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_network（节点网络绑定保护）\n'
   [[ "$NFT_FORWARDS_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_forwards（固定转发计量）\n'
   [[ "$NFT_ADMISSION_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_forward_admission（固定转发连接上限）\n'
+  [[ "$NFT_NAT_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_nat（本机 NAT 端口转换）\n'
   [[ "$NFT_NODES_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps_nodes（不修改其他表）\n'
   [[ "$NFT_PRESENT" == 0 ]] || printf '删除 nftables 表：inet ctlvps（不修改其他表）\n'
   return 0
@@ -269,6 +364,20 @@ execute_plan() {
   # Stop all services successfully before deleting anything. Agent must go first
   # so it cannot recreate core services or re-download their executables.
   for unit in "${UNITS[@]}"; do
+    if [[ "$INIT" == openrc ]]; then
+      "$(path /usr/local/bin/ctlvps-agent)" openrc-verify "$unit" || die 'OpenRC 服务在预检查后发生变化，尚未删除文件'
+      rc-service "${unit%.service}" stop || die "停止 ${unit} 失败，尚未删除文件"
+      "$(path /usr/local/bin/ctlvps-agent)" openrc-stop "$unit" || die '清理 OpenRC 服务进程失败，尚未删除文件'
+      if rc-service "${unit%.service}" status >/dev/null 2>&1; then die "${unit} 仍在运行，尚未删除文件"; fi
+      for runlink in "$(path /etc/runlevels)"/*/"${unit%.service}"; do
+        if [[ -e "$runlink" || -L "$runlink" ]]; then
+          runlevel=${runlink%/*}
+          runlevel=${runlevel##*/}
+          rc-update delete "${unit%.service}" "$runlevel" || die "禁用 ${unit} 失败，尚未删除文件"
+        fi
+      done
+      continue
+    fi
     before=$(systemctl show "$unit" -p ActiveState --value) || die "无法读取 $unit 运行状态"
     systemctl stop "$unit" || die "停止 $unit 失败，尚未删除文件"
     if systemctl is-active --quiet "$unit"; then die "$unit 仍在运行，尚未删除文件"; fi
@@ -277,6 +386,12 @@ execute_plan() {
     fi
     systemctl disable "$unit" || die "禁用 $unit 失败，尚未删除文件"
   done
+  if [[ "$INIT" == openrc ]]; then
+    check_openrc_groups_empty
+    if [[ -d "$(path /sys/fs/bpf/ctlvps-meters)" ]]; then
+      "$(path /usr/local/bin/ctlvps-agent)" openrc-meter-clean || die '清理独立进程计量失败，尚未删除文件'
+    fi
+  fi
   for handle in "${NFT_INGRESS_HANDLES[@]}"; do
     nft delete rule inet filter input handle "$handle" || die "清理节点端口规则失败"
   done
@@ -284,6 +399,7 @@ execute_plan() {
   [[ "$NFT_NETWORK_PRESENT" == 0 ]] || nft delete table inet ctlvps_network || die '清理节点网络绑定表失败，尚未删除文件'
   [[ "$NFT_FORWARDS_PRESENT" == 0 ]] || nft delete table inet ctlvps_forwards || die '清理固定转发计量表失败，尚未删除文件'
   [[ "$NFT_ADMISSION_PRESENT" == 0 ]] || nft delete table inet ctlvps_forward_admission || die '清理固定转发准入表失败，尚未删除文件'
+  [[ "$NFT_NAT_PRESENT" == 0 ]] || nft delete table inet ctlvps_nat || die '清理本机 NAT 端口转换表失败，尚未删除文件'
   [[ "$NFT_NODES_PRESENT" == 0 ]] || nft delete table inet ctlvps_nodes || die '清理节点计量表失败，尚未删除文件'
   [[ "$NFT_PRESENT" == 0 ]] || nft delete table inet ctlvps || die '清理项目计量表失败，尚未删除文件'
   for file in "${REMOVE[@]}"; do
@@ -292,7 +408,7 @@ execute_plan() {
   done
   # Shared parent directories are removed only if empty.
   for file in /opt/ctlvps/bin /opt/ctlvps /etc/ctlvps; do rmdir -- "$(path "$file")" 2>/dev/null || true; done
-  systemctl daemon-reload
+  if [[ "$INIT" == systemd ]]; then systemctl daemon-reload; fi
   info '所选端的卸载已完成'
   [[ "$PURGE" == 1 ]] || info '配置与数据已保留；如需清空，可用相同角色加 --purge 再运行一次'
   if controller && [[ "$REMOVE_CADDY" == 0 ]]; then info 'HTTPS 配置未处理；安装器生成的独占 Caddy 站点可另加 --remove-caddy 清理'; fi
@@ -303,12 +419,20 @@ main() {
   if [[ "$*" == --help || "$*" == -h ]]; then usage; return; fi
   parse_args "$@"
   [[ "$(uname -s)" == Linux && "$(id -u)" == 0 ]] || die '请在 Linux 上使用 root 或 sudo 运行'
-  [[ -d /run/systemd/system ]] || die '需要正在运行的 systemd；不用于 Docker 部署'
+  if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null; then
+    INIT=systemd
+  elif [[ -f /run/openrc/softlevel ]] && command -v rc-service >/dev/null && command -v rc-update >/dev/null; then
+    INIT=openrc
+    [[ "$ROLE" == agent ]] || die 'OpenRC 当前只支持 --agent 卸载'
+  else
+    die '需要正在运行的 systemd 或 OpenRC；不用于 Docker 部署'
+  fi
   local tool answer
-  for tool in systemctl findmnt flock rm sed head tr; do command -v "$tool" >/dev/null || die "缺少依赖：$tool"; done
+  for tool in findmnt flock rm sed head tr; do command -v "$tool" >/dev/null || die "缺少依赖：$tool"; done
   umask 077
   # Same lock as the controller installer; a dry run deliberately writes nothing.
   if [[ "$DRY_RUN" == 0 ]]; then
+    install -d -m 0755 /run/lock
     exec 9>/run/lock/ctlvps-install.lock
     flock -n 9 || die '有安装、更新或卸载任务正在运行'
   fi

@@ -667,4 +667,50 @@ ALTER TABLE sessions ADD COLUMN security_version INTEGER NOT NULL DEFAULT 0;`,
 	`ALTER TABLE managed_transits ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1));`,
 	// v30: freeze the effective version before changing fresh-install defaults.
 	coreVersionPinMigration,
+	// v31: a quota calibration applies only to the billing period in which it
+	// was entered. The observed snapshot prevents counting existing samples twice.
+	`CREATE TABLE server_usage_calibrations (
+ server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+ period_start TEXT NOT NULL,
+ calibrated_bytes INTEGER NOT NULL CHECK(calibrated_bytes>=0),
+ observed_bytes INTEGER NOT NULL CHECK(observed_bytes>=0),
+ calibrated_at TEXT NOT NULL
+ );`,
+	// v32: existing server quota modes were ignored, so preserve their effective
+	// two-way behavior. New calibrations retain both observed directions to
+	// bound max-mode usage after a mid-period provider reading.
+	`UPDATE servers SET quota_billing='dual' WHERE quota_billing<>'dual';
+ ALTER TABLE server_usage_calibrations ADD COLUMN observed_up_bytes INTEGER CHECK(observed_up_bytes>=0);
+ ALTER TABLE server_usage_calibrations ADD COLUMN observed_down_bytes INTEGER CHECK(observed_down_bytes>=0);`,
+	// v33: ordinary node edits also have a durable publication barrier, and
+	// subscriptions use encrypted, acknowledged resource configurations.
+	nodeApplicationSchema,
+	// v34: share quota modes use the common formula. Previously all stored
+	// share modes billed both directions, so retain that effective behavior.
+	`UPDATE shares SET billing_mode='dual' WHERE billing_mode<>'dual';
+ ALTER TABLE server_usage_calibrations ADD COLUMN provider_up_bytes INTEGER CHECK(provider_up_bytes>=0);
+ ALTER TABLE server_usage_calibrations ADD COLUMN provider_down_bytes INTEGER CHECK(provider_down_bytes>=0);
+ DROP TRIGGER network_generation_share_access;
+ CREATE TRIGGER network_generation_share_access AFTER UPDATE OF expires_at,quota_bytes,billing_mode ON shares
+ WHEN NEW.expires_at IS NOT OLD.expires_at OR NEW.quota_bytes IS NOT OLD.quota_bytes OR NEW.billing_mode IS NOT OLD.billing_mode BEGIN
+ UPDATE server_network_generations SET generation=generation+1 WHERE server_id IN (SELECT server_id FROM nodes WHERE share_id=NEW.id AND source='deployed');
+ END;`,
+	// v35: developer credentials are account-bound, hashed, and independently revocable.
+	apiKeySchema,
+	// v36: independently versioned controller NAT configuration.
+	natSchema,
+	// v37: server network type is explicit, independent of mapping readiness.
+	`ALTER TABLE servers ADD COLUMN is_nat INTEGER NOT NULL DEFAULT 0 CHECK(is_nat IN (0,1));
+ UPDATE servers SET is_nat=1 WHERE id IN (
+ SELECT server_id FROM server_nat_configs WHERE config IS NOT NULL AND json_array_length(config,'$.mappings')>0
+ UNION SELECT server_id FROM agents WHERE json_valid(diagnostics) AND (json_extract(diagnostics,'$.nat.configured')=1 OR (json_extract(diagnostics,'$.nat.source')='local' AND json_extract(diagnostics,'$.nat.status')='error'))
+ );`,
+	// v38: keep feed identity separate from an imported node's custom name.
+	`ALTER TABLE nodes ADD COLUMN original_name TEXT NOT NULL DEFAULT '';`,
+	// v39: durable per-entry share quota counters, independent of retained charts.
+	shareNodeQuotaSchema,
+	// v40: durable three-server access routes and resource ownership.
+	accessRouteSchema,
+	// v41: optional extra relay; entry can forward directly to the landing node.
+	optionalAccessRelaySchema,
 }

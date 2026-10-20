@@ -1,3 +1,4 @@
+import type { AccessRoute } from "@/components/access-routes";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
@@ -41,7 +42,7 @@ function SubName({ sub }: { sub: Subscription }) {
   };
   if (!editing) {
     return (
-      <button type="button" className="break-words text-left font-medium hover:underline" title="点击更名" onClick={() => setEditing(true)}>
+      <button type="button" className="wrap-break-word text-left font-medium hover:underline" title="点击更名" onClick={() => setEditing(true)}>
         {sub.name}
       </button>
     );
@@ -49,7 +50,7 @@ function SubName({ sub }: { sub: Subscription }) {
   return (
     <input
       autoFocus
-      className="h-8 w-full min-w-0 rounded-lg border border-primary/40 bg-card px-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
+      className="h-8 w-full min-w-0 rounded-lg border border-primary/40 bg-card px-2 text-sm font-medium focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25"
       value={name}
       maxLength={64}
       disabled={save.isPending}
@@ -129,7 +130,7 @@ export function SubscriptionsPage() {
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
-                    {admin && s.supported !== false ? <SubName sub={s} /> : <p className="break-words font-medium">{s.name}</p>}
+                    {admin && s.supported !== false ? <SubName sub={s} /> : <p className="wrap-break-word font-medium">{s.name}</p>}
                     <Badge variant={s.kind === "share" ? "info" : "secondary"}>{KIND_LABELS[s.kind] ?? "已停用类型"}{s.share_name ? ` · ${s.share_name}` : ""}</Badge>
                     {!s.enabled && <Badge variant="destructive">已停用</Badge>}
                   </div>
@@ -226,7 +227,7 @@ const emptyState: EditorState = {
 function fromSub(s: Subscription): EditorState {
   return {
     name: s.name, kind: s.kind, template_id: s.template_id ?? 0, default_format: s.default_format, proxy_groups: normalizeGroups(s.proxy_groups), chains: s.chains ?? [], rules: s.rules ?? [],
-    node_selection: { include_all: !!s.node_selection?.include_all, node_ids: s.node_selection?.node_ids ?? [], external_sub_ids: s.node_selection?.external_sub_ids ?? [], tags: s.node_selection?.tags ?? [], filter: s.node_selection?.filter, exclude_filter: s.node_selection?.exclude_filter },
+    node_selection: { route_ids: s.node_selection?.route_ids ?? [], include_all: !!s.node_selection?.include_all, node_ids: s.node_selection?.node_ids ?? [], external_sub_ids: s.node_selection?.external_sub_ids ?? [], tags: s.node_selection?.tags ?? [], filter: s.node_selection?.filter, exclude_filter: s.node_selection?.exclude_filter },
     source_external_id: s.source_external_id ?? 0,
     expire_at: s.expire_at ? toLocalInput(s.expire_at) : "", traffic_limit_gb: bytesToGb(s.traffic_limit_bytes), reset_day: String(s.reset_day ?? 0), userinfo_header: s.userinfo_header, show_info_nodes: s.show_info_nodes,
     allowed_user_ids: s.allowed_user_ids ?? [], enabled: s.enabled, short_link: !!s.short_code,
@@ -257,6 +258,7 @@ export function SubscriptionEditorPage() {
   const editing = !!id;
   const initialKind = new URLSearchParams(window.location.search).get("kind") as Subscription["kind"] | null;
   const existing = useQuery({ queryKey: ["subscriptions", id], queryFn: () => get<Subscription>(`/api/v1/subscriptions/${id}`), enabled: editing });
+  const accessRoutes = useQuery({ queryKey: ["access-routes"], queryFn: () => get<AccessRoute[]>("/api/v1/access-routes") });
   const nodes = useQuery({ queryKey: ["nodes", { source: "" }], queryFn: () => get<Node[]>("/api/v1/nodes") });
   const externals = useQuery({ queryKey: ["externals"], queryFn: () => get<ExternalSubscription[]>("/api/v1/externals") });
   const templates = useQuery({ queryKey: ["templates"], queryFn: () => get<RuleTemplate[]>("/api/v1/templates") });
@@ -294,10 +296,12 @@ export function SubscriptionEditorPage() {
     if (exre) list = list.filter((n) => !exre.test(n.name));
     return list;
   }, [allNodes, s.node_selection]);
+  const selectedRoutes = (accessRoutes.data ?? []).filter(r => s.node_selection.route_ids?.includes(r.id) && (!safeRe(s.node_selection.filter) || safeRe(s.node_selection.filter)!.test(r.name)) && (!safeRe(s.node_selection.exclude_filter) || !safeRe(s.node_selection.exclude_filter)!.test(r.name)));
   const candidates: Candidate[] = React.useMemo(() => [
     ...selectedNodes.map((n) => ({ name: n.name, kind: "node" as const, sub: PROTOCOL_LABELS[n.protocol] ?? n.protocol })),
+    ...selectedRoutes.map(r => ({ name: r.name, kind: "node" as const, sub: "线路" })),
     ...s.chains.filter((c) => c.name).map((c) => ({ name: c.name, kind: "chain" as const, sub: "链式" })),
-  ], [selectedNodes, s.chains]);
+  ], [selectedNodes, selectedRoutes, s.chains]);
 
   if (editing && existing.error) return <Empty title="无法加载订阅" description={existing.error.message} action={<Link to="/subscriptions"><Button>返回订阅列表</Button></Link>} />;
   if (editing && existing.data?.supported === false) return <Empty title="此订阅类型已停用" description="请从节点库重新生成订阅，并在规则与模板中选择配置模板。" action={<Link to="/subscriptions/new"><Button>生成订阅</Button></Link>} />;
@@ -315,7 +319,7 @@ export function SubscriptionEditorPage() {
       {editing && existing.data && <Card className="mb-4 p-4"><SubscriptionLinks sub={existing.data} /></Card>}
       <Tabs value={tab} onChange={setTab} items={[
         { value: "basic", label: "基本" },
-        { value: "nodes", label: `节点选择 (${selectedNodes.length})` },
+        { value: "nodes", label: `节点与线路 (${selectedNodes.length + selectedRoutes.length})` },
         { value: "groups", label: `代理组 (${s.proxy_groups.length})` },
         { value: "rules", label: "规则与模板" },
         { value: "preview", label: "预览" },
@@ -375,7 +379,7 @@ export function SubscriptionEditorPage() {
             <Card className="p-4">
               <div className="mb-3 flex flex-wrap items-center gap-3">
                 <Switch checked={!!s.node_selection.include_all} onChange={(v) => setSel({ include_all: v })} label="包含全部节点（新增节点自动加入）" />
-                <span className="text-xs text-muted-foreground">已选 {selectedNodes.length} 个</span>
+                <span className="text-xs text-muted-foreground">已选 {selectedNodes.length} 个节点、{selectedRoutes.length} 条线路</span>
               </div>
               {!s.node_selection.include_all && (
                 <>
@@ -397,6 +401,9 @@ export function SubscriptionEditorPage() {
                   <NodePicker nodes={allNodes} selected={s.node_selection.node_ids} onChange={(ids) => setSel({ node_ids: ids })} />
                 </>
               )}
+                  {(accessRoutes.data?.length || s.node_selection.route_ids?.length) ? <div className="mt-4 space-y-2 border-t pt-3"><p className="text-sm font-medium">线路接入</p><p className="text-xs text-muted-foreground">独立选择线路；仅在两段转发与落地节点已应用且有效时输出。包含全部节点不会自动加入线路。</p>{accessRoutes.data?.map(r => <label key={r.id} className="flex items-center gap-2 text-sm"><input type="checkbox" className="accent-primary" checked={s.node_selection.route_ids?.includes(r.id) ?? false} onChange={e => setSel({ route_ids: e.target.checked ? [...(s.node_selection.route_ids ?? []), r.id] : (s.node_selection.route_ids ?? []).filter(id => id !== r.id) })} />{r.name}{r.stage !== "applied" && <span className="text-xs text-muted-foreground">（尚未应用或已停止）</span>}</label>)}</div> : null}
+                  {accessRoutes.isError && <p className="text-sm text-destructive">线路列表加载失败；已选线路仍会保留，请刷新重试。</p>}
+
             </Card>
             <div className="space-y-4">
               <Card className="p-4">
@@ -449,7 +456,7 @@ export function SubscriptionEditorPage() {
                 <p className="text-sm font-medium">规则（{s.rules.length} 条）<span className="ml-2 font-normal text-muted-foreground">空着就用模板里的分流</span></p>
                 <PresetPicker presets={presets.data ?? []} onApply={applyPreset} />
               </div>
-              <Textarea className="mono" rows={18} value={s.rules.join("\n")} onChange={(e) => set("rules", e.target.value.split("\n").map((l) => l.trim()).filter(Boolean))} placeholder={"DOMAIN-SUFFIX,openai.com,节点选择\nGEOSITE,cn,DIRECT\nGEOIP,CN,DIRECT\nMATCH,节点选择"} />
+              <Textarea className="mono" rows={18} value={s.rules.join("\n")} onChange={(e) => set("rules", e.target.value.split("\n").map((l) => l.trim()).filter(Boolean))} placeholder={"DOMAIN-SUFF中转,openai.com,节点选择\nGEOSITE,cn,DIRECT\nGEOIP,CN,DIRECT\nMATCH,节点选择"} />
               <div className="mt-2"><RulesHint /></div>
             </Card>
             <Card className="p-4">
@@ -508,7 +515,7 @@ function NodePicker({ nodes, selected, onChange }: { nodes: Node[]; selected: nu
         {list.map((n) => (
           <label key={n.id} className="flex cursor-pointer items-center gap-3 border-b px-3 py-2 text-sm last:border-0 hover:bg-muted/40">
             <input type="checkbox" className="accent-primary" checked={selected.includes(n.id)} onChange={(e) => toggle(n.id, e.target.checked)} />
-            <span className="min-w-0 flex-1 break-words">{n.name}</span>
+            <span className="min-w-0 flex-1 wrap-break-word">{n.name}</span>
             <Badge variant="outline">{PROTOCOL_LABELS[n.protocol] ?? n.protocol}</Badge>
             <span className="hidden text-xs text-muted-foreground sm:inline">{n.source === "deployed" ? n.server_name : n.source === "imported" ? n.external_name : "手动"}</span>
           </label>
@@ -558,7 +565,7 @@ function PreviewPane({ state }: { state: EditorState }) {
       </Card>
       <Card className="p-4">
         <p className="mb-2 text-sm font-medium">将输出 {m.data?.node_names.length ?? 0} 个节点</p>
-        <ul className="max-h-64 space-y-0.5 overflow-auto text-xs text-muted-foreground">{m.data?.node_names.map((n) => <li key={n} className="break-words">{n}</li>)}</ul>
+        <ul className="max-h-64 space-y-0.5 overflow-auto text-xs text-muted-foreground">{m.data?.node_names.map((n) => <li key={n} className="wrap-break-word">{n}</li>)}</ul>
         {m.data?.groups?.length ? (
           <>
             <p className="mb-2 mt-4 text-sm font-medium">解析后的代理组</p>

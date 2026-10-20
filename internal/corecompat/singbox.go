@@ -66,10 +66,12 @@ func SS2022Outbound(version string) bool {
 	return ok && major == 1 && minor == 14 && patch >= 1
 }
 
-// UDPForward remains unavailable: official 1.14.1 fails the isolated idle
-// mapping expiry test. Keep schema/history support, but never activate it based
-// on a version string alone. This does not disable proxy-node UDP transport.
-func UDPForward(version string) bool { return false }
+// UDPForward requires the official Clash connection API plus the agent's
+// independent kernel-admission reaper. Version alone never enables the feature.
+func UDPForward(version string) bool {
+	major, minor, patch, ok := StableVersion(version)
+	return ok && major == 1 && minor == 14 && patch >= 1
+}
 
-const UDPForwardUnavailable = "官方内核的 UDP 固定转发尚未通过空闲会话回收验证，暂不可启用；可使用 TCP 转发"
+const UDPForwardUnavailable = "UDP 固定转发需要官方 sing-box 1.14.1 或兼容的 1.14.x 稳定版，以及支持 UDP 会话管理的新 agent"
 const SS2022Requirement = "SS-2022 出口需要在设置中选择官方 sing-box 1.14.1 或兼容的 1.14.x 稳定版"

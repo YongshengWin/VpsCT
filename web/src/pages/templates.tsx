@@ -40,7 +40,7 @@ function TemplateList() {
             <Card key={t.id} className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 font-medium"><span className="break-words">{t.name}</span><Badge variant="outline">{t.kind}</Badge>{t.is_builtin && <Badge variant="secondary">内置</Badge>}</p>
+                  <p className="flex items-center gap-2 font-medium"><span className="wrap-break-word">{t.name}</span><Badge variant="outline">{t.kind}</Badge>{t.is_builtin && <Badge variant="secondary">内置</Badge>}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{t.description || "无描述"} · {t.content.split("\n").length} 行</p>
                 </div>
                 <div className="flex shrink-0">
@@ -133,7 +133,7 @@ function PresetList() {
             <Card key={p.id} className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="flex items-center gap-2 font-medium"><span className="break-words">{p.name}</span>{p.is_builtin && <Badge variant="secondary">内置</Badge>}</p>
+                  <p className="flex items-center gap-2 font-medium"><span className="wrap-break-word">{p.name}</span>{p.is_builtin && <Badge variant="secondary">内置</Badge>}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{p.groups.length} 个代理组 · {p.rules.length} 条规则</p>
                   <p className="mt-1 flex flex-wrap gap-1">{p.groups.map((g) => <Code key={g.name}>{g.name}</Code>)}</p>
                 </div>
@@ -179,7 +179,7 @@ function PresetDialog({ p, onClose }: { p: Preset | null | "new"; onClose: () =>
       footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending}>保存</Button></>}>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="mb-3 flex shrink-0 flex-wrap items-end gap-3">
-          <Field label="名称" hint="例如：手动 + 自动，国内直连" className="min-w-0 flex-1 sm:min-w-[12rem]"><Input aria-label="预设名称" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label="名称" hint="例如：手动 + 自动，国内直连" className="min-w-0 flex-1 sm:min-w-48"><Input aria-label="预设名称" value={name} onChange={(e) => setName(e.target.value)} /></Field>
           <Tabs value={tab} onChange={setTab} items={[{ value: "groups", label: `代理组 (${groups.length})` }, { value: "rules", label: `规则 (${rules.split("\n").filter(Boolean).length})` }]} />
         </div>
         {tab === "groups" ? (

@@ -49,7 +49,7 @@ function ProfileCard({ user }: { user: User }) {
       <div className="flex items-center gap-4">
         <Avatar user={user} size={72} className="ring-4 ring-background shadow-card" />
         <div className="min-w-0">
-          <p className="break-words text-lg font-bold">{displayName(user)}</p>
+          <p className="wrap-break-word text-lg font-bold">{displayName(user)}</p>
           <p className="text-sm text-muted-foreground">
             {user.username} · {user.role === "admin" ? "管理员" : "普通用户"} · 加入于 {fmtDate(user.created_at, false)}
           </p>

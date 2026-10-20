@@ -18,6 +18,8 @@ import {
   UserCog,
   Share2,
   ChevronDown,
+  Bot,
+  BookOpen,
 } from "lucide-react";
 import { cn, displayName } from "@/lib/utils";
 import { useAuth, useTheme } from "@/lib/auth";
@@ -46,6 +48,7 @@ const items: Item[] = [
 ];
 const accountItems: Item[] = [
   { to: "/account", label: "账户设置", icon: UserCog },
+  { to: "/ai", label: "AI 能力", icon: Bot },
   { to: "/users", label: "用户", icon: Users2, admin: true },
   { to: "/settings", label: "设置", icon: Settings, admin: true },
 ];
@@ -61,6 +64,13 @@ function Brand({ name }: { name: string }) {
 
 function IconButton({ className, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
   return <button className={cn("inline-flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground", className)} {...props} />;
+}
+
+function HeaderHint({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="group relative flex items-center">
+    {children}
+    <span role="tooltip" className="pointer-events-none invisible absolute right-0 top-full mt-2 translate-y-1 whitespace-nowrap rounded-md border border-border/70 bg-card px-2.5 py-1.5 text-xs font-medium text-foreground opacity-0 shadow-md transition-[opacity,transform] duration-100 group-hover:visible group-focus-within:visible group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">{label}</span>
+  </div>;
 }
 
 export function Layout() {
@@ -84,6 +94,7 @@ export function Layout() {
   }, [menu]);
 
   const isAdmin = user?.role === "admin";
+  const isManual = loc.pathname === "/manual" || loc.pathname === "/manual/";
   const visible = items.filter((i) => !i.admin || isAdmin);
   const account = accountItems.filter((i) => !i.admin || isAdmin);
   const mobileItems = visible.slice(0, 4);
@@ -111,7 +122,7 @@ export function Layout() {
   );
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className={cn("flex min-h-screen flex-col", isManual && "lg:h-dvh lg:min-h-0 lg:overflow-hidden")}>
       {/* header */}
       <header className="sticky top-0 z-30 border-b border-border/70 bg-card/85 backdrop-blur-md dark:border-border">
         <div className="px-4 sm:px-6">
@@ -122,7 +133,7 @@ export function Layout() {
           <Brand name={siteName} />
 
           {/* desktop nav */}
-          <nav className="no-scrollbar mx-auto hidden min-w-0 flex-1 items-center justify-center gap-4 overflow-x-auto lg:flex">
+          <nav className="no-scrollbar mx-auto hidden min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto xl:gap-2 lg:flex">
             {visible.map((it) => (
               <NavLink
                 key={it.to}
@@ -130,7 +141,7 @@ export function Layout() {
                 end={it.to === "/"}
                 className={({ isActive }) =>
                   cn(
-                    "whitespace-nowrap rounded-full px-4 py-2 text-sm font-semibold transition-colors",
+                    "whitespace-nowrap rounded-full px-3 py-2 text-sm font-semibold transition-colors",
                     isActive ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-accent hover:text-foreground",
                   )
                 }
@@ -141,9 +152,16 @@ export function Layout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-1 lg:ml-0">
-            <IconButton onClick={toggle} title="切换主题" aria-label="切换主题">
+            <HeaderHint label="使用手册"><NavLink
+              to="/manual"
+              aria-label="使用手册"
+              className={({ isActive }) => cn("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40", isActive ? "text-primary" : "text-muted-foreground hover:text-foreground")}
+            >
+              <BookOpen className="h-[18px] w-[18px]" aria-hidden="true" />
+            </NavLink></HeaderHint>
+            <HeaderHint label="切换主题"><IconButton onClick={toggle} aria-label="切换主题">
               {isDark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
-            </IconButton>
+            </IconButton></HeaderHint>
             {/* account menu (desktop) */}
             <div ref={menuRef} className="relative hidden lg:block">
               <button
@@ -153,7 +171,7 @@ export function Layout() {
                 aria-expanded={menu}
               >
                 {user && <Avatar user={user} size={28} />}
-                <span className="max-w-[12rem] truncate font-medium">{displayName(user)}</span>
+                <span className="max-w-48 truncate font-medium">{displayName(user)}</span>
                 <ChevronDown className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", menu && "rotate-180")} />
               </button>
               {menu && (
@@ -161,7 +179,7 @@ export function Layout() {
                   <div className="flex items-center gap-3 px-3 py-2">
                     {user && <Avatar user={user} size={36} />}
                     <div className="min-w-0">
-                      <p className="break-words text-sm font-semibold">{displayName(user)}</p>
+                      <p className="wrap-break-word text-sm font-semibold">{displayName(user)}</p>
                       <p className="text-xs text-muted-foreground">{displayName(user) !== user?.username ? `${user?.username} · ` : ""}{isAdmin ? "管理员" : "普通用户"}</p>
                     </div>
                   </div>
@@ -195,7 +213,7 @@ export function Layout() {
       {/* mobile drawer */}
       {open && (
         <div className="fixed inset-0 z-40 lg:hidden">
-          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setOpen(false)} />
+          <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={() => setOpen(false)} />
           <aside className="absolute inset-y-0 left-0 flex w-72 flex-col bg-card shadow-pop">
             <div className="flex h-16 items-center justify-between px-4">
               <Brand name={siteName} />
@@ -208,7 +226,7 @@ export function Layout() {
               <div className="flex items-center gap-3 rounded-xl px-2 py-1.5">
                 {user && <Avatar user={user} size={36} />}
                 <div className="min-w-0 flex-1">
-                  <p className="break-words text-sm font-semibold">{displayName(user)}</p>
+                  <p className="wrap-break-word text-sm font-semibold">{displayName(user)}</p>
                   <p className="text-xs text-muted-foreground">{displayName(user) !== user?.username ? `${user?.username} · ` : ""}{isAdmin ? "管理员" : "普通用户"}</p>
                 </div>
                 <IconButton onClick={logout} title="退出登录" aria-label="退出登录">
@@ -220,15 +238,15 @@ export function Layout() {
         </div>
       )}
 
-      <main className="flex-1 px-4 pb-24 pt-6 sm:px-6 sm:pt-8 lg:pb-10">
-        <div className="mx-auto w-full max-w-6xl animate-fade-up">
+      <main className={cn("flex-1 px-4 pb-24 pt-6 sm:px-6 sm:pt-8 lg:pb-10", isManual && "lg:min-h-0 lg:overflow-hidden lg:pb-8")}>
+        <div className={cn("mx-auto w-full max-w-6xl animate-fade-up", isManual && "lg:flex lg:h-full lg:min-h-0 lg:flex-col")}>
           {isAdmin && !(loc.pathname === "/settings" && new URLSearchParams(loc.search).get("tab") === "cores") && <CoreUpgradeNotice />}
           <Outlet />
         </div>
       </main>
 
       {/* mobile bottom nav */}
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border/70 bg-card/95 backdrop-blur safe-bottom lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border/70 bg-card/95 backdrop-blur-sm safe-bottom lg:hidden">
         {mobileItems.map((it) => (
           <NavLink
             key={it.to}

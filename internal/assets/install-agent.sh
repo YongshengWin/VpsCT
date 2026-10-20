@@ -38,23 +38,37 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "must run as root" >&2
   exit 1
 fi
-if ! command -v systemctl >/dev/null 2>&1; then
-  echo "systemd is required" >&2
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) echo "ARM 支持已暂停；当前仅支持 Linux AMD64" >&2; exit 1 ;;
+  *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+
+INIT=''
+if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+  INIT=systemd
+elif [[ -f /run/openrc/softlevel ]] && command -v rc-service >/dev/null 2>&1 && command -v rc-update >/dev/null 2>&1; then
+  INIT=openrc
+else
+  echo "a running systemd or OpenRC host is required" >&2
   exit 1
+fi
+# Alpine's default BusyBox tools do not provide all installer/deletion guards.
+# Updates need the same tools and runtime sandbox as initial installations.
+if [[ "$INIT" == openrc ]]; then
+  command -v apk >/dev/null 2>&1 || { echo "OpenRC support currently requires Alpine Linux" >&2; exit 1; }
+  apk add --no-cache bash curl ca-certificates nftables unzip tar chrony coreutils findmnt flock setpriv bubblewrap shadow >/dev/null
 fi
 if ! command -v flock >/dev/null 2>&1; then
   echo "flock is required; install util-linux first" >&2
   exit 1
 fi
+install -d -m 0755 /run/lock
 exec 9>/run/lock/ctlvps-install.lock
 flock -n 9 || { echo "another installation or maintenance task is running" >&2; exit 1; }
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64|amd64) ARCH=amd64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-  *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
-esac
+
 
 # Download a complete release from the fixed publisher. The controller supplies
 # enrollment/configuration only; it cannot choose executable bytes or checksums.
@@ -64,8 +78,68 @@ if [[ "$RELEASE_VERSION" == '__VERSION__' ]]; then
 fi
 [[ "$RELEASE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A-Za-z0-9.-]*)?$ ]] || { echo 'invalid release version' >&2; exit 1; }
 WORK=$(mktemp -d)
-trap 'rm -rf -- "$WORK"' EXIT
+agent_stage=''
+# OpenRC daemons may inherit descriptor 9. Explicitly release our flock on
+# exit so a successful install cannot permanently block subsequent updates.
+trap 'flock -u 9; rm -rf -- "$WORK"; if [[ -n "$agent_stage" ]]; then rm -f -- "$agent_stage"; fi' EXIT
 RELEASE_BASE="https://github.com/YongshengWin/VpsCT/releases/download/$RELEASE_VERSION"
+agent_restart() {
+  if [[ "$INIT" == openrc ]]; then rc-service ctlvps-agent restart; else systemctl restart ctlvps-agent; fi
+}
+agent_running() {
+  if [[ "$INIT" == openrc ]]; then rc-service ctlvps-agent status >/dev/null; else systemctl is-active --quiet ctlvps-agent; fi
+}
+wait_openrc_ready() {
+  local attempt deadline=$((SECONDS + 90))
+  # A supervisor PID alone does not prove the agent refreshed its helpers.
+  # The fixed read-only CLI binds readiness to the current process/executable.
+  for ((attempt = 0; attempt < 90 && SECONDS < deadline; attempt++)); do
+    if agent_running && "$BIN_DIR/ctlvps-agent" openrc-ready >/dev/null 2>&1; then return 0; fi
+    sleep 1 || return 1
+  done
+  echo 'OpenRC agent did not become ready within the startup window' >&2
+  return 1
+}
+restart_updated_agent() {
+  local started=0
+  if [[ "$INIT" == openrc ]]; then
+    if agent_restart; then started=1; fi
+    # Run must take this lock to refresh helpers. Never wait while holding it.
+    flock -u 8 || return 1
+    [[ "$started" == 1 ]] && wait_openrc_ready
+  else
+    agent_restart && sleep 2 && agent_running
+  fi
+}
+agent_status() {
+  if [[ "$INIT" == openrc ]]; then rc-service ctlvps-agent status; else systemctl --no-pager --lines=5 status ctlvps-agent; fi
+}
+agent_logs() {
+  if [[ "$INIT" == openrc ]]; then echo 'tail -f /var/log/messages'; else echo 'journalctl -u ctlvps-agent -f'; fi
+}
+uninstall_preview() {
+  if [[ "$INIT" == openrc ]]; then
+    echo '==> uninstall preview (root): bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run'
+  else
+    echo '==> uninstall preview: sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run'
+  fi
+}
+prepare_openrc_agent() {
+  local candidate=$1
+  "$candidate" openrc-check
+  if [[ -e /etc/init.d/ctlvps-agent || -L /etc/init.d/ctlvps-agent ]]; then
+    "$BIN_DIR/ctlvps-agent" openrc-verify ctlvps-agent.service
+  fi
+  "$candidate" openrc-script ctlvps-agent.service > "$WORK/agent.init.new"
+  [[ -s "$WORK/agent.init.new" ]] || { echo 'empty OpenRC service script' >&2; exit 1; }
+  sh -n "$WORK/agent.init.new"
+}
+install_openrc_agent() {
+  local staged
+  staged=$(mktemp /etc/init.d/.ctlvps-agent.XXXXXXXX)
+  install -m 0755 "$WORK/agent.init.new" "$staged"
+  mv -Tf -- "$staged" /etc/init.d/ctlvps-agent
+}
 download_agent() {
   local asset="ctlvps-agent-linux-$ARCH" helper="ctlvps-verify-linux-$ARCH" expected helper_stage
   TMP="$WORK/$asset"
@@ -110,18 +184,45 @@ if [[ "$UPDATE" -eq 1 ]]; then
 	    rm -f -- "$agent_stage"; exit 1
 	  fi
 	fi
+  if [[ "$INIT" == openrc ]]; then
+    prepare_openrc_agent "$agent_stage"
+    cp -- /etc/init.d/ctlvps-agent "$WORK/agent.init.previous"
+    rc-service ctlvps-agent stop
+    "$BIN_DIR/ctlvps-agent" openrc-stop ctlvps-agent.service
+  fi
   mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
-  if ! systemctl restart ctlvps-agent || ! sleep 2 || ! systemctl is-active --quiet ctlvps-agent; then
+  if [[ "$INIT" == openrc ]]; then install_openrc_agent; fi
+  if ! restart_updated_agent; then
+    if [[ "$INIT" == openrc ]]; then
+      flock -w 30 8 || { echo 'agent update failed; cannot acquire the configuration lock for rollback, installed candidate left unchanged' >&2; exit 1; }
+      rc-service ctlvps-agent stop || true
+      "$BIN_DIR/ctlvps-agent" openrc-stop ctlvps-agent.service || { echo 'agent update failed; cannot stop the candidate cgroup for rollback, installed candidate left unchanged' >&2; exit 1; }
+      if agent_running; then
+        echo 'agent update failed; candidate supervisor is still running, installed candidate left unchanged' >&2
+        exit 1
+      fi
+    fi
     agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
     install -m 0755 "$WORK/agent.previous" "$agent_stage"
     mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
-    systemctl restart ctlvps-agent
+    if [[ "$INIT" == openrc ]]; then
+      cp -- "$WORK/agent.init.previous" "$WORK/agent.init.new"
+      install_openrc_agent
+    fi
+    if [[ "$INIT" == openrc ]]; then
+      if ! restart_updated_agent; then
+        echo 'agent update failed; previous binary restored but did not become ready; check service logs' >&2
+        exit 1
+      fi
+    else
+      agent_restart
+    fi
     echo 'agent update failed; previous binary restored' >&2
     exit 1
   fi
-  systemctl --no-pager --lines=5 status ctlvps-agent
-  echo "==> uninstall preview: sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run"
-  echo "==> agent updated. logs: journalctl -u ctlvps-agent -f"
+  agent_status
+  uninstall_preview
+  echo "==> agent updated. logs: $(agent_logs)"
   exit 0
 fi
 
@@ -134,15 +235,28 @@ elif command -v dnf >/dev/null 2>&1; then
   dnf install -y -q nftables curl ca-certificates unzip tar chrony >/dev/null
 elif command -v yum >/dev/null 2>&1; then
   yum install -y -q nftables curl ca-certificates unzip tar chrony >/dev/null
-elif command -v apk >/dev/null 2>&1; then
-  apk add --no-cache nftables curl ca-certificates unzip tar chrony >/dev/null
+elif [[ "$INIT" != openrc ]]; then
+  echo 'no supported package manager' >&2; exit 1
 fi
-systemctl enable --now nftables >/dev/null 2>&1 || true
-systemctl enable --now chrony >/dev/null 2>&1 || systemctl enable --now chronyd >/dev/null 2>&1 || true
+if [[ "$INIT" == openrc ]]; then
+  # The agent reconciles its own tables. Do not start the packaged nftables
+  # service here: its configuration may flush an operator's existing ruleset.
+  rc-update add chronyd default
+  rc-service chronyd start
+else
+  systemctl enable --now nftables >/dev/null 2>&1 || true
+  systemctl enable --now chrony >/dev/null 2>&1 || systemctl enable --now chronyd >/dev/null 2>&1 || true
+fi
 
 echo "==> downloading ctlvps-agent (linux-$ARCH)"
+install -d -m 0755 "$BIN_DIR"
 download_agent
-install -m 0755 "$TMP" "$BIN_DIR/ctlvps-agent"
+# /tmp may be mounted noexec. Execute the checked candidate only from the
+# destination filesystem, then atomically promote it after OpenRC preflight.
+agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
+install -m 0755 "$TMP" "$agent_stage"
+if [[ "$INIT" == openrc ]]; then prepare_openrc_agent "$agent_stage"; fi
+mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
 rm -f "$TMP"
 
 mkdir -p "$CONF_DIR" "$STATE_DIR"
@@ -151,6 +265,12 @@ chmod 0700 "$STATE_DIR"
 echo "==> enrolling with $SERVER"
 "$BIN_DIR/ctlvps-agent" enroll --server "$SERVER" --token "$TOKEN" --state "$STATE_DIR"
 
+if [[ "$INIT" == openrc ]]; then
+  install_openrc_agent
+  "$BIN_DIR/ctlvps-agent" openrc-sync
+  rc-update add ctlvps-agent default
+  rc-service ctlvps-agent start
+else
 cat > /etc/systemd/system/ctlvps-agent.service <<EOF
 [Unit]
 Description=ctlvps agent
@@ -180,8 +300,13 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now ctlvps-agent
-sleep 2
-systemctl --no-pager --lines=5 status ctlvps-agent || true
-echo "==> done. logs: journalctl -u ctlvps-agent -f"
+fi
+if [[ "$INIT" == openrc ]]; then
+  wait_openrc_ready || { echo 'agent installation did not become ready; check service logs before retrying' >&2; exit 1; }
+else
+  sleep 2
+fi
+agent_status
+echo "==> done. logs: $(agent_logs)"
 
-echo "==> uninstall preview: sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run"
+uninstall_preview

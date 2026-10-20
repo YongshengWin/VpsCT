@@ -66,7 +66,7 @@ func (h retirementHost) FinalRead(ctx context.Context, nodes []MeterIdentity) ([
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: "systemd-v1", Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: true})
+			out = append(out, agentproto.PortCounter{NodeID: n.NodeID, Port: n.Port, Source: processMeterSource(), Epoch: r.Epoch, Rx: r.Rx, Tx: r.Tx, FromZero: true})
 		} else {
 			return nil, errors.New("unsupported retiring core")
 		}

@@ -94,7 +94,8 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 	}
 	now := i.Now()
 	ts := hb.TS
-	if ts.IsZero() || ts.After(now.Add(5*time.Minute)) {
+	identifiedSampleTime := !ts.IsZero() && !ts.After(now.Add(5*time.Minute))
+	if !identifiedSampleTime {
 		ts = now
 	}
 	res := Result{NodeDeltas: map[int64][2]int64{}}
@@ -117,6 +118,10 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 		if _, ok := byID[n.ID]; !ok {
 			byID[n.ID] = n
 		}
+	}
+	baselineOnly, err := nodeCounterBaselines(hb.Ports, byID, byPort)
+	if err != nil {
+		return res, err
 	}
 	epoch := hb.Epoch
 	if epoch == "" {
@@ -153,13 +158,22 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 		}
 		add := func(subject string, id int64, rx, txBytes int64) error {
 			for _, bucket := range []struct{ table, key string }{{"traffic_hourly", ts.UTC().Truncate(time.Hour).Format(time.RFC3339)}, {"traffic_daily", ts.UTC().Format("2006-01-02")}} {
-				_, err := tx.ExecContext(ctx, "INSERT INTO "+bucket.table+"(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?) ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up,down=down+excluded.down", bucket.key, subject, id, rx, txBytes)
+				var previousRx, previousTx int64
+				err := tx.QueryRowContext(ctx, "SELECT up,down FROM "+bucket.table+" WHERE bucket=? AND subject=? AND subject_id=?", bucket.key, subject, id).Scan(&previousRx, &previousTx)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				if _, _, err := addTrafficDirections(previousRx, previousTx, rx, txBytes); err != nil {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, "INSERT INTO "+bucket.table+"(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?) ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up,down=down+excluded.down", bucket.key, subject, id, rx, txBytes)
 				if err != nil {
 					return err
 				}
 			}
 			return nil
 		}
+		accepted := map[string]bool{}
 		delta := func(key, ep string, rx, txBytes int64, fromZero bool) (int64, int64, bool, error) {
 			if rx < 0 || txBytes < 0 || rx > math.MaxInt64/4 || txBytes > math.MaxInt64/4 {
 				return 0, 0, false, errors.New("invalid traffic counters")
@@ -171,40 +185,92 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return 0, 0, false, err
 			}
+			durable := hb.FinalMeters != nil || hb.NetworkBillingSwitch != nil || hb.ForwardReceipt != nil
+			sameEpoch := oldEpoch == ep || (key == "nic" && strings.SplitN(oldEpoch, ":", 2)[0] == strings.SplitN(ep, ":", 2)[0])
 			// Stale/replayed reports never rewind the accounting baseline.
 			baselineTS := ts
 			if found {
-				if last, e := time.Parse(time.RFC3339Nano, updated); e == nil && ts.Before(last) {
-					if hb.FinalMeters == nil && hb.NetworkBillingSwitch == nil && hb.ForwardReceipt == nil {
+				if last, e := time.Parse(time.RFC3339Nano, updated); e == nil {
+					if ts.Equal(last) && sameEpoch && rx == oldRx && txBytes == oldTx {
+						return 0, 0, true, nil
+					}
+					if ts.Equal(last) && sameEpoch && !durable {
+						if identifiedSampleTime && (rx < oldRx || txBytes < oldTx) {
+							return 0, 0, false, errors.New("traffic sample timestamp reused with different counters")
+						}
+					}
+					if ts.Before(last) {
+						if !durable {
+							return 0, 0, false, nil
+						}
+						// Frozen final snapshots may follow a wall-clock correction.
+						// Only the same generation's monotonic tail may be settled.
+						if !sameEpoch || rx < oldRx || txBytes < oldTx {
+							return 0, 0, false, errors.New("final meter conflicts with newer baseline")
+						}
+						baselineTS = last
+					}
+				}
+			}
+			boot, oldBoot := "", ""
+			if key == "nic" {
+				boot, oldBoot = linuxBootEpoch(ep), linuxBootEpoch(oldEpoch)
+				if boot != "" && found && !sameEpoch {
+					var exists int
+					err := tx.QueryRowContext(ctx, "SELECT 1 FROM counter_state WHERE server_id=? AND counter_key=?", server.ID, "nic-boot:"+boot).Scan(&exists)
+					if err == nil {
+						if durable {
+							return 0, 0, false, errors.New("billing snapshot belongs to a retired NIC boot")
+						}
 						return 0, 0, false, nil
 					}
-					// A frozen final snapshot may follow a wall-clock correction.
-					// Accept only monotonic counters of the same generation; never
-					// ACK and silently discard unsettled bytes as a stale heartbeat.
-					if oldEpoch != ep || rx < oldRx || txBytes < oldTx {
-						return 0, 0, false, errors.New("final meter conflicts with newer baseline")
+					if !errors.Is(err, sql.ErrNoRows) {
+						return 0, 0, false, err
 					}
-					baselineTS = last
 				}
 			}
 			dr, dt, ok := int64(0), int64(0), false
-			if found && (oldEpoch == ep || (key == "nic" && strings.Split(oldEpoch, ":")[0] == strings.Split(ep, ":")[0])) {
+			if found && sameEpoch {
 				if rx < oldRx || txBytes < oldTx {
 					if fromZero {
 						return 0, 0, false, errors.New("counter reset without a new epoch")
 					}
-					dr, dt = rx, txBytes
+					dr, dt = rx-oldRx, txBytes-oldTx
+					if dr < 0 {
+						dr = rx
+					}
+					if dt < 0 {
+						dt = txBytes
+					}
 				} else {
 					dr, dt = rx-oldRx, txBytes-oldTx
 				}
 				ok = true
-			} else if fromZero || (found && (rx < oldRx || txBytes < oldTx)) {
+			} else if fromZero || (found && boot != "" && oldBoot != "" && boot != oldBoot) || (found && (rx < oldRx || txBytes < oldTx)) {
 				dr, dt, ok = rx, txBytes, true
 			}
+			for id := range baselineOnly {
+				if strings.HasPrefix(key, fmt.Sprintf("node:%d:systemd-legacy-v1:", id)) {
+					dr, dt, ok = 0, 0, false
+					break
+				}
+			}
 			_, err = tx.ExecContext(ctx, `INSERT INTO counter_state(server_id,counter_key,epoch,last_rx,last_tx,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(server_id,counter_key) DO UPDATE SET epoch=excluded.epoch,last_rx=excluded.last_rx,last_tx=excluded.last_tx,updated_at=excluded.updated_at`, server.ID, key, ep, rx, txBytes, baselineTS.UTC().Format(time.RFC3339Nano))
+			if err == nil && boot != "" {
+				if oldBoot != "" && !sameEpoch {
+					_, err = tx.ExecContext(ctx, `INSERT INTO counter_state(server_id,counter_key,epoch,last_rx,last_tx,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(server_id,counter_key) DO NOTHING`, server.ID, "nic-boot:"+oldBoot, oldEpoch, oldRx, oldTx, updated)
+				}
+				if err == nil {
+					_, err = tx.ExecContext(ctx, `INSERT INTO counter_state(server_id,counter_key,epoch,last_rx,last_tx,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(server_id,counter_key) DO UPDATE SET epoch=excluded.epoch,last_rx=excluded.last_rx,last_tx=excluded.last_tx,updated_at=excluded.updated_at`, server.ID, "nic-boot:"+boot, ep, rx, txBytes, baselineTS.UTC().Format(time.RFC3339Nano))
+				}
+			}
+			accepted[key] = err == nil
 			return dr, dt, ok, err
 		}
 		sample := func(node any, rx, txBytes int64) error {
+			if !domain.ValidTrafficTotals(rx, txBytes) {
+				return errors.New("traffic sample totals overflow or are invalid")
+			}
 			_, err := tx.ExecContext(ctx, "INSERT INTO traffic_samples(server_id,node_id,ts,rx_bytes,tx_bytes) VALUES(?,?,?,?,?)", server.ID, node, ts.UTC().Format(time.RFC3339Nano), rx, txBytes)
 			if err != nil {
 				return err
@@ -214,22 +280,22 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			}
 			return add(store.SubjectServer, server.ID, 0, 0)
 		}
-		legacy := func() error {
+		legacy := func() (bool, error) {
 			if hb.Metrics.NetRx > 0 || hb.Metrics.NetTx > 0 {
 				rx, txBytes, ok, err := delta("nic", epoch, hb.Metrics.NetRx, hb.Metrics.NetTx, false)
 				if err != nil {
-					return err
+					return false, err
 				}
 				if ok {
 					res.ServerUp, res.ServerDown = rx, txBytes
 					if err = add(store.SubjectServer, server.ID, rx, txBytes); err != nil {
-						return err
+						return false, err
 					}
 				} else {
 					res.Reset = true
 				}
 			}
-			return nil
+			return accepted["nic"], nil
 		}
 		if hb.FinalMeters == nil && hb.ForwardReceipt == nil {
 			if err := i.ingestNetworkBilling(ctx, tx, server.ID, hb, ts, &res, legacy, add, sample); err != nil {
@@ -257,7 +323,7 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			ep := epoch
 			if pc.NodeID > 0 {
 				n, known = byID[pc.NodeID]
-				if pc.Source != "nft-node-v1" && pc.Source != "systemd-v1" && pc.Source != "systemd-legacy-v1" {
+				if pc.Source != "openrc-cgroup-v1" && pc.Source != "nft-node-v1" && pc.Source != "systemd-v1" && pc.Source != "systemd-legacy-v1" {
 					return errors.New("unknown node meter source")
 				}
 				if pc.Epoch == "" || len(pc.Epoch) > 128 {
@@ -285,14 +351,20 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 				}
 				continue
 			}
-			if err = sample(n.ID, pc.Rx, pc.Tx); err != nil {
-				return err
+			if accepted[key] && !(pc.NodeID > 0 && baselineOnly[pc.NodeID]) {
+				if err = sample(n.ID, pc.Rx, pc.Tx); err != nil {
+					return err
+				}
 			}
 			if !ok || (rx == 0 && txBytes == 0) {
 				continue
 			}
 			prev := res.NodeDeltas[n.ID]
-			res.NodeDeltas[n.ID] = [2]int64{prev[0] + rx, prev[1] + txBytes}
+			nodeRx, nodeTx, err := addTrafficDirections(prev[0], prev[1], rx, txBytes)
+			if err != nil {
+				return err
+			}
+			res.NodeDeltas[n.ID] = [2]int64{nodeRx, nodeTx}
 			if err = add(store.SubjectNode, n.ID, rx, txBytes); err != nil {
 				return err
 			}
@@ -302,8 +374,10 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 					p = &ShareDelta{ShareID: *n.ShareID}
 					shares[*n.ShareID] = p
 				}
-				p.Up += rx
-				p.Down += txBytes
+				p.Up, p.Down, err = addTrafficDirections(p.Up, p.Down, rx, txBytes)
+				if err != nil {
+					return err
+				}
 			}
 		}
 		for _, sh := range shares {
@@ -314,16 +388,23 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 			// retryable and must never add these deltas a second time.
 			var resetDay int
 			var period string
-			if err := tx.QueryRowContext(ctx, "SELECT reset_day,period_start FROM shares WHERE id=?", sh.ShareID).Scan(&resetDay, &period); err != nil {
+			var usedRx, usedTx int64
+			var nodeUsageJSON string
+			if err := tx.QueryRowContext(ctx, "SELECT reset_day,period_start,used_upload,used_download,node_usage FROM shares WHERE id=?", sh.ShareID).Scan(&resetDay, &period, &usedRx, &usedTx, &nodeUsageJSON); err != nil {
 				return err
 			}
 			oldPeriod, _ := time.Parse(time.RFC3339Nano, period)
 			start := PeriodStart(now, resetDay)
 			if !start.IsZero() && start.After(oldPeriod) {
-				if _, err := tx.ExecContext(ctx, "UPDATE shares SET period_start=?,used_upload=0,used_download=0,status=CASE WHEN status='exhausted' THEN 'active' ELSE status END WHERE id=?", start.Format(time.RFC3339Nano), sh.ShareID); err != nil {
+				if _, err := tx.ExecContext(ctx, "UPDATE shares SET node_usage='{}',period_start=?,used_upload=0,used_download=0,status=CASE WHEN status='exhausted' THEN 'active' ELSE status END WHERE id=?", start.Format(time.RFC3339Nano), sh.ShareID); err != nil {
 					return err
 				}
 				sh.PeriodReset = true
+				nodeUsageJSON = "{}"
+				usedRx, usedTx = 0, 0
+			}
+			if oldPeriod.After(start) {
+				start = oldPeriod // A manual reset is also an accounting boundary.
 			}
 			// Delayed durable reports belong to their sampling period. Keep
 			// their historical ledger, but do not consume the current quota.
@@ -332,7 +413,30 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 				res.Shares = append(res.Shares, *sh)
 				continue
 			}
-			if _, err := tx.ExecContext(ctx, "UPDATE shares SET used_upload=used_upload+?,used_download=used_download+? WHERE id=?", sh.Up, sh.Down, sh.ShareID); err != nil {
+			if _, _, err := addTrafficDirections(usedRx, usedTx, sh.Up, sh.Down); err != nil {
+				return err
+			}
+			nodeUsage := map[int64][2]int64{}
+			if err := json.Unmarshal([]byte(nodeUsageJSON), &nodeUsage); err != nil {
+				return err
+			}
+			for nodeID, d := range res.NodeDeltas {
+				n := byID[nodeID]
+				if n.ShareID == nil || *n.ShareID != sh.ShareID {
+					continue
+				}
+				prev := nodeUsage[nodeID]
+				rx, txBytes, err := addTrafficDirections(prev[0], prev[1], d[0], d[1])
+				if err != nil {
+					return err
+				}
+				nodeUsage[nodeID] = [2]int64{rx, txBytes}
+			}
+			encoded, err := json.Marshal(nodeUsage)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "UPDATE shares SET node_usage=?,used_upload=used_upload+?,used_download=used_download+? WHERE id=?", string(encoded), sh.Up, sh.Down, sh.ShareID); err != nil {
 				return err
 			}
 			res.Shares = append(res.Shares, *sh)
@@ -348,6 +452,9 @@ func (i *Ingestor) Ingest(ctx context.Context, server domain.Server, hb agentpro
 	if err != nil {
 		res.FinalMeterAck = ""
 		res.ForwardReceiptAck = ""
+		res.NetworkBillingAck = ""
+		res.ServerUp, res.ServerDown = 0, 0
+		res.NodeDeltas, res.Shares = map[int64][2]int64{}, nil
 	}
 	return res, err
 }
@@ -393,27 +500,35 @@ func clampResetDate(year int, month time.Month, resetDay int) time.Time {
 
 // ServerUsage is the current-period usage of a VPS.
 type ServerUsage struct {
-	ServerID    int64     `json:"server_id"`
-	PeriodStart time.Time `json:"period_start"`
-	Up          int64     `json:"up"`   // inbound (NIC rx)
-	Down        int64     `json:"down"` // outbound (NIC tx)
-	Inbound     int64     `json:"inbound"`
-	Outbound    int64     `json:"outbound"`
-	Total       int64     `json:"total"`
-	Billed      int64     `json:"billed"`
-	OneWay      int64     `json:"one_way"`
-	TwoWay      int64     `json:"two_way"`
-	Quota       int64     `json:"quota"`
-	Percent     float64   `json:"percent"`
-	OverQuota   bool      `json:"over_quota"`
+	ServerID                      int64      `json:"server_id"`
+	PeriodStart                   time.Time  `json:"period_start"`
+	NextReset                     *time.Time `json:"next_reset,omitempty"`
+	Up                            int64      `json:"up"`   // inbound (NIC rx)
+	Down                          int64      `json:"down"` // outbound (NIC tx)
+	Inbound                       int64      `json:"inbound"`
+	Outbound                      int64      `json:"outbound"`
+	Total                         int64      `json:"total"`
+	Billed                        int64      `json:"billed"`
+	OneWay                        int64      `json:"one_way"`
+	TwoWay                        int64      `json:"two_way"`
+	Quota                         int64      `json:"quota"`
+	Percent                       float64    `json:"percent"`
+	OverQuota                     bool       `json:"over_quota"`
+	BilledEstimated               bool       `json:"billed_estimated"`
+	QuotaCalibratedUsageBytes     *int64     `json:"quota_calibrated_usage_bytes,omitempty"`
+	QuotaCalibratedInboundBytes   *int64     `json:"quota_calibrated_inbound_bytes,omitempty"`
+	QuotaCalibratedOutboundBytes  *int64     `json:"quota_calibrated_outbound_bytes,omitempty"`
+	QuotaCalibrationObservedBytes *int64     `json:"quota_calibration_observed_bytes,omitempty"`
+	QuotaCalibratedAt             *time.Time `json:"quota_calibrated_at,omitempty"`
 }
 
 // ServerUsage computes the current period usage of a server.
 func (i *Ingestor) ServerUsage(ctx context.Context, s domain.Server) (ServerUsage, error) {
 	now := i.Now()
 	start := PeriodStart(now, s.QuotaResetDay)
+	periodic := !start.IsZero()
 	if start.IsZero() {
-		start = now.AddDate(0, 0, -30)
+		start = now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -29)
 	}
 	up, down, err := i.Store.SumTraffic(ctx, store.SubjectServer, s.ID, start, now)
 	if err != nil {
@@ -425,7 +540,67 @@ func (i *Ingestor) ServerUsage(ctx context.Context, s domain.Server) (ServerUsag
 	u.Total = domain.Total(up, down)
 	u.OneWay = u.Outbound
 	u.TwoWay = u.Total
-	u.Billed = u.Total
+	u.Billed = domain.ServerQuotaBilled(s.QuotaBilling, up, down)
+	if periodic {
+		next := NextReset(now, s.QuotaResetDay)
+		u.NextReset = &next
+		calibration, ok, err := i.Store.GetServerUsageCalibration(ctx, s.ID, start)
+		if err != nil {
+			return ServerUsage{}, err
+		}
+		if ok {
+			u.QuotaCalibratedUsageBytes = &calibration.CalibratedBytes
+			u.QuotaCalibrationObservedBytes = &calibration.ObservedBytes
+			u.QuotaCalibratedAt = &calibration.CalibratedAt
+			if calibration.HasProviderDirections {
+				u.QuotaCalibratedInboundBytes = &calibration.ProviderUpBytes
+				u.QuotaCalibratedOutboundBytes = &calibration.ProviderDownBytes
+				if !calibration.HasDirectionalSnapshot || up < calibration.ObservedUpBytes || down < calibration.ObservedDownBytes {
+					return ServerUsage{}, errors.New("calibration directional baseline unavailable")
+				}
+				newUp, newDown := up-calibration.ObservedUpBytes, down-calibration.ObservedDownBytes
+				if calibration.ProviderUpBytes > math.MaxInt64-newUp || calibration.ProviderDownBytes > math.MaxInt64-newDown {
+					return ServerUsage{}, errors.New("calibrated server traffic overflow")
+				}
+				providerUp, providerDown := calibration.ProviderUpBytes+newUp, calibration.ProviderDownBytes+newDown
+				if providerUp > math.MaxInt64-providerDown {
+					return ServerUsage{}, errors.New("calibrated server total overflow")
+				}
+				u.Billed = domain.ServerQuotaBilled(s.QuotaBilling, providerUp, providerDown)
+			} else {
+				delta := u.Billed - calibration.ObservedBytes
+				if s.QuotaBilling == domain.BillingMax {
+					u.BilledEstimated = true
+					// A single provider reading does not reveal the provider's two
+					// directional baselines. The larger post-calibration increment
+					// bounds the true increase from above if the provider bills the
+					// maximum of its period-long inbound and outbound totals.
+					if calibration.HasDirectionalSnapshot {
+						newUp := up - calibration.ObservedUpBytes
+						newDown := down - calibration.ObservedDownBytes
+						if newUp < 0 {
+							newUp = 0
+						}
+						if newDown < 0 {
+							newDown = 0
+						}
+						delta = domain.ServerQuotaBilled(domain.BillingMax, newUp, newDown)
+					} else {
+						// Legacy snapshots lack directions; use a conservative
+						// bound rather than an understated max difference.
+						delta = domain.ServerQuotaBilled(domain.BillingMax, up, down)
+					}
+				}
+				if delta > 0 && calibration.CalibratedBytes > math.MaxInt64-delta {
+					return ServerUsage{}, errors.New("calibrated server traffic overflow")
+				}
+				u.Billed = calibration.CalibratedBytes + delta
+				if u.Billed < 0 {
+					u.Billed = 0
+				}
+			}
+		}
+	}
 	if s.QuotaBytes > 0 {
 		u.Percent = float64(u.Billed) / float64(s.QuotaBytes) * 100
 		u.OverQuota = u.Billed >= s.QuotaBytes
@@ -455,7 +630,16 @@ func (i *Ingestor) Daily(ctx context.Context, subject string, id int64, days int
 	if days > 365 {
 		days = 365
 	}
-	from := now.AddDate(0, 0, -(days - 1)).Truncate(24 * time.Hour)
+	from := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, -(days - 1))
+	return i.dailyRange(ctx, subject, id, from, now)
+}
+
+// DailySince returns observed daily buckets from a billing-period boundary.
+func (i *Ingestor) DailySince(ctx context.Context, subject string, id int64, from time.Time) (Series, error) {
+	return i.dailyRange(ctx, subject, id, from.UTC().Truncate(24*time.Hour), i.Now())
+}
+
+func (i *Ingestor) dailyRange(ctx context.Context, subject string, id int64, from, now time.Time) (Series, error) {
 	var rows []domain.TrafficBucket
 	var err error
 	if id == 0 {
@@ -477,11 +661,13 @@ func (i *Ingestor) Daily(ctx context.Context, subject string, id int64, days int
 		if r, ok := byDay[key]; ok {
 			b.Up, b.Down = r.Up, r.Down
 		}
-		s.TotalUp += b.Up
-		s.TotalDown += b.Down
+		s.TotalUp, s.TotalDown, err = addTrafficDirections(s.TotalUp, s.TotalDown, b.Up, b.Down)
+		if err != nil {
+			return Series{}, err
+		}
 		s.Points = append(s.Points, b)
 	}
-	s.Total = s.TotalUp + s.TotalDown
+	s.Total = domain.Total(s.TotalUp, s.TotalDown)
 	return s, nil
 }
 

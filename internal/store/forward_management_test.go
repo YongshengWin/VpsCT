@@ -12,7 +12,7 @@ import (
 	"ctlvps/internal/networkconfig"
 )
 
-func TestOfficialCoreRejectsUDPActivationButAllowsDisabledRecord(t *testing.T) {
+func TestUDPRequiresCapableAgentAndOfficialCore(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	nodeRequest, diag, _ := readyNetworkFixture(t, s)
@@ -33,12 +33,28 @@ func TestOfficialCoreRejectsUDPActivationButAllowsDisabledRecord(t *testing.T) {
 	}
 	found := false
 	for _, c := range v.Checks {
-		if c.Code == "forward_udp_core" && !c.Ready {
+		if c.Code == "forward_udp_agent" && !c.Ready {
 			found = true
 		}
 	}
 	if !found {
 		t.Fatal("missing reason for disabled UDP")
+	}
+	diag.ForwardUDPVersion = networkconfig.ForwardUDPVersion
+	writeNetworkDiagnostics(t, s, *n.ServerID, diag)
+	v, err = s.PreviewPortForward(ctx, in)
+	if err != nil || !v.Ready {
+		t.Fatal("capable UDP agent rejected", v, err)
+	}
+	if err = s.SetSettings(ctx, map[string]string{domain.SettingSingBoxVersion: "1.12.14"}); err != nil {
+		t.Fatal(err)
+	}
+	v, err = s.PreviewPortForward(ctx, in)
+	if err != nil || v.Ready {
+		t.Fatal("old core admitted UDP", v, err)
+	}
+	if err = s.SetSettings(ctx, map[string]string{domain.SettingSingBoxVersion: corecompat.NetworkBaseline}); err != nil {
+		t.Fatal(err)
 	}
 	in.Enabled = false
 	v, err = s.PreviewPortForward(ctx, in)

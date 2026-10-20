@@ -18,9 +18,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"ctlvps/internal/agentnet"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/boundedexec"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/diskbudget"
 	"ctlvps/internal/safehttp"
@@ -45,9 +47,53 @@ func ExpandURL(tmpl, version string) string {
 	return r.Replace(tmpl)
 }
 
+func officialSingBoxArchive(version, arch string, musl bool) string {
+	suffix := ""
+	if musl {
+		suffix = "-musl"
+	}
+	return fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s%s.tar.gz", version, version, arch, suffix)
+}
+
+// Alpine selects the upstream musl build locally; the controller cannot choose
+// another publisher, version or architecture by supplying an alternate URL.
+func selectSingBoxArchive(raw, version, arch string, alpine bool) (string, error) {
+	if !corecompat.ReleaseVersion(version) || (arch != "amd64" && arch != "arm64") {
+		return "", errors.New("unsupported official sing-box release or architecture")
+	}
+	standard := officialSingBoxArchive(version, arch, false)
+	selected := officialSingBoxArchive(version, arch, alpine)
+	if raw != standard && raw != selected {
+		return "", errors.New("sing-box must use an official release and its fixed upstream archive URL")
+	}
+	return selected, nil
+}
+
+func platformCoreChecksum(name, arch string, alpine bool, sums map[string]string) string {
+	if name == "sing-box" && alpine && strings.TrimSpace(sums[arch+"-musl"]) != "" {
+		return strings.TrimSpace(sums[arch+"-musl"])
+	}
+	return strings.TrimSpace(sums[arch])
+}
+
 // ExtractBinary streams a selected archive member into a private staging
 // file. Compressed input, total expansion, entry count and output are bounded.
 func extractBinaryTo(data *os.File, name string, dst io.Writer) error {
+	return extractBinaryToBudget(data, name, dst, nil)
+}
+
+// Check the selected member before writing it, with the downloaded archive
+// already accounted for in filesystem free space.
+func extractBinaryToBudget(data *os.File, name string, dst io.Writer, check func(int64) error) error {
+	budget := func(size int64) error {
+		if size < 0 || size > 200<<20 {
+			return safehttp.ErrSize
+		}
+		if check != nil {
+			return check(size)
+		}
+		return nil
+	}
 	if _, err := data.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -59,7 +105,14 @@ func extractBinaryTo(data *os.File, name string, dst io.Writer) error {
 		return err
 	}
 	if string(magic[:]) == "\x7fELF" {
-		_, err := safehttp.CopyBounded(dst, data, 200<<20)
+		st, err := data.Stat()
+		if err != nil {
+			return err
+		}
+		if err := budget(st.Size()); err != nil {
+			return err
+		}
+		_, err = safehttp.CopyBounded(dst, data, 200<<20)
 		return err
 	}
 	if magic[0] == 0x1f && magic[1] == 0x8b {
@@ -83,6 +136,9 @@ func extractBinaryTo(data *os.File, name string, dst io.Writer) error {
 			}
 			total += h.Size
 			if h.Typeflag == tar.TypeReg && filepath.Base(h.Name) == name && !strings.Contains(h.Name, "..") && !filepath.IsAbs(h.Name) {
+				if err := budget(h.Size); err != nil {
+					return err
+				}
 				_, err = safehttp.CopyBounded(dst, tr, 200<<20)
 				return err
 			}
@@ -107,6 +163,9 @@ func extractBinaryTo(data *os.File, name string, dst io.Writer) error {
 		if filepath.Base(f.Name) == name && f.Mode().IsRegular() && !strings.Contains(f.Name, "..") && !filepath.IsAbs(f.Name) {
 			if f.UncompressedSize64 > 200<<20 {
 				return safehttp.ErrSize
+			}
+			if err := budget(int64(f.UncompressedSize64)); err != nil {
+				return err
 			}
 			rc, err := f.Open()
 			if err != nil {
@@ -224,7 +283,7 @@ func FileDigest(f *os.File) (string, error) {
 }
 
 // installBinary downloads, verifies and atomically installs name into binDir.
-func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.CoreVersion) error {
+func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.CoreVersion) (installErr error) {
 	if name == "mita" && v.SHA256[runtime.GOARCH] == "" {
 		return errors.New("mita 锁定版本需要当前架构的 SHA-256")
 	}
@@ -235,10 +294,14 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 		return e
 	}
 	url := ExpandURL(v.URL, v.Version)
+	_, alpineErr := os.Stat("/etc/alpine-release")
+	alpine := alpineErr == nil
+	wantChecksum := platformCoreChecksum(name, runtime.GOARCH, alpine, v.SHA256)
 	if name == "sing-box" {
-		official := fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", v.Version, v.Version, archFor("arch"))
-		if !corecompat.ReleaseVersion(v.Version) || url != official {
-			return errors.New("sing-box must use an official release and its fixed upstream archive URL")
+		var err error
+		url, err = selectSingBoxArchive(url, v.Version, archFor("arch"), alpine)
+		if err != nil {
+			return err
 		}
 	}
 	policy, e := secureupdate.LoadPolicy()
@@ -249,7 +312,8 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 		var official string
 		switch name {
 		case "sing-box":
-			official = fmt.Sprintf("https://github.com/SagerNet/sing-box/releases/download/v%s/sing-box-%s-linux-%s.tar.gz", v.Version, v.Version, archFor("arch"))
+			// Already selected and validated above using this host's libc.
+			official = url
 		case "snell-server":
 			official = fmt.Sprintf("https://dl.nssurge.com/snell/snell-server-v%s-linux-%s.zip", v.Version, archFor("snellarch"))
 		case "mita":
@@ -264,7 +328,7 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		return err
 	}
-	if err := diskbudget.Check(binDir, 400<<20, 4); err != nil {
+	if err := diskbudget.Check(binDir, 200<<20, 4); err != nil {
 		return err
 	}
 	data, err := os.CreateTemp(binDir, ".core-archive-")
@@ -276,13 +340,12 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	if _, err = agentnet.DownloadTo(ctx, url, 200<<20, false, data); err != nil {
 		return err
 	}
-	if !policy.ChecksumOnly || v.SHA256[runtime.GOARCH] != "" {
+	if !policy.ChecksumOnly || wantChecksum != "" {
 		got, e := FileDigest(data)
 		if e != nil {
 			return e
 		}
-		want := strings.TrimSpace(v.SHA256[runtime.GOARCH])
-		if want == "" || !strings.EqualFold(got, want) {
+		if wantChecksum == "" || !strings.EqualFold(got, wantChecksum) {
 			return errors.New("core SHA256 mismatch")
 		}
 	}
@@ -297,14 +360,61 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	}
 	defer os.Remove(bin.Name())
 	defer bin.Close()
-	if err = extractBinaryTo(data, name, bin); err != nil {
+	if err = extractBinaryToBudget(data, name, bin, func(size int64) error {
+		return diskbudget.Check(binDir, size, 4)
+	}); err != nil {
+		return err
+	}
+	// The verified archive is no longer needed. Release its blocks before
+	// reserving the existing executable and metadata for rollback.
+	if err = data.Close(); err != nil {
+		return err
+	}
+	if err = os.Remove(data.Name()); err != nil {
 		return err
 	}
 	digest, err := FileDigest(bin)
 	if err != nil {
 		return err
 	}
+	if name == "sing-box" {
+		if err = bin.Chmod(0755); err != nil {
+			return err
+		}
+		// Linux refuses to execute a file still open for writing (ETXTBSY).
+		// Close the private candidate before probing it, then reopen read-only
+		// for the atomic activation helper.
+		if err = bin.Sync(); err != nil {
+			return err
+		}
+		if err = bin.Close(); err != nil {
+			return err
+		}
+		check, cancel := context.WithTimeout(ctx, 15*time.Second)
+		out, _, err := boundedexec.Run(check, "", 64<<10, bin.Name(), "version")
+		cancel()
+		if err != nil {
+			return fmt.Errorf("official sing-box candidate cannot run: %w", err)
+		}
+		if !strings.Contains(string(out), "sing-box version "+v.Version+"\n") {
+			return errors.New("official sing-box candidate reports a different version")
+		}
+		bin, err = os.Open(bin.Name())
+		if err != nil {
+			return err
+		}
+		defer bin.Close()
+	}
 	target := filepath.Join(binDir, name)
+	recovery, err := prepareBinaryRecovery(target)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if installErr != nil {
+			installErr = rollbackCoreAfterFailure(target, nil, recovery.OldPolicy, installErr)
+		}
+	}()
 	// Persist activation intent before replacing the executable. The worker
 	// may finish between coordinator ticks, or the coordinator may restart.
 	if err = markActivation(target); err != nil {
@@ -321,7 +431,11 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	if err != nil {
 		return err
 	}
-	return nil
+	recovery.Phase = "installed"
+	if err = syncDirectory(binDir); err != nil {
+		return err
+	}
+	return writeCoreRecovery(target, recovery)
 }
 
 // recordedVersion reads the sidecar written by installBinary.

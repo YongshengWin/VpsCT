@@ -23,9 +23,10 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.18.3",
     "recharts": "^2.12.7",
-    "tailwind-merge": "^2.5.2"
+    "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.5.1",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.11",
@@ -33,7 +34,7 @@
     "@vitejs/plugin-react": "^6.1.1",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.47",
-    "tailwindcss": "^3.4.13",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.6.2",
     "vite": "^8.3.0"
   },

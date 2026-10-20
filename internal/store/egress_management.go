@@ -318,7 +318,7 @@ type EgressProfileView struct {
 }
 
 func (s *Store) EgressProfileView(ctx context.Context, id int64, limit, offset int) (EgressProfileView, error) {
-	v := EgressProfileView{References: []EgressReference{}, Limit: max(1, min(limit, 100)), Offset: max(0, min(offset, 10000))}
+	v := EgressProfileView{References: []EgressReference{}, Limit: max(1, min(limit, 100)), Offset: max(0, offset)}
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
 		var err error
 		v.Profile, err = scanEgress(tx.QueryRowContext(ctx, `SELECT `+egressCols+` FROM egress_profiles WHERE id=?`, id))

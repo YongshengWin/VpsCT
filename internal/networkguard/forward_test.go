@@ -159,3 +159,32 @@ func TestForwardDNSPinExpiresAndCannotChangeAuthorityOnRenewal(t *testing.T) {
 		t.Fatal("private DNS answer gained authority")
 	}
 }
+
+func TestUDPHealthLeaseCannotBeRenewedByGeneralMonitor(t *testing.T) {
+	p, _ := fixture(t)
+	f := networkconfig.Forward{ListenMode: "all", ListenPort: 24444, Network: "both", TargetHost: "203.0.113.10", TargetPort: 443, SourceMode: "all", MaxTCPConnections: 2, MaxUDPSessions: 2, UDPIdleSeconds: 3, EgressProfileID: 1, EgressRevision: 1}
+	b := p.Bindings[0]
+	b.NodeID, b.ForwardID, b.ListenPort, b.Forward, b.Wanted = 0, 1, f.ListenPort, &f, f.BindingPolicy()
+	p.Bindings = append(p.Bindings, b)
+	rules, err := p.Rules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"f1_udp_ready { type nf_proto; flags timeout; timeout 6s", "ct direction original udp dport 24444 meta nfproto != @f1_udp_ready drop", "ct direction reply ct mark 0x45000001 meta l4proto udp meta nfproto != @f1_udp_ready drop"} {
+		if !strings.Contains(rules, want) {
+			t.Fatal("missing independent UDP gate", want)
+		}
+	}
+	renew, err := p.RenewResources(map[agentproto.ResourceIdentity]bool{b.Resource(): true})
+	if err != nil || strings.Contains(renew, "udp_ready") {
+		t.Fatal("general monitor grants UDP health", renew, err)
+	}
+	if r, ok := ParseLeaseSetName("f1_udp_ready"); !ok || r != b.Resource() {
+		t.Fatal("UDP readiness identity invalid")
+	}
+	for _, name := range []string{"f01_udp_ready", "n1_udp_ready", "f1_udp_udp_ready"} {
+		if _, ok := ParseLeaseSetName(name); ok {
+			t.Fatal("noncanonical UDP lease accepted", name)
+		}
+	}
+}

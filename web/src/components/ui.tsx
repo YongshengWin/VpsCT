@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { X, Loader2, ChevronDown, Check, ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { SelectQuickFilter } from "@/lib/node-select-filters";
 
 // ---------- Button ----------
 type Variant = "default" | "secondary" | "outline" | "ghost" | "destructive" | "link";
@@ -35,7 +36,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full text-sm font-semibold transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+        "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-full text-sm font-semibold transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
         variants[variant],
         sizes[size],
         className,
@@ -54,7 +55,7 @@ export const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttribute
   <input
     ref={ref}
     className={cn(
-      "flex h-10 w-full min-w-0 rounded-xl border border-transparent bg-muted px-3.5 py-1 text-sm transition-colors placeholder:text-muted-foreground/70 hover:bg-accent focus:border-primary/40 focus:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50",
+      "flex h-10 w-full min-w-0 rounded-xl border border-transparent bg-muted px-3.5 py-1 text-sm transition-colors placeholder:text-muted-foreground/70 hover:bg-accent focus:border-primary/40 focus:bg-card focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 disabled:cursor-not-allowed disabled:opacity-50",
       className,
     )}
     {...props}
@@ -66,7 +67,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
   <textarea
     ref={ref}
     className={cn(
-      "flex min-h-[80px] w-full rounded-xl border border-transparent bg-muted px-3.5 py-2.5 text-sm transition-colors placeholder:text-muted-foreground/70 hover:bg-accent focus:border-primary/40 focus:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 disabled:opacity-50",
+      "flex min-h-[80px] w-full rounded-xl border border-transparent bg-muted px-3.5 py-2.5 text-sm transition-colors placeholder:text-muted-foreground/70 hover:bg-accent focus:border-primary/40 focus:bg-card focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 disabled:opacity-50",
       className,
     )}
     {...props}
@@ -119,21 +120,34 @@ interface PopPos {
   maxHeight: number;
 }
 
-export type SelectProps = Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "size">;
+export type SelectProps = Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "size"> & {
+  searchable?: boolean;
+  searchPlaceholder?: string;
+  quickFilters?: SelectQuickFilter[];
+};
 
-export function Select({ className, children, value, defaultValue, onChange, disabled, name, id, title, style, autoFocus, "aria-label": ariaLabel }: SelectProps) {
-  const options = React.useMemo(() => collectOptions(children), [children]);
+export function Select({ className, children, value, defaultValue, onChange, disabled, name, id, title, style, autoFocus, searchable = false, searchPlaceholder = "搜索选项…", quickFilters, "aria-label": ariaLabel }: SelectProps) {
+  const allOptions = React.useMemo(() => collectOptions(children), [children]);
+  const [search, setSearch] = React.useState("");
+  const [filters, setFilters] = React.useState<Record<string, string>>({});
+  const hasFilters = Object.values(filters).some(Boolean);
+  const terms = search.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+  const activeGroups = quickFilters?.filter(g => filters[g.key]).map(g => new Set(g.options.find(c => c.value === filters[g.key])?.values ?? [])) ?? [];
+  const options = allOptions.filter(o => (!searchable || terms.every(term => o.text.toLocaleLowerCase().includes(term))) && activeGroups.every(values => values.has(o.value)));
+  const nodeValues = new Set(quickFilters?.flatMap(g => g.options.flatMap(c => c.values)));
+  const resultCount = options.filter(o => nodeValues.has(o.value)).length;
   const controlled = value !== undefined;
-  const [inner, setInner] = React.useState(() => String(defaultValue ?? options[0]?.value ?? ""));
+  const [inner, setInner] = React.useState(() => String(defaultValue ?? allOptions[0]?.value ?? ""));
   const current = controlled ? String(value) : inner;
   // like the native element, an unmatched value displays the first option
-  const selected = options.find((o) => o.value === current) ?? options[0];
+  const selected = allOptions.find((o) => o.value === current) ?? allOptions[0];
 
   const [open, setOpen] = React.useState(false);
   const [hl, setHl] = React.useState(-1);
   const [pos, setPos] = React.useState<PopPos | null>(null);
   const btnRef = React.useRef<HTMLButtonElement>(null);
   const listRef = React.useRef<HTMLDivElement>(null);
+  const searchRef = React.useRef<HTMLInputElement>(null);
   const typeahead = React.useRef({ s: "", at: 0 });
   const listId = React.useId();
 
@@ -142,7 +156,7 @@ export function Select({ className, children, value, defaultValue, onChange, dis
     if (!el) return;
     const r = el.getBoundingClientRect();
     const gap = 6;
-    const wanted = Math.min(options.length * 38 + 12, 320);
+    const wanted = Math.min(allOptions.length * 38 + 12 + (searchable ? 52 : 0) + (quickFilters?.length ? quickFilters.length * 38 + 32 : 0), quickFilters?.length ? 480 : 320);
     const below = window.innerHeight - r.bottom - gap - 8;
     const above = r.top - gap - 8;
     const up = below < wanted && above > below;
@@ -153,16 +167,25 @@ export function Select({ className, children, value, defaultValue, onChange, dis
       ...(up ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
       maxHeight,
     });
-  }, [options.length]);
+  }, [allOptions.length, searchable, quickFilters?.length]);
 
   const show = () => {
     if (disabled) return;
+    setSearch("");
+    setFilters({});
     place();
-    const i = options.findIndex((o) => o.value === selected?.value && !o.disabled);
-    setHl(i >= 0 ? i : options.findIndex((o) => !o.disabled));
+    const i = allOptions.findIndex((o) => o.value === selected?.value && !o.disabled);
+    setHl(i >= 0 ? i : allOptions.findIndex((o) => !o.disabled));
     setOpen(true);
   };
   const hide = () => setOpen(false);
+
+  React.useEffect(() => {
+    if (open && searchable) searchRef.current?.focus();
+  }, [open, searchable]);
+  React.useEffect(() => {
+    if (searchable) setHl(options.findIndex(o => !o.disabled));
+  }, [search, searchable, allOptions, filters]);
 
   const commit = (v: string) => {
     if (!controlled) setInner(v);
@@ -219,7 +242,7 @@ export function Select({ className, children, value, defaultValue, onChange, dis
     setHl(i);
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
     if (disabled) return;
     if (!open) {
       if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
@@ -228,6 +251,9 @@ export function Select({ className, children, value, defaultValue, onChange, dis
       }
       return;
     }
+    if (e.nativeEvent.isComposing) return;
+    const inSearch = e.target === searchRef.current;
+    if (inSearch && !["ArrowDown", "ArrowUp", "Enter", "Escape", "Tab"].includes(e.key)) return;
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
@@ -248,11 +274,13 @@ export function Select({ className, children, value, defaultValue, onChange, dis
       case "Enter":
       case " ":
         e.preventDefault();
-        if (hl >= 0 && !options[hl]?.disabled) commit(options[hl].value);
+        if (hl >= 0 && options[hl] && !options[hl].disabled) commit(options[hl].value);
         break;
       case "Escape":
         e.preventDefault();
+        e.stopPropagation();
         hide();
+        btnRef.current?.focus();
         break;
       case "Tab":
         hide();
@@ -295,7 +323,7 @@ export function Select({ className, children, value, defaultValue, onChange, dis
         onClick={() => (open ? hide() : show())}
         onKeyDown={onKeyDown}
         className={cn(
-          "flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border border-transparent bg-muted px-3.5 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
+          "flex h-10 w-full min-w-0 items-center gap-2 rounded-xl border border-transparent bg-muted px-3.5 py-2 text-left text-sm transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25 data-[state=open]:border-primary/40 data-[state=open]:bg-card disabled:cursor-not-allowed disabled:opacity-50",
           className,
         )}
       >
@@ -308,14 +336,29 @@ export function Select({ className, children, value, defaultValue, onChange, dis
         createPortal(
           <div
             ref={listRef}
-            id={listId}
-            role="listbox"
+            onKeyDown={e => { if (e.key === "Escape" && e.target !== searchRef.current) { e.preventDefault(); e.stopPropagation(); hide(); btnRef.current?.focus(); } }}
             data-floating=""
-            aria-activedescendant={hl >= 0 ? `${listId}-${hl}` : undefined}
-            className="fixed z-[60] animate-fade-up overflow-y-auto rounded-2xl border border-border/60 bg-card p-1.5 shadow-lift dark:border-border"
+            className="fixed z-60 flex flex-col animate-fade-up overflow-hidden rounded-2xl border border-border/60 bg-card p-1.5 shadow-lift dark:border-border"
             style={{ left: pos.left, minWidth: pos.width, maxWidth: Math.min(480, window.innerWidth - 16), top: pos.top, bottom: pos.bottom, maxHeight: pos.maxHeight }}
           >
-            {options.length === 0 && <div className="px-3 py-2 text-sm text-muted-foreground">无选项</div>}
+            {searchable && <div className="shrink-0 border-b border-border/60 p-1 pb-2 mb-1">
+              <Input ref={searchRef} role="combobox" aria-label={`搜索${ariaLabel ?? "选项"}`} aria-expanded={open} aria-controls={listId} aria-autocomplete="list" aria-activedescendant={options[hl] ? `${listId}-${hl}` : undefined} placeholder={searchPlaceholder} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={onKeyDown} autoComplete="off" />
+            </div>}
+            {!!quickFilters?.length && <div className="mb-1 shrink-0 border-b border-border/60 px-1 pb-2">
+              <div className="max-h-36 overflow-y-auto space-y-1">
+                {quickFilters.map(g => <div key={g.key} role="group" aria-label={`${g.label}快捷筛选`} className="flex min-w-0 items-center gap-2">
+                  <span className="w-12 shrink-0 text-xs text-muted-foreground">{g.label}</span>
+                  <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto py-1">
+                    {[{ value: "", label: "全部" }, ...g.options].map(c => <button key={c.value} type="button" aria-pressed={(filters[g.key] ?? "") === c.value} onClick={() => setFilters(f => ({ ...f, [g.key]: f[g.key] === c.value ? "" : c.value }))} className={cn("shrink-0 rounded-full border px-2.5 py-1 text-xs transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/25", (filters[g.key] ?? "") === c.value ? "border-primary/30 bg-primary/10 text-primary font-semibold" : "border-border text-muted-foreground hover:bg-accent")}>
+                      {c.label}
+                    </button>)}
+                  </div>
+                </div>)}
+              </div>
+              <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground"><span role="status">{resultCount} 个节点</span><button type="button" disabled={!hasFilters && !search} onClick={() => { setFilters({}); setSearch(""); searchRef.current?.focus(); }} className="text-primary disabled:opacity-40 hover:underline">清除筛选</button></div>
+            </div>}
+            <div id={listId} role="listbox" aria-label={ariaLabel} className="min-h-0 overflow-auto" aria-activedescendant={options[hl] ? `${listId}-${hl}` : undefined}>
+            {options.length === 0 && <div role="status" className="px-3 py-4 text-sm text-muted-foreground">{search || hasFilters ? "没有匹配的选项，请调整筛选条件" : "无选项"}</div>}
             {options.map((o, i) => {
               const isSel = o.value === selected?.value;
               return (
@@ -341,6 +384,7 @@ export function Select({ className, children, value, defaultValue, onChange, dis
                 </div>
               );
             })}
+            </div>
           </div>,
           document.body,
         )}
@@ -360,12 +404,12 @@ export function Switch({ checked, onChange, disabled, label, size = "md", "aria-
         disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
-          "relative inline-flex shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          "relative inline-flex shrink-0 items-center rounded-full transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           sm ? "h-4 w-7" : "h-6 w-11",
           checked ? "bg-primary" : "bg-muted-foreground/30",
         )}
       >
-        <span className={cn("inline-block rounded-full bg-white shadow-sm transition-transform", sm ? "h-3 w-3" : "h-5 w-5", checked ? (sm ? "translate-x-3" : "translate-x-5") : "translate-x-0.5")} />
+        <span className={cn("inline-block rounded-full bg-white shadow-xs transition-transform", sm ? "h-3 w-3" : "h-5 w-5", checked ? (sm ? "translate-x-3" : "translate-x-5") : "translate-x-0.5")} />
       </button>
       {label && <span className="text-sm">{label}</span>}
     </label>
@@ -484,7 +528,7 @@ export function Dialog({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
-      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
@@ -550,16 +594,18 @@ export function Confirm({
 }
 
 // ---------- Tabs ----------
-export function Tabs<T extends string>({ value, onChange, items, className }: { value: T; onChange: (v: T) => void; items: { value: T; label: React.ReactNode }[]; className?: string }) {
+export function Tabs<T extends string>({ value, onChange, items, className, variant = "pill" }: { value: T; onChange: (v: T) => void; items: { value: T; label: React.ReactNode }[]; className?: string; variant?: "pill" | "underline" }) {
   return (
-    <div className={cn("no-scrollbar inline-flex h-10 max-w-full items-center gap-1 overflow-x-auto rounded-full bg-muted p-1 text-muted-foreground", className)}>
+    <div role={variant === "underline" ? "navigation" : undefined} aria-label={variant === "underline" ? "页面分区" : undefined} className={cn(variant === "underline" ? "flex w-full gap-5 overflow-x-auto border-b border-border text-muted-foreground" : "no-scrollbar inline-flex h-10 max-w-full items-center gap-1 overflow-x-auto rounded-full bg-muted p-1 text-muted-foreground", className)}>
       {items.map((it) => (
         <button
           key={it.value}
+          type="button"
+          aria-current={variant === "underline" && value === it.value ? "page" : undefined}
           onClick={() => onChange(it.value)}
           className={cn(
-            "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-full px-3.5 text-sm font-medium transition-all",
-            value === it.value ? "bg-card text-foreground shadow-sm" : "hover:text-foreground",
+            variant === "underline" ? "inline-flex min-h-12 shrink-0 items-center justify-center whitespace-nowrap border-b-2 px-1 text-sm font-semibold transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/25" : "inline-flex h-8 items-center justify-center whitespace-nowrap rounded-full px-3.5 text-sm font-medium transition-all",
+            variant === "underline" ? (value === it.value ? "border-primary text-primary" : "border-transparent hover:border-border hover:text-foreground") : (value === it.value ? "bg-card text-foreground shadow-xs" : "hover:text-foreground"),
           )}
         >
           {it.label}
@@ -589,12 +635,12 @@ export const Tr = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTM
 Tr.displayName = "Tr";
 
 // ---------- Misc ----------
-export function Empty({ title, description, action }: { title: string; description?: string; action?: React.ReactNode }) {
+export function Empty({ title, description, action, compact = false }: { title: string; description?: string; action?: React.ReactNode; compact?: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-card/60 px-6 py-14 text-center">
+    <div className={cn("flex flex-col border border-dashed border-border bg-card/60", compact ? "items-start rounded-xl px-4 py-4 text-left" : "items-center justify-center rounded-2xl px-6 py-14 text-center")}>
       <p className="font-semibold">{title}</p>
       {description && <p className="mt-1 max-w-md text-sm text-muted-foreground">{description}</p>}
-      {action && <div className="mt-5">{action}</div>}
+      {action && <div className={compact ? "mt-3" : "mt-5"}>{action}</div>}
     </div>
   );
 }
@@ -611,7 +657,7 @@ export function Progress({ value, className, tone }: { value: number; className?
   const pct = Math.max(0, Math.min(100, value || 0));
   const color = tone === "bad" || pct >= 95 ? "bg-rose-500" : tone === "warn" || pct >= 80 ? "bg-amber-500" : "bg-primary";
   return (
-    <div className={cn("h-2 w-full overflow-hidden rounded-full bg-foreground/[0.06] dark:bg-white/10", className)}>
+    <div className={cn("h-2 w-full overflow-hidden rounded-full bg-foreground/6 dark:bg-white/10", className)}>
       <div className={cn("h-full rounded-full transition-all", color)} style={{ width: `${pct}%` }} />
     </div>
   );
@@ -644,7 +690,7 @@ export function BackLink({ to, children }: { to: string; children: React.ReactNo
       to={to}
       aria-label={`返回${children}`}
       title={`返回${children}`}
-      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground shadow-sm transition-colors hover:bg-accent"
+      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-card text-foreground shadow-xs transition-colors hover:bg-accent"
     >
       <ChevronLeft className="h-5 w-5" />
     </Link>

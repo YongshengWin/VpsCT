@@ -105,6 +105,11 @@ func (s *Store) requestPortForward(ctx context.Context, in PortForwardRequest, a
 				return ErrNetworkConflict
 			}
 		}
+		if in.Action != "create" {
+			if err := s.RequireUnmanagedForward(ctx, tx, f.ID); err != nil {
+				return err
+			}
+		}
 		if err := networkMaintenance(ctx, tx, f.ServerID); err != nil {
 			return err
 		}

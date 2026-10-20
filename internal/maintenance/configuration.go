@@ -87,3 +87,29 @@ func (m *Manager) WaitConfigurationLock(ctx context.Context) (func(), error) {
 		}
 	}
 }
+
+// Startup may refresh fixed helpers during a maintenance update. The worker
+// releases its mutation lock before starting the new agent; ordinary desired
+// configuration still uses ConfigurationLock and stays blocked by the job.
+func (m *Manager) WaitStartupConfigurationLock(ctx context.Context) (func(), error) {
+	if err := os.MkdirAll(m.Dir, 0700); err != nil {
+		return nil, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		release, err := m.tryConfigurationLock()
+		if err == nil {
+			return release, nil
+		}
+		if !errors.Is(err, ErrBusy) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}

@@ -1,22 +1,26 @@
 services:
   ctlvpsd:
-    image: ctlvps:latest
+    image: ${CTLVPS_IMAGE:-ctlvps:latest}
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        VERSION: ${CTLVPS_BUILD_VERSION:-dev}
+        COMMIT: ${CTLVPS_BUILD_COMMIT:-}
     container_name: ctlvpsd
     restart: unless-stopped
     ports:
       - "127.0.0.1:8080:8080"   # put Caddy/Nginx/Cloudflare in front for TLS
     environment:
-      CTLVPS_SITE_URL: "https://panel.example.com"   # used in subscription links
-      CTLVPS_TRUSTED_PROXIES: "" # set only the actual adjacent proxy CIDR
+      CTLVPS_SITE_URL: "${CTLVPS_SITE_URL:-https://panel.example.com}"   # used in subscription links
+      CTLVPS_TRUSTED_PROXIES: "${CTLVPS_TRUSTED_PROXIES:-}" # set only the actual adjacent proxy CIDR
       CTLVPS_SECRETS_KEY_FILE: /keys/secrets.key
       CTLVPS_LOG_LEVEL: info
       TZ: Asia/Shanghai
     volumes:
       - ctlvps-data:/data
       - ctlvps-keys:/keys
+    stop_grace_period: 30s
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -32,6 +36,7 @@ services:
       resources:
         limits:
           memory: 512M
+          pids: 128
 
 volumes:
   ctlvps-data:

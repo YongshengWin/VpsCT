@@ -20,6 +20,10 @@ import (
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrSchemaTooNew prevents an older program from mutating a newer database.
+// Downgrades must restore the matching pre-upgrade database backup.
+var ErrSchemaTooNew = errors.New("database schema is newer than this program")
+
 // Store wraps the main SQLite database.
 type Store struct {
 	secret          cipher.AEAD
@@ -88,6 +92,14 @@ func OpenWithKey(path, keyPath string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.BackfillNodeApplications(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.PruneOrphanChains(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -107,6 +119,9 @@ func (s *Store) migrate() error {
 			return err
 		}
 		version = 0
+	}
+	if version > len(migrations) {
+		return fmt.Errorf("%w: database=%d supported=%d; restore the matching pre-upgrade backup", ErrSchemaTooNew, version, len(migrations))
 	}
 	for i := version; i < len(migrations); i++ {
 		tx, err := s.db.BeginTx(ctx, nil)

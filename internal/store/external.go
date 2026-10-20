@@ -93,8 +93,17 @@ func (s *Store) ExternalRawContent(ctx context.Context, id int64) (string, error
 
 // DeleteExternal removes an external subscription and its nodes.
 func (s *Store) DeleteExternal(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM external_subscriptions WHERE id=?`, id)
-	return err
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		var active bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM access_routes r JOIN nodes n ON n.id=r.landing_node_id WHERE n.external_sub_id=? AND r.stage<>'retired')`, id).Scan(&active); err != nil {
+			return err
+		}
+		if active {
+			return ErrAccessRouteInUse
+		}
+		_, err := tx.ExecContext(ctx, `DELETE FROM external_subscriptions WHERE id=?`, id)
+		return err
+	})
 }
 
 // GetExternal fetches one.

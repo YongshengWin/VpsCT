@@ -72,6 +72,7 @@ export interface NetworkReadiness {
 	impact?: NetworkImpact;
   egress_version?: number;
 	forward_version?: number;
+	forward_udp_version?: number;
   ready: boolean;
   architecture: string;
   pinned_core_version: string;
@@ -127,11 +128,11 @@ export interface ForwardConfig {
   max_udp_sessions: number;
   udp_idle_seconds: number;
 }
-export interface PortForward { rx_30_days: number; tx_30_days: number; reserved_ports: number[]; id: number; server_id: number; name: string; enabled: boolean; retired: boolean; revision: number; config: ForwardConfig }
+export interface PortForward { route_id?: string; rx_30_days: number; tx_30_days: number; reserved_ports: number[]; id: number; server_id: number; name: string; enabled: boolean; retired: boolean; revision: number; config: ForwardConfig }
 export const networkStatus: Record<NetworkOperation["status"], string> = { saved: "已保存", queued: "等待发布", publish_failed: "发布失败", waiting_agent: "等待应用回执", apply_failed: "应用失败", applied: "已应用", superseded: "已被新变更替代" };
 export const networkTerminal = (op?: NetworkOperation) => !!op && ["saved", "applied", "superseded"].includes(op.status);
 export function canBindNodeNetwork(node: Pick<Node, "core" | "protocol" | "params">) {
-  return (node.core === "snell" && node.protocol === "snell") || (node.core === "mieru" && node.protocol === "mieru") || node.core === "singbox" && (["vless", "trojan", "anytls", "hysteria2", "tuic"].includes(node.protocol) || (node.protocol === "ss" && node.params.cipher === "2022-blake3-aes-128-gcm"));
+  return (node.core === "snell" && node.protocol === "snell") || (node.core === "mieru" && node.protocol === "mieru") || node.core === "singbox" && (["vless", "trojan", "anytls", "hysteria2", "tuic"].includes(node.protocol) || (node.protocol === "ss" && ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"].includes(String(node.params.cipher))));
 }
 export function networkRequestUncertain(error: unknown) {
   return !!error && !(error instanceof Error && "status" in error && typeof error.status === "number" && error.status >= 400 && error.status < 500);

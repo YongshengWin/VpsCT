@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { trafficIO } from "./traffic-billing.ts";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -58,16 +59,7 @@ export function fmtDuration(sec: number): string {
   return `${m} 分`;
 }
 
-export const GiB = 1024 ** 3;
-
-export function gbToBytes(gb: number | string): number {
-  const v = Number(gb);
-  return Number.isFinite(v) && v > 0 ? Math.round(v * GiB) : 0;
-}
-
-export function bytesToGb(b: number): string {
-  return b > 0 ? String(Math.round((b / GiB) * 100) / 100) : "";
-}
+export { GiB, gbToBytes, bytesToGb } from "./traffic-billing.ts";
 
 export async function copyText(text: string): Promise<boolean> {
   try {
@@ -92,7 +84,7 @@ export const PROTOCOL_LABELS: Record<string, string> = {
   hysteria2: "Hysteria2",
   tuic: "TUIC v5",
   trojan: "Trojan",
-  ss: "Shadowsocks 2022",
+  ss: "Shadowsocks",
   snell: "Snell",
   vmess: "VMess",
   ssh: "SSH（TCP）",
@@ -130,7 +122,7 @@ export function defaultNodeName(server: { name?: string; region?: string }, prot
 }
 
 export function trafficTotal(up = 0, down = 0): number {
-  return up + down;
+  return trafficIO(up, down).total;
 }
 
 /** 1–28 keep that day; 29–31 → 31 (last day of month); empty / invalid → 0. */

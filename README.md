@@ -1,173 +1,208 @@
-# VpsCT
+<p align="center">
+  <img src="docs/assets/vpsct-banner.svg" alt="VpsCT — 多台 VPS，一个控制台。" width="100%">
+</p>
 
-面向个人和小团队的自托管服务器管理面板。
+<p align="center">
+  <strong>面向个人与小团队的自托管 VPS 管理面板</strong><br>
+  部署代理节点、组织转发线路、生成订阅，按配额分享资源。网页与 AI agent 共用同一套业务能力。
+</p>
 
-将多台 VPS 接入同一个面板，集中查看运行状态和流量用量、维护服务配置，并按流量配额和有效期分享服务器资源。
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748b?style=flat-square" alt="MIT License"></a>
+  <a href="docs/operations.md#32-docker-新安装"><img src="https://img.shields.io/badge/Deploy-Docker%20Compose-2496ed?style=flat-square" alt="Docker Compose"></a>
+  <a href="docs/agent-api.md"><img src="https://img.shields.io/badge/Agent-API%20%2B%20Skill-f26e21?style=flat-square" alt="API + Skill"></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/Built%20with-Go%20%2B%20React-64748b?style=flat-square" alt="Go + React"></a>
+</p>
 
-## 1. 开始使用
+<p align="center">
+  <a href="#3-快速开始"><strong>快速开始</strong></a> ·
+  <a href="#4-按需要组织线路">线路与出口</a> ·
+  <a href="#5-让-ai-agent-接手操作">AI 接入</a> ·
+  <a href="#7-文档与贡献">文档索引</a> ·
+  <a href="https://github.com/YongshengWin/VpsCT/releases">版本发布</a>
+</p>
 
-先在一台服务器上安装面板，作为**控制端**；再为需要管理的 VPS 安装 **agent**。agent 是运行在服务器上的管理程序，负责应用配置、采集用量，并主动向控制端上报状态。
+## 1. 先看看面板
 
-### 1.1 安装面板
+[![VpsCT 服务器管理界面，展示多地区 VPS 的状态、资源占用、用量与配额](docs/assets/servers-demo.jpg)](docs/assets/servers-demo.jpg)
 
-控制端安装器面向 Debian / Ubuntu，要求 systemd，支持 Linux amd64 / arm64。
+<p align="center"><sub>实际产品界面 · 点击查看 4K 原图 · 使用虚构演示数据，不包含真实服务器或凭据</sub></p>
 
-**自动配置 HTTPS**：准备一个已解析到控制端服务器的域名，并确保 80、443 端口空闲且可从公网访问。
+一眼查看各台 VPS 的在线状态、资源占用、网络速率和本期用量。进入服务器详情，即可管理节点、线路、网卡、诊断与配置版本。
 
-**开启 Cloudflare 橙云时**：面板域名应使用 **完全（严格） / Full (strict)** 加密模式；“灵活 / Flexible”会与 Caddy 的 HTTPS 跳转形成循环，导致“重定向次数过多”。同一主域下还有其他站点时，建议只为面板子域添加配置规则。使用“仅 DNS”（灰云）时无需此设置，具体步骤见 [Cloudflare 设置与访问排查](docs/operations.md#26-cloudflare-设置与访问排查)。
+## 2. 你可以用它做什么
 
-在控制端服务器下载官方安装器并执行，无需准备发布签名密钥：
+| 服务器与节点 | 线路与出口 |
+| --- | --- |
+| 集中管理多台 VPS，查看 CPU、内存、磁盘、速率与运行诊断。<br>通过 agent 部署节点、下发配置，核对实际应用结果。 | 选择入口、中转和落地节点，创建两台或三台线路。<br>为已有节点更换出口，也可单独配置端口转发。 |
+| **订阅与模板** | **分享与配额** |
+| 整理受管、导入和手动节点，生成多种客户端格式。<br>用模板管理 DNS、代理组与分流，按需要组合订阅。 | 为不同使用者分配独立凭据、配额与有效期。<br>查看各份分享用量，按需暂停、恢复、撤销或重新签发。 |
+| **流量与运维** | **AI 与自动化** |
+| 区分入站和出站，选择配额公式、重置日与计费网卡。<br>查看配置回执、执行记录，完成升级、备份与恢复。 | API key、OpenAPI、Python 客户端与可下载 Skill。<br>发现当前权限，按操作流程执行，再查询任务结果。 |
+
+> 本页介绍当前源码能力；正式发行附件以 [Releases](https://github.com/YongshengWin/VpsCT/releases) 为准。新功能需配套版本的控制端与 agent，具体系统、协议和内核要求见对应文档。
+
+## 3. 快速开始
+
+一台**控制端**运行面板；每台受管 VPS 安装 **ctlvps-agent**。agent 主动连接控制端，接收配置并上报状态，无需额外开放管理端口。
+
+### 3.1 安装面板
+
+面板需要 Safari 16.4+、Chrome 111+ 或 Firefox 128+。
+
+当前发行版仅支持 **Linux AMD64（x86_64）**，包括控制端、Docker 和被控 agent。ARM 支持暂停，待具备真实测试机器并完成验证后再恢复；历史 ARM Release 附件已撤下。AMD64 压缩包内保留一个供旧版升级器检查的 ARM 停用提示脚本，执行只会报错退出。
+
+**原生安装**适用于 Debian / Ubuntu、systemd、Linux amd64。准备已解析的面板域名，并确保 80、443 端口可用：
 
 ```bash
-curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+curl -fLsS --proto '=https' --proto-redir '=https' \
+  https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
+  -o install-vpsct.sh &&
 sudo bash install-vpsct.sh --domain panel.example.com
 ```
 
-将 `panel.example.com` 替换为你的面板域名。安装器从 GitHub 官方仓库通过 HTTPS 下载发行包，并检查 SHA256；不需要配置发布签名密钥或签名服务。具体版本以安装器参数为准。
+替换 `panel.example.com`。安装器下载并校验程序，配置 systemd 和 Caddy HTTPS，无需在服务器安装 Go 或 Node。
 
-安装器会下载并校验程序、配置系统服务和 HTTPS。服务器无需安装 Go、Node 或源码编译环境。安装完成后，还需通过面板域名确认 HTTPS 可访问；本机服务启动成功不代表公网入口已就绪。已有 HTTPS 入口等部署方式见 [安装文档](docs/operations.md)。
+<details>
+<summary><strong>使用 Docker Compose 安装</strong></summary>
 
-**使用已有 HTTPS 入口或其他端口**：先将入口转发到本机 `127.0.0.1:8080`，再执行以下命令。这里以 `8443` 为例；使用标准 HTTPS 端口时去掉 `:8443`。这种方式无需为安装器腾出 80、443 端口。
+需要本机 Docker Engine 和 Compose v2；Alpine/OpenRC 宿主机也可使用。以下从源码构建：
 
 ```bash
-curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+git clone https://github.com/YongshengWin/VpsCT.git
+cd VpsCT/deploy
+printf 'CTLVPS_SITE_URL=https://panel.example.com\n' > .env
+docker compose up -d --build
+```
+
+替换 `.env` 中的面板域名。默认仅映射 `127.0.0.1:8080`，需配置宿主机 HTTPS 反向代理；`/data`、`/keys` 使用独立持久化卷。镜像在本机构建，不依赖未发布的公共镜像。
+
+查看初始化令牌：
+
+```bash
+docker compose exec -T ctlvpsd cat /data/setup-token
+```
+
+部署、健康检查和已有数据处理见 [Docker 部署说明](docs/operations.md#32-docker-新安装)。
+
+</details>
+
+<details>
+<summary><strong>已有 HTTPS 入口或需要其他端口</strong></summary>
+
+将已有入口反向代理到本机 `127.0.0.1:8080`，再使用安装器的 `--site-url` 与 `--no-proxy`：
+
+```bash
 sudo bash install-vpsct.sh --site-url https://panel.example.com:8443 --no-proxy
 ```
 
-### 1.2 创建管理员
+标准 HTTPS 端口可去掉 `:8443`。开启 Cloudflare 橙云时使用 **Full (strict) / 完全（严格）**，避免 Flexible 与 HTTPS 跳转形成循环。详见 [HTTPS 与 Cloudflare 排查](docs/operations.md#26-cloudflare-设置与访问排查)。
 
-安装完成后，在**控制端服务器**执行以下命令，获取一次性初始化令牌：
+</details>
+
+原生安装完成后，在控制端读取一次性初始化令牌：
 
 ```bash
 sudo cat /opt/ctlvps/data/setup-token
 ```
 
-访问面板域名，输入令牌并设置管理员账户。初始化完成后，令牌失效并删除。
+通过面板的 HTTPS 域名访问，输入令牌并创建管理员。初始化后令牌失效。完整安装步骤见 [安装、升级与恢复](docs/operations.md)。
 
-### 1.3 接入服务器
+### 3.2 接入服务器
 
-登录面板后，按以下顺序接入每台 VPS：
+1. 打开「服务器 → 添加服务器」，填写名称、地址和配额。
+2. 在服务器详情生成 agent 安装命令。
+3. 到**对应受管 VPS** 上，以 root 执行该命令。
+4. 返回面板，确认服务器「在线」，再部署所需节点。
 
-1. 打开「服务器 → 添加服务器」，填写名称、地址和流量配额。
-2. 在服务器详情中生成 agent 安装命令。
-3. 到**这台被管理的 VPS** 上，以 root 执行生成的命令。
-4. 返回面板，确认服务器显示「在线」。
+受管端支持 systemd，以及受支持的 Alpine/OpenRC 环境。代理服务端口仍需按配置开放；NAT 主机先配置商家端口映射。详见 [Alpine 与小内存主机](docs/operations.md#49-alpineopenrc-与小内存-vps)、[NAT 端口映射](docs/operations.md#48-nat-vps-的端口映射)。
 
-agent 主动连接控制端，因此 VPS 无需额外开放管理端口。服务器上运行的服务仍需按其配置开放相应端口。
+### 3.3 生成第一份订阅
 
-**控制端也可以接入为被管理的服务器**，在同一台机器安装 agent 即可。「公网地址」用于访问这台服务器提供的服务，应填写直连公网 IP 或仅 DNS（灰云）域名；面板域名可以开启橙云，但不能因此把它当作所有服务的连接地址。端口与排查步骤见 [同机部署与服务连接](docs/operations.md#44-同机部署与服务连接)。
+在服务器详情部署节点，等待配置实际应用；打开「订阅链接」，选择节点和客户端格式，生成订阅。需要统一 DNS、代理组和分流时，先在「模板」中准备底稿。
 
-## 2. 日常管理
+登录后，点击右上角主题切换旁的**书本图标**进入内置使用手册：左侧按章节浏览，右侧定位当前小节，也可全文搜索。
 
-服务器上线后，日常操作主要围绕状态、用量和配置展开。
+## 4. 按需要组织线路
 
-### 2.1 查看状态与用量
+| 你的需求 | 在面板中如何操作 | 访问路径 |
+| --- | --- | --- |
+| 通过入口与中转接入落地 | 节点线路 → 转发线路；默认三台，可切换两台 | 入口 → 中转 → 落地节点 → 网站 |
+| 第 2 台同时承担落地 | 转发线路选择两台结构 | 入口 → 落地节点 → 网站 |
+| 已有 VLESS 等节点想换出口 | 节点线路 → 节点出口 | 原节点 → 所选出口 → 网站 |
+| 单独转发一个端口 | 节点线路 → 单段转发 | 本机端口 → 指定目标 |
 
-在「服务器」中查看 CPU、内存、磁盘、实时网络速率和运行诊断。流量统计区分入站与出站，配额按两者之和计算；可设置用量周期、每月重置日期和通知提醒。
+落地可选择受管、导入或手动节点，实际支持取决于节点传输方式和主机能力；入口与中转无需重复部署代理节点。机器间的网络与路由需预先接通，创建转发规则不会自动建立物理专线。
 
-同一 VPS 的 sing-box 节点共用一个进程，并分别计量。**Snell 仍每个独立节点一个进程，节点增多仍会增加内存；整体内存上限可能触发 OOM 并中断连接，不代表消除了重复开销。** Snell 不提供按需启停或空闲回收，详见[容量风险](docs/shared-proxy-accounting.md#17-snell-容量风险)。
+UDP 固定转发按默认 256 MiB 代理预算，以 1024 个持续活跃会话作为发布验收基线；8192 是整机配置安全上限，原生 AMD64 强负载尚未通过，不能视为承载能力承诺。
 
+查看 [网络与中转指南](docs/network.md)、[UDP 转发能力与限制](docs/udp-forwarding-validation.md)。
 
-### 2.2 部署与维护配置
+## 5. 让 AI agent 接手操作
 
-在服务器详情中部署受支持的服务。面板保存配置，由 agent 在对应 VPS 上应用并上报执行结果。
+打开「头像菜单 → AI 能力」，创建适当权限的 API key，并安装同版本 VpsCT Skill。支持页面提供的 Codex / Claude Code 安装方式，也可使用标准 HTTP 客户端。
 
-节点列表支持批量重置已部署节点的凭据。完成后需更新客户端订阅，并确认配置状态为「已应用」；下发成功不代表服务器已完成应用。
+- **先发现**：查询实时能力、账户权限和 OpenAPI，请求字段以当前部署版本为准。
+- **再执行**：15 条主要操作流程覆盖接入、部署、线路、出口、订阅、分享、监控和维护。
+- **查结果**：按资源或任务编号核对进展、失败原因与完成状态，保存成功不等于配置已应用。
 
-需要复用配置时，在「模板」中维护底稿，再在「订阅链接」中选择对应模板，生成配置访问链接。已有配置也可以通过页面提供的 AI 指令改造为模板。
+你可以这样描述任务：
 
-### 2.3 管理账户与访问记录
+> “用指定入口和中转，连接我选中的落地节点。先预览影响，创建后确认线路已应用，再交付订阅。”
 
-为管理员启用两步验证并保存恢复码，通过操作审计和连接日志了解管理操作与资源访问情况。数据采集范围和关闭方式见 [隐私说明](docs/privacy.md)。
+原生与 Docker 的部署、升级和恢复也有配套指引。主机操作需要目标授权，API key 继承账户角色，初始化与二次认证要求保持有效。
 
-## 3. 分享服务器资源
+[AI 接口与接入说明](docs/agent-api.md) · [VpsCT Skill](skills/vpsct/SKILL.md) · [请求与部署示例](skills/vpsct/references/api.md)
 
-需要让他人使用服务器资源时，在「分享」中创建独立的网络服务访问配置。每份分享分别管理凭据、用量和有效期，使用者通过分享链接访问资源，无需获得面板管理员账户。
+## 6. 日常运维
 
-1. **选择资源**：选择提供资源的服务器和服务。
-2. **设置使用范围**：填写流量配额、用量周期和有效期。
-3. **交付访问链接**：创建分享，将对应链接交给使用者。
+| 操作 | 入口与说明 |
+| --- | --- |
+| 看用量、校准账期 | 服务器详情 → 节点与概览；支持双向、仅入站、仅出站或两方向较大值，[公式与边界](docs/traffic-accounting.md) |
+| 管理访问与分享 | 分享页面管理凭据、配额和有效期；[订阅与分享说明](docs/subscriptions.md) |
+| 更新控制端与 agent | 原生安装使用安装器或受支持的网页维护；Docker 使用宿主机 Compose 脚本，[升级流程](docs/operations.md#5-更新) |
+| 备份与恢复 | 数据库、密钥与配置配套保存；回退需匹配的数据快照，[备份说明](docs/operations.md#43-备份数据) |
+| 卸载与清理 | 先确认控制端 / agent 和保留范围，默认保留数据，[卸载说明](docs/operations.md#7-卸载与清理) |
 
-创建后，可在同一页面查看每份分享的流量，并按需暂停、恢复或撤销。分享用量独立统计，便于了解资源分配后的实际使用情况。
+<details>
+<summary><strong>常用升级命令</strong></summary>
 
-## 4. 更新与备份
-
-### 4.1 更新面板
-
-对于使用安装器部署的控制端，在**控制端服务器**执行以下命令，更新到最新正式版：
+原生安装，在控制端执行：
 
 ```bash
-curl -fLsS --proto '=https' --proto-redir '=https' https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh -o install-vpsct.sh &&
+curl -fLsS --proto '=https' --proto-redir '=https' \
+  https://github.com/YongshengWin/VpsCT/releases/latest/download/install.sh \
+  -o install-vpsct.sh &&
 sudo bash install-vpsct.sh --update --auto-rollback
 ```
 
-更新前会停服备份，并保留账户、配置和分享记录。其他部署方式及失败恢复步骤见 [运维文档](docs/operations.md)。
-
-网页升级入口：**设置 → 系统 → 控制端维护**。旧安装若没有维护服务，先通过终端安装器更新。网页升级失败时恢复停服前的旧程序与数据，恢复文件会再次核对完整性。
-
-升级前保存数据库与密钥；涉及数据库迁移时，回退应恢复对应版本的数据备份，不能只替换旧程序。具体迁移范围见[变更记录](CHANGELOG.md)。
-
-### 4.2 同步 agent 与配置
-
-新版 agent 随心跳同步更新，并对照官方发行校验清单检查下载内容。支持网页维护的新版 agent 会记录进度，升级失败后停止自动重试，供管理员处理：
-
-| 操作 | 用途 |
-|---|---|
-| 检查 agent 更新 | 查看该 VPS 的 agent 是否已与控制端提供的版本一致 |
-| 升级 agent | 在服务器详情的维护区域立即发起同步或重试，查看执行结果 |
-| 重新下发配置 | 让该 VPS 重新应用当前服务配置 |
-
-自动同步仅替换 agent 程序。旧安装的 systemd 资源限制及独立卸载脚本，需要通过新版 agent 安装器的终端更新落地。
-
-### 4.3 备份数据
-
-控制端定时备份主数据库，默认保留 7 份。完整迁移或恢复前，应停止控制端并备份整个数据目录。数据库、备份和访问链接包含敏感信息，请妥善保管。
-
-### 4.4 卸载
-
-发行附件提供独立的 [uninstall.sh](uninstall.sh)，支持分别卸载控制端、agent，或卸载本机两端。脚本也适用于早期默认 systemd 安装，无需先升级程序。
-
-在目标 VPS 使用已验证安装包中的本地卸载器，先查看范围，再选择要卸载的一端：
+Docker 安装，获取目标源码后在 `deploy/` 执行：
 
 ```bash
-sudo bash /opt/ctlvps/uninstall.sh --controller --dry-run
-sudo bash /opt/ctlvps/uninstall.sh --controller --yes
-# 卸载 agent 改用 --agent；卸载本机两端用 --all。
+sh compose-upgrade.sh upgrade
 ```
 
-默认保留配置和数据；加 `--purge` 会永久删除所选端的数据与默认目录内备份。agent 卸载会停止其部署的服务，控制端卸载会保留同机 agent。HTTPS 站点处理及完整范围见 [卸载文档](docs/operations.md#7-卸载与清理)。
+Compose 脚本停服备份数据库与密钥，更新后检查就绪，失败时配套回退。自定义挂载的处理和恢复命令见 [Docker 更新说明](docs/operations.md#53-docker-部署的更新)。普通升级不删除数据卷。
 
-支持网页维护的版本也可在 **设置 → 系统** 卸载控制端，或在 **服务器详情 → agent 维护** 卸载所选 agent。需要管理员密码、已启用的两步验证和目标名称确认。控制端卸载后网站将不可用，最后结果可从服务器终端查看。
+</details>
 
-删除服务器默认勾选「同时卸载」，通过二次认证并收到卸载成功回执后才删除记录；离线、失败或结果未确认时保留记录。取消勾选仅删除面板记录，VPS 上的程序仍需单独清理。
+## 7. 文档与贡献
 
-只有 agent 的 VPS 使用独立入口，无需安装控制端：
+| 文档 | 内容 |
+| --- | --- |
+| [安装、升级与恢复](docs/operations.md) | 部署方式、HTTPS、Alpine、NAT、维护、备份与卸载 |
+| [网络与中转](docs/network.md) | 多网卡、出口、转发、线路和能力边界 |
+| [节点、订阅与分享](docs/subscriptions.md) | 客户端格式、模板、预设和分享生命周期 |
+| [AI agent 接口](docs/agent-api.md) | API key、能力发现、操作流程与 Skill |
+| [统一流量计算](docs/traffic-accounting.md) | 配额公式、账期、校准和计量对象 |
+| [隐私说明](docs/privacy.md) · [安全设计](docs/security-design.md) | 数据采集、权限和系统安全边界 |
+| [变更记录](CHANGELOG.md) · [发布流程](docs/releasing.md) | 版本变化、构建与发行 |
+| [贡献指南](CONTRIBUTING.md) · [社区约定](CODE_OF_CONDUCT.md) | 本地开发、验证与协作 |
 
-```bash
-sudo bash /usr/local/libexec/ctlvps-agent-uninstall.sh --agent --dry-run
-# 核对范围后，将 --dry-run 改为 --yes；需要清空数据时另加 --purge。
-```
+欢迎提交 [Issue](https://github.com/YongshengWin/VpsCT/issues) 或 [PR](https://github.com/YongshengWin/VpsCT/pulls)。安全问题请通过 [安全报告流程](SECURITY.md) 私密反馈。
 
-旧安装没有此入口时，按 [独立卸载步骤](docs/operations.md#71-选择卸载范围) 下载官方脚本，不需要重新添加服务器。
+## 8. 许可证
 
-## 5. 文档与贡献
+[MIT](LICENSE) · Copyright (c) 2026 alio。
 
-| 需要做什么 | 查看文档 |
-|---|---|
-| 配置网卡、计费接口、出口与 VPS 中转 | [网络与中转使用指南](docs/network.md) |
-| 选择订阅格式、模板与客户端 | [节点、订阅与分享](docs/subscriptions.md) |
-| 选择其他安装方式、修改配置或恢复数据 | [安装、升级与恢复](docs/operations.md) |
-| 了解数据采集与隐私设置 | [隐私说明](docs/privacy.md) |
-| 查看版本变化与待发布内容 | [变更记录](CHANGELOG.md) |
-| 从源码构建或参与开发 | [贡献指南](CONTRIBUTING.md) |
-| 私密报告安全问题 | [安全报告流程](SECURITY.md) |
-| 查看完整系统的安全边界与实施计划 | [系统安全设计](docs/security-design.md)与[迁移说明](docs/security-migration.md) |
-| 维护和发布版本 | [发布流程](docs/releasing.md) |
-
-欢迎通过 [Issue](https://github.com/YongshengWin/VpsCT/issues) 和 [PR](https://github.com/YongshengWin/VpsCT/pulls) 提交问题、改进建议或代码，参与前请阅读 [社区约定](CODE_OF_CONDUCT.md)。
-
-## 6. 许可证
-
-本项目采用 [MIT 许可证](LICENSE)，Copyright (c) 2026 alio。
-
-第三方组件声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，相关软件与数据遵循各自的上游许可条款。
+第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，相关软件与数据遵循各自的上游许可条款。

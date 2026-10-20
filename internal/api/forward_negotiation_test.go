@@ -79,3 +79,55 @@ func TestForwardDesiredRequiresFreshCapabilityEvenForEmptyCleanup(t *testing.T) 
 	fetch("", true, 409, 0)
 	fetch("1", false, 200, 0)
 }
+
+func TestUDPForwardDesiredRejectsLegacyAgentBeforeConditionalResponse(t *testing.T) {
+	c := newTestAPI(t)
+	ctx := context.Background()
+	c.do("POST", "/api/v1/auth/setup", map[string]any{"setup_token": testSetupToken, "username": "admin", "password": "password123"}, 200)
+	srv := c.do("POST", "/api/v1/servers", map[string]any{"name": "udp-negotiation"}, 201)
+	sid := int64(srv["id"].(float64))
+	et := c.do("POST", fmt.Sprintf("/api/v1/servers/%d/enroll-token", sid), nil, 200)
+	en := c.do("POST", agentproto.PathEnroll, agentproto.EnrollRequest{EnrollToken: et["token"].(string)}, 200)
+	token := en["agent_token"].(string)
+	cfg := networkconfig.Forward{ListenMode: "all", ListenPort: 25101, Network: "both", TargetHost: "192.0.2.2", TargetPort: 443, SourceMode: "all", MaxTCPConnections: 2, MaxUDPSessions: 2, UDPIdleSeconds: 2}
+	_, err := c.api.Store.RequestPortForward(ctx, store.PortForwardRequest{ID: strings.Repeat("e", 32), Action: "create", ServerID: sid, Name: "udp", Enabled: true, Config: &cfg}, domain.AuditEvent{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = c.api.Desired.Publish(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := c.api.Store.LatestDesiredState(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"", "1", "3", "2"} {
+		path := agentproto.PathDesired
+		if version != "2" {
+			path += fmt.Sprintf("?if_not_revision=%d", rec.Revision)
+		}
+		req, _ := http.NewRequest("GET", c.srv.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header.Set(agentproto.NetworkBindingHeader, "1")
+		req.Header.Set(agentproto.NetworkForwardHeader, "1")
+		req.Header.Set(networkconfig.ForwardUDPHeader, version)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if version != "2" {
+			if resp.StatusCode != 409 {
+				t.Fatal("legacy UDP negotiation admitted", resp.StatusCode)
+			}
+			resp.Body.Close()
+			continue
+		}
+		var ds agentproto.DesiredState
+		err = json.NewDecoder(resp.Body).Decode(&ds)
+		resp.Body.Close()
+		if err != nil || resp.StatusCode != 200 || ds.ForwardUDPVersion != networkconfig.ForwardUDPVersion || len(ds.Forwards) != 1 || ds.Forwards[0].Blocked {
+			t.Fatal("capable UDP agent rejected", err, resp.StatusCode)
+		}
+	}
+}

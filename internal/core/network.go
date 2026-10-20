@@ -55,7 +55,21 @@ func validateNodeNetwork(n agentproto.NodeSpec, ds *agentproto.DesiredState) err
 	if n.Network.HasTransport() {
 		transport, _ := n.Network.TransportConfig()
 		if !agentproto.SOCKS5BindingSupported(n, ds.Versions["sing-box"].Version) {
-			return errors.New("该入口协议与 SOCKS5 出口组合尚未通过验证")
+			return errors.New("该入口协议不支持此中转出口")
+		}
+		if n.Protocol == "vless" {
+			h := n.RuntimeNetwork.Handshake
+			host, _ := n.Params["handshake_server"].(string)
+			port := 443
+			switch value := n.Params["handshake_port"].(type) {
+			case float64:
+				port = int(value)
+			case int:
+				port = value
+			}
+			if h == nil || h.Validate() != nil || h.Host != strings.ToLower(strings.TrimSuffix(host, ".")) || h.Port != port {
+				return errors.New("Reality 中转握手缺少匹配的本机公网地址校验")
+			}
 		}
 		cfg, err := networkconfig.EffectiveSOCKS5(transport, ds.IPv4Only)
 		if err != nil {

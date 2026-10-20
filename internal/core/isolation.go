@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/openrc"
 	"fmt"
 	"io/fs"
 	"os"
@@ -91,7 +92,15 @@ func proxyFile(path string, data []byte, gid int) (bool, error) {
 	if e = os.Chown(path, 0, gid); e != nil {
 		return false, e
 	}
-	return c, os.Chmod(path, 0640)
+	if e = os.Chmod(path, 0640); e != nil {
+		return false, e
+	}
+	f, e := os.Open(path)
+	if e != nil {
+		return false, e
+	}
+	defer f.Close()
+	return c, f.Sync()
 }
 
 func snapshotCert(src CertFiles, dir string, gid int) (CertFiles, error) {
@@ -207,6 +216,15 @@ func (s *Systemd) CheckProxy(ctx context.Context, launcher, profile string, prop
 	}
 	props = append(append([]string{}, props...), "Type=oneshot", "Restart=no", "Slice=system.slice", "PrivateNetwork=true", "OOMScoreAdjust=1000")
 	body := ServiceUnit("VpsCT isolated proxy preflight", launcher+" proxy-exec singbox candidate "+profile, agentproto.Tuning{}, props...)
+	if s.openRC {
+		if err := openrc.Check(ctx, name, body); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return proxyPreflightError(err.Error())
+		}
+		return nil
+	}
 	if _, e := s.WriteUnit(name, body); e != nil {
 		return e
 	}
@@ -220,8 +238,15 @@ func (s *Systemd) CheckProxy(ctx context.Context, launcher, profile string, prop
 	if e := s.DaemonReload(ctx); e != nil {
 		return e
 	}
+	previousInvocation, previousErr := s.ctl(ctx, "show", name, "--property=InvocationID", "--value")
 	if e := s.StartUnits(ctx, []string{name}); e != nil {
-		return fmt.Errorf("isolated proxy preflight failed (see journal for %s): %w", name, e)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if previousErr != nil {
+			return proxyPreflightError("")
+		}
+		return proxyPreflightError(strings.Join(s.proxyPreflightJournal(ctx, name, previousInvocation), "\n"))
 	}
 	return nil
 }
@@ -276,7 +301,21 @@ func (s *Systemd) CheckRunningProxy(ctx context.Context, unit, account, slice, c
 		return fmt.Errorf("proxy sandbox is not active")
 	}
 	if !s.InSlice(ctx, unit, slice) {
-		return fmt.Errorf("proxy is outside its protected slice")
+		return fmt.Errorf("[proxy_cgroup_mismatch] proxy is outside its protected slice")
+	}
+	if s.openRC {
+		return openrc.VerifyProxy(unit, command)
+	}
+	group, e := s.ControlGroup(ctx, unit)
+	if e != nil {
+		return e
+	}
+	membership, e := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", id))
+	if e != nil {
+		return e
+	}
+	if !strings.Contains("\n"+string(membership), "\n0::"+group+"\n") {
+		return fmt.Errorf("[proxy_cgroup_mismatch] proxy process is outside its service cgroup")
 	}
 	execStart, e := s.ctl(ctx, "show", unit, "--property=ExecStart", "--value")
 	if e != nil {
