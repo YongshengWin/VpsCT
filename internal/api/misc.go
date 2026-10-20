@@ -512,11 +512,13 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) error {
 		flusher.Flush()
 		return true
 	}
+	// Register before acknowledging readiness so a client cannot publish (or
+	// revoke its key and publish) in the gap after hello but before Subscribe.
+	ch, cancel := a.Events.Subscribe()
+	defer cancel()
 	if !send("event: hello\ndata: {}\n\n") {
 		return nil
 	}
-	ch, cancel := a.Events.Subscribe()
-	defer cancel()
 	ping := time.NewTicker(25 * time.Second)
 	defer ping.Stop()
 	for {

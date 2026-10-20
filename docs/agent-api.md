@@ -120,6 +120,8 @@ python3 skills/vpsct/scripts/vpsct.py GET /api/v1/events \
   --stream --max-events 20 --timeout 30
 ```
 
+初始 `hello` 在服务端完成事件订阅后发送，可作为本次连接已开始监听的确认；它不代表业务资源已应用，断线期间的事件不补发。
+
 默认最多 20 个事件，包含初始 `hello`，忽略 ping 注释；`--timeout` 在流式模式下限制整个连接的总期限。单事件最多 1 MiB，整条流最多 16 MiB；到达事件数返回成功，超时/断连/截断返回非零，已经收到的完整事件保留。只支持 GET、不能带 body、不能同时用 `--output`，不自动重连。事件 data 可能含业务秘密，脚本只遮盖认证 key；只在用户授权的本机终端处理，不将完整流回显到聊天或无关服务。头像、导出等二进制响应需要 `--output`。
 
 连接日志 CSV 为 `GET /api/v1/connlog/export`，可用 `from`、`to`（RFC 3339 或 `YYYY-MM-DD`）缩小时间范围。导出内部使用固定批量和固有行数上限，会忽略传入的 `limit`/`offset`；不能通过 offset 分页拼出完整 CSV。客户端完整响应上限为 16 MiB，大导出应缩短时间范围，不能将超限或受行数上限约束的结果宣称为完整导出。
