@@ -1,5 +1,7 @@
 # GitHub Issue 修复与验证记录
 
+本文保留各阶段的历史验收记录。2026-10-21 起发行范围收敛为 Linux AMD64：ARM 构建、CI 矩阵、安装与升级支持暂停，历史独立 ARM Release 附件已撤下。下文双架构或 ARM 记录不代表当前支持，现行要求见 [运维说明](operations.md)。
+
 ## 1. 范围与状态
 
 2026-10-15，按 [迭代方案](github-issue-iteration-plan.md) 实施当前 5 条 issue 对应的修复与收尾。基于现有未提交工作区增量修改；没有 commit、push、修改 issue 状态、发布 Release 或连接真实 VPS。源码修复、运行验收与发布完成分别记录，当前不能宣称所有退出条件已完成。

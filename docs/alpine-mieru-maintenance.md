@@ -1,5 +1,7 @@
 # 1. Alpine/OpenRC 扩展方案
 
+当前发行仅支持 Linux AMD64（x86_64），ARM 支持暂停；下文 ARM 测试结果仅为历史记录，不构成当前兼容承诺。恢复支持需要真实测试机器完成验证。
+
 ## 1.1 范围
 
 被控端增加官方 mieru（mita）多实例与网页升级、卸载。控制端仍使用 Debian/Ubuntu systemd；Snell 仍不支持 Alpine。沿用现有 systemd 安装流程，不连接真实 VPS，不发布发行包。

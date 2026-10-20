@@ -1,5 +1,7 @@
 # 网络与中转使用指南
 
+当前发行仅支持 Linux AMD64（x86_64），ARM 支持暂停；下文 ARM 测试结果仅为历史记录，不构成当前兼容承诺。恢复支持需要真实测试机器完成验证。
+
 [返回 README](../README.md) · [安装与运维](operations.md) · [节点与订阅](subscriptions.md)
 
 本文按操作流程说明当前源码中的网络功能。正式安装是否包含这些功能，应对照 [变更记录](../CHANGELOG.md)；开发过程与实验结果见 [实施记录](network-implementation.md)，计划见 [设计方案](network-and-tunnel-design.md)。
