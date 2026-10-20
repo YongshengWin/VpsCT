@@ -9,8 +9,5 @@ docker build -f scripts/uninstaller-test/Dockerfile -t "$image" .
 docker run -d --name "$container" --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
   --mount "type=bind,src=$PWD,dst=/src,readonly" "$image" >/dev/null
-for ((attempt=0; attempt<30; attempt++)); do
-  if docker exec "$container" test -d /run/systemd/system; then break; fi
-  sleep 1
-done
+bash scripts/wait-systemd-container.sh "$container"
 docker exec "$container" bash /src/scripts/uninstaller-test/run.sh

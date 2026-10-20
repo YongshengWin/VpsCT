@@ -11,8 +11,5 @@ case "$arch" in aarch64|arm64) arch=arm64;; x86_64|amd64) arch=amd64;; *) exit 1
 GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go test -c -o "$work/core.test" ./internal/core
 docker run -d --name "$container" --privileged --cgroupns=private --network none --tmpfs /run --tmpfs /run/lock --tmpfs /tmp ctlvps-uninstaller-test:local >/dev/null
 docker cp "$work/core.test" "$container:/core.test"
-for ((attempt=0; attempt<30; attempt++)); do
-  if docker exec "$container" test -d /run/systemd/system; then break; fi
-  sleep 1
-done
+bash scripts/wait-systemd-container.sh "$container"
 docker exec -e CTLVPS_SYSTEMD_TEST=1 "$container" /core.test -test.run '^TestSnellMeterSurvivesRestart$' -test.v

@@ -67,7 +67,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 			_ = json.Unmarshal(a.Diagnostics, &d)
 			fmt.Printf("UDP stress %s: manager=%+v proxy_rss=%dKiB\n", label, d.ForwardUDP, processRSS(pid)/1024)
 		}
-		for _, file := range []string{"/proc/net/snmp", "/sys/fs/cgroup/ctlvps-proxies.slice/memory.current", "/sys/fs/cgroup/ctlvps-proxies.slice/memory.events"} {
+		for _, file := range []string{"/proc/net/snmp", "/sys/fs/cgroup/ctlvps-proxy.slice/memory.current", "/sys/fs/cgroup/ctlvps-proxy.slice/memory.events"} {
 			if body, err := os.ReadFile(file); err == nil {
 				fmt.Printf("UDP stress %s: %s: %s\n", label, file, body)
 			}

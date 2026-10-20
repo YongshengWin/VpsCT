@@ -15,9 +15,5 @@ docker run -d --name "$container" --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
   --mount "type=bind,src=$PWD,dst=/src,readonly" \
   --mount "type=bind,src=$assets_dir,dst=/assets,readonly" "$image" >/dev/null
-for ((attempt=0; attempt<30; attempt++)); do
-  if docker exec "$container" test -d /run/systemd/system; then break; fi
-  sleep 1
-done
-docker exec "$container" timeout 45s sh -c 'systemctl is-system-running --wait; result=$?; [ "$result" -le 1 ]' >/dev/null
+bash scripts/wait-systemd-container.sh "$container" >/dev/null
 docker exec "$container" python3 /src/scripts/maintenance-test/run.py

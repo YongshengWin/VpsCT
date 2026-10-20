@@ -54,15 +54,11 @@ docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" 
  -e "MITA_TEST_TRANSPORT=${MITA_TEST_TRANSPORT:-}" \
  -e "MIERU_TEST_CLIENT=${MIERU_TEST_CLIENT:-}" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
-for ((attempt=0;attempt<30;attempt++)); do
- if docker exec "$container" test -d /run/systemd/system; then break; fi
- sleep 1
-done
 # Wait for boot-time tmpfiles cleanup before creating fixture CA/temp files.
 # Degraded is expected in a container; an unfinished boot or timeout is not.
-docker exec "$container" timeout 45s sh -c 'systemctl is-system-running --wait; boot_result=$?; [ "$boot_result" -le 1 ]' >/dev/null
+bash scripts/wait-systemd-container.sh "$container" >/dev/null
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
- docker exec "$landing_container" timeout 45s sh -c 'systemctl is-system-running --wait; boot_result=$?; [ "$boot_result" -le 1 ]' >/dev/null
+ bash scripts/wait-systemd-container.sh "$landing_container" >/dev/null
  docker exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
 fi
 if [[ "$network_case" != native-subscriptions && "$network_case" != subscriptions && "$network_case" != forward-private && "$network_case" != forward-dns && "$network_case" != forward-socks && "$network_case" != forward-ssh && "$network_case" != forward-wireguard && "$network_case" != forward-udp && "$network_case" != reality && "$network_case" != listen && "$network_case" != protocols && "$network_case" != transit && "$network_case" != transit-ss2022 && "$network_case" != forward && "$network_case" != ssh && "$network_case" != wireguard && "$network_case" != mita && "$network_case" != wgaccess ]]; then docker exec "$container" /fixtures/transport.test -test.run '^TestNetworkContractContainer$' -test.v; fi

@@ -24,10 +24,7 @@ docker run -d --name "$container" --network none --privileged --cgroupns=private
  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
  --mount "type=bind,src=$PWD,dst=/src,readonly" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" ctlvps-boundary-test:local >/dev/null
-for ((i=0;i<30;i++)); do
- if docker exec "$container" test -d /run/systemd/system; then break; fi
- sleep 1
-done
+bash scripts/wait-systemd-container.sh "$container"
 docker exec -e "CTLVPS_CANDIDATE=$([[ "$mode" == candidate ]] && echo 1 || echo 0)" "$container" python3 /src/scripts/security-boundary-test/run.py
 if [[ -n "${PEBBLE_BIN:-}" ]]; then
  docker exec "$container" python3 /src/scripts/security-boundary-test/acme_renewal.py

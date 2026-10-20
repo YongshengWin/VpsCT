@@ -115,6 +115,25 @@ class ProgressTests(unittest.TestCase):
 
 
 class ScenarioTests(unittest.TestCase):
+    def test_systemd_wait_requires_ready_state_not_exit_code_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            docker = root / "docker"
+            docker.write_text('#!/bin/sh\nif [ "${CI_WAIT_FAIL:-0}" = 1 ]; then exit 124; fi\nshift 4\nexec "$@"\n')
+            systemctl = root / "systemctl"
+            systemctl.write_text('''#!/bin/sh
+n=$(cat "$CI_WAIT_COUNT" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$CI_WAIT_COUNT"
+case "$n" in 1) echo 'Failed to connect to bus' >&2; exit 1;; 2) echo starting; exit 1;; *) echo degraded; exit 1;; esac
+''')
+            for command in (docker, systemctl): command.chmod(0o755)
+            environment = {**os.environ, "PATH": str(root) + os.pathsep + os.environ["PATH"], "CI_WAIT_COUNT": str(root / "calls")}
+            command = ["bash", str(Path(__file__).with_name("wait-systemd-container.sh")), "ctlvps-test-fixture"]
+            result = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "calls").read_text().strip(), "3")
+            failed = subprocess.run(command, env={**environment, "CI_WAIT_FAIL": "1"}, capture_output=True)
+            self.assertEqual(failed.returncode, 124)
+
     def test_all_network_scenarios_and_full_soak_are_retained(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); scripts = root / "scripts"; scripts.mkdir()

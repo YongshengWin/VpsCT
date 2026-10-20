@@ -19,11 +19,7 @@ docker run -d --name "$container" --network none --privileged --cgroupns=private
  --mount "type=bind,src=$assets,dst=/assets,readonly" \
  --mount "type=bind,src=$legacy,dst=/legacy,readonly" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" ctlvps-web-upgrade-test:local >/dev/null
-for ((attempt=0;attempt<30;attempt++)); do
- if docker exec "$container" test -d /run/systemd/system; then break; fi
- sleep 1
-done
-docker exec "$container" timeout 45s sh -c 'systemctl is-system-running --wait; result=$?; [ "$result" -le 1 ]' >/dev/null
+bash scripts/wait-systemd-container.sh "$container" >/dev/null
 if ! docker exec "$container" python3 /src/scripts/web-upgrade-test/run.py; then
  docker exec "$container" journalctl --no-pager -n 100 -u ctlvpsd -u ctlvps-agent -u ctlvps-singbox -u 'ctlvps-maintenance-job*'
  exit 1

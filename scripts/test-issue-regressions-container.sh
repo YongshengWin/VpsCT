@@ -18,7 +18,7 @@ docker build --platform "linux/$arch" -f scripts/maintenance-test/Dockerfile -t 
 docker run -d --platform "linux/$arch" --name "$container" --network none --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
   --mount "type=bind,src=$fixture,dst=/fixtures,readonly" "$image" >/dev/null
-docker exec "$container" timeout 45s sh -c 'systemctl is-system-running --wait; result=$?; [ "$result" -le 1 ]'
+bash scripts/wait-systemd-container.sh "$container"
 docker exec -e CTLVPS_SYSTEMD_TEST=1 "$container" /fixtures/core.test -test.run '^TestKernelProxy(SliceValidation|PreflightDiagnostics)$' -test.v
 docker exec -e CTLVPS_INGRESS_TEST=1 "$container" unshare --net sh -ec 'ip link set lo up; exec /fixtures/nft.test -test.run "^TestKernel(ForeignIngress|IngressLifecycle)$" -test.v'
 docker exec "$container" /fixtures/sandbox.test -test.run '^TestKernelSocketSandbox$' -test.v
