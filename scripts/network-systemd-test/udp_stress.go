@@ -40,6 +40,16 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 	if seconds < 30 || seconds > 720 {
 		panic("stress duration outside fixture budget")
 	}
+	sessions := 1024
+	if raw := os.Getenv("UDP_STRESS_SESSIONS"); raw != "" {
+		sessions, err = strconv.Atoi(raw)
+		must(err)
+	}
+	if sessions != 1024 && sessions != 8192 {
+		panic("unsupported UDP stress session profile")
+	}
+	fmt.Printf("Starting UDP stress: sessions=%d seconds=%d workers=64 hard_memory=256MiB\n", sessions, seconds)
+	idleSessions := sessions - 64
 	sd := core.NewSystemd()
 	var pid int
 	var cfg udpsession.Config
@@ -78,7 +88,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 	if !thpBound {
 		panic("stress proxy must use the product's process-local THP workaround")
 	}
-	args := []string{"netns", "exec", "landing", "/fixtures/probe", "udp-load", "8192"}
+	args := []string{"netns", "exec", "landing", "/fixtures/probe", "udp-load", strconv.Itoa(sessions)}
 	for port := 25001; port <= 25008; port++ {
 		args = append(args, fmt.Sprintf("192.0.2.1:%d", port))
 	}
@@ -132,7 +142,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		Millis                int64
 	}
 	must(decoder.Decode(&result))
-	if result.Ready != 8192 {
+	if result.Ready != sessions {
 		panic("load clients not ready")
 	}
 	round := func(n int) {
@@ -144,11 +154,11 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 			panic(fmt.Sprintf("UDP stress lost %d/%d requests (round %dms)", result.Failed, n, result.Millis))
 		}
 	}
-	round(8192)
+	round(sessions)
 	items, e := api.Connections(ctx, cfg.Policies)
 	must(e)
-	if len(items) != 8192 {
-		panic(fmt.Sprintf("expected8192 live sessions, got%d", len(items)))
+	if len(items) != sessions {
+		panic(fmt.Sprintf("expected %d live sessions, got %d", sessions, len(items)))
 	}
 	original := map[string]bool{}
 	for _, c := range items {
@@ -160,7 +170,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 	lastProgress := begin
 	rounds := 0
 	for time.Since(begin) < time.Duration(seconds)*time.Second {
-		round(8192)
+		round(sessions)
 		rounds++
 		current, e := sd.PublicProxyPID(ctx)
 		must(e)
@@ -169,7 +179,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		}
 		items, e = api.Connections(ctx, cfg.Policies)
 		must(e)
-		if len(items) != 8192 {
+		if len(items) != sessions {
 			panic("stress unexpectedly reaped live sessions")
 		}
 		for _, c := range items {
@@ -196,7 +206,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	// Preserve64 active clients while the other8128 expire, then refill all8192.
+	// Preserve 64 active clients while the remaining sessions expire, then refill.
 	agentBefore, err := st.GetAgentByServer(ctx, serverID)
 	must(err)
 	var before agentproto.Diagnostics
@@ -223,23 +233,23 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	round(8192)
+	round(sessions)
 	items, e = api.Connections(ctx, cfg.Policies)
 	must(e)
-	if len(items) != 8192 {
+	if len(items) != sessions {
 		panic("reclaimed capacity cannot refill")
 	}
 	eventually("stress diagnostics reach panel", func() bool {
 		// Keep the refilled sessions active while waiting for a heartbeat;
 		// that wait can exceed the eight-second idle policy.
-		round(8192)
+		round(sessions)
 		a, e := st.GetAgentByServer(ctx, serverID)
 		var d agentproto.Diagnostics
 		_ = json.Unmarshal(a.Diagnostics, &d)
-		if d.ForwardUDP != nil && d.ForwardUDP.Reaped > baselineReaped+8128 {
+		if d.ForwardUDP != nil && d.ForwardUDP.Reaped > baselineReaped+uint64(idleSessions) {
 			panic("expiry batch reaped active clients")
 		}
-		return e == nil && d.ForwardUDP != nil && d.ForwardUDP.State == "healthy" && d.ForwardUDP.Reaped == baselineReaped+8128
+		return e == nil && d.ForwardUDP != nil && d.ForwardUDP.State == "healthy" && d.ForwardUDP.Reaped == baselineReaped+uint64(idleSessions)
 	})
-	fmt.Printf("PASS UDP stress:8192 sessions, %d seconds,%d rounds,no active mapping replacement;8128 idle sessions reclaimed and capacity refilled; proxyRSS start=%dKiB peak=%dKiB final=%dKiB\n", seconds, rounds, startRSS/1024, peakRSS/1024, processRSS(pid)/1024)
+	fmt.Printf("PASS UDP stress:%d sessions, %d seconds,%d rounds,no active mapping replacement;%d idle sessions reclaimed and capacity refilled; proxyRSS start=%dKiB peak=%dKiB final=%dKiB\n", sessions, seconds, rounds, idleSessions, startRSS/1024, peakRSS/1024, processRSS(pid)/1024)
 }

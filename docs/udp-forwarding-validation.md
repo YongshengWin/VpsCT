@@ -44,3 +44,5 @@ ALPINE_TEST_ARCH=arm64 SINGBOX_MUSL_BIN=/path/to/official/sing-box-musl \
 ## 1.6 必要可靠性优化
 
 第二版 UDP 能力要求独立健康租约与运行诊断，旧版能力不能取得启用 UDP 的配置；使用第二版后拒绝降级到第一版 agent。每条入站的 1024 上限来自官方 [UDP NAT 实现](https://github.com/SagerNet/sing/blob/0ad23b637bd4/common/udpnat2/service.go)，超量配置已在真实压测中复现活跃映射被缓存替换，不能继续把旧 4096 上限当作稳定容量。旧记录仍能读取、停用和清理。整机预算仍为 8192，需分布在多条转发中。详见 [必要优化迭代记录](udp-reliability-iteration.md)。
+
+8192 是配置预算的安全上限，并非承载能力保证。默认 256 MiB 代理预算的发布验收基线为 1024 个持续活跃 UDP 会话；原生 AMD64 的 8192 会话强负载尚未通过，会触发 API 不可用保护。请按资源和实际负载控制并发，不能将其换算为固定用户数。

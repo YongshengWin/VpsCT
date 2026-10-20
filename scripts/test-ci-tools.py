@@ -30,7 +30,7 @@ fixtures = load("fetch-network-test-fixtures")
 class EvidenceTests(unittest.TestCase):
     def valid(self):
         return {"schema": 1, "repository": "example/VpsCT", "run_id": 12,
-                "source_tree": "a" * 40, "source_head": "b" * 40, "soak_seconds": 600,
+                "source_tree": "a" * 40, "source_head": "b" * 40, "soak_seconds": 600, "soak_sessions": 1024,
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                 "results": {name: "success" for name in proof.REQUIRED}}
 
@@ -49,7 +49,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_identity_and_source_rejection(self):
         for key, value in [("repository", "other/VpsCT"), ("run_id", 13),
-                           ("source_tree", "c" * 40), ("source_head", "d" * 40), ("schema", 2)]:
+                           ("source_tree", "c" * 40), ("source_head", "d" * 40), ("schema", 2), ("soak_sessions", 0)]:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 data = self.valid(); data[key] = value; self.check(data)
 
@@ -141,26 +141,29 @@ case "$n" in 1) echo 'Failed to connect to bus' >&2; exit 1;; 2) echo starting; 
             failed = subprocess.run(command, env={**environment, "CI_WAIT_FAIL": "1"}, capture_output=True)
             self.assertEqual(failed.returncode, 124)
 
-    def test_all_network_scenarios_and_full_soak_are_retained(self):
+    def test_network_scenarios_and_explicit_soak_profiles(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); scripts = root / "scripts"; scripts.mkdir()
             shutil.copyfile(Path(__file__).with_name("ci-scenarios.sh"), scripts / "ci-scenarios.sh")
             (scripts / "fetch-network-test-fixtures.py").write_text("# fixture metadata downloader is validated separately\n")
             fake = scripts / "test-network-systemd-container.sh"
-            fake.write_text('printf "%s|%s|%s\\n" "$NETWORK_SYSTEMD_CASE" "${NETWORK_TEST_CLIENT:-sing-box}" "${UDP_STRESS_SECONDS:-}" >> "$CI_FIXTURE_LOG"\nexit "${CI_FIXTURE_EXIT:-0}"\n')
+            fake.write_text('printf "%s|%s|%s|%s\\n" "$NETWORK_SYSTEMD_CASE" "${NETWORK_TEST_CLIENT:-sing-box}" "${UDP_STRESS_SECONDS:-}" "${UDP_STRESS_SESSIONS:-}" >> "$CI_FIXTURE_LOG"\nexit "${CI_FIXTURE_EXIT:-0}"\n')
             log = root / "calls"
-            environment = {**os.environ, "CI_FIXTURE_LOG": str(log), "UDP_STRESS_SECONDS": "600"}
+            environment = {**os.environ, "CI_FIXTURE_LOG": str(log), "UDP_STRESS_SECONDS": "600", "UDP_STRESS_SESSIONS": "1024"}
             for category, scenario in [("network", x) for x in ("managed", "direct", "ssh", "wireguard", "udp")] + [("soak", "udp")]:
                 subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), category, scenario], env=environment,
                                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             lines = [line.split("|") for line in log.read_text().splitlines()]
             self.assertEqual([x[0] for x in lines], ["transit-ss2022", "forward", "subscriptions", "direct", "ssh", "wireguard",
                 "forward-udp", "forward-both", "forward-udp6", "forward-socks-udp", "forward-wireguard-udp", "forward-stress"])
-            self.assertEqual(lines[-1][2], "600")
+            self.assertEqual(lines[-1][2:], ["600", "1024"])
             self.assertTrue(all(x[1] == "shadowsocks-rust" for x in lines[3:6]))
             subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "soak", "udp"],
                 env={**environment, "UDP_STRESS_SECONDS": "60"}, check=True, capture_output=True)
             self.assertEqual(log.read_text().splitlines()[-1].split("|")[2], "60")
+            subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "soak", "udp"],
+                env={**environment, "UDP_STRESS_SESSIONS": "8192"}, check=True, capture_output=True)
+            self.assertEqual(log.read_text().splitlines()[-1].split("|")[3], "8192")
             invalid = subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "soak", "udp"],
                 env={**environment, "UDP_STRESS_SECONDS": "1"}, capture_output=True)
             self.assertEqual(invalid.returncode, 2)

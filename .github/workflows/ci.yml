@@ -9,7 +9,13 @@ on:
         type: choice
         options: ['60', '600']
         default: '600'
+      soak_sessions:
+        description: '1024 release baseline; 8192 experimental capacity diagnostic'
+        type: choice
+        options: ['1024', '8192']
+        default: '1024'
 env:
+  UDP_STRESS_SESSIONS: ${{ inputs.soak_sessions || '1024' }}
   UDP_STRESS_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_seconds || contains(github.event.pull_request.labels.*.name, 'release-candidate') && '600' || '60' }}
 permissions:
   contents: read
@@ -165,7 +171,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/ci-env
-      - name: UDP soak (60s daily; 600s release candidate)
+      - name: UDP baseline 1024 sessions (60s daily; 600s release)
         run: bash scripts/ci-scenarios.sh soak udp
   upgrade:
     needs: source

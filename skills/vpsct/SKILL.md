@@ -6,6 +6,7 @@ description: "Deploy and operate VpsCT: install or upgrade its controller on an 
 # VpsCT
 
 当前发行支持仅为 Linux AMD64（x86_64），适用于控制端、Docker 与被控 agent。ARM 不提供安装、升级或分发附件；待真实机器验证后再恢复。
+UDP 的 8192 整机配置预算是准入上限，不是容量保证。默认 256 MiB 代理预算的发布负载基线为 1024 个活跃会话；8192 强负载未通过原生 AMD64 验收。出现 UDP 保护性暂停时先降低负载并读取诊断，不延长健康租约或绕过校验。
 通过用户指定的面板 origin 和 API key 完成 VpsCT 管理。`VPSCT_URL` 与 `VPSCT_API_KEY` 由用户的秘密管理工具或环境注入；不要把 key 放进命令参数、仓库、聊天或日志。现有授权决定可以修改哪些资源，读取目录本身不会扩大任务范围。
 
 ## 安装与既有实例

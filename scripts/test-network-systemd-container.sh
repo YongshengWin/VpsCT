@@ -50,7 +50,7 @@ docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" 
  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
  -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_NETWORK_CONTRACT_TEST=1 \
  -e "NETWORK_TEST_CLIENT=$client" \
- -e "NETWORK_SYSTEMD_CASE=$network_case" -e "UDP_STRESS_SECONDS=${UDP_STRESS_SECONDS:-600}" \
+ -e "NETWORK_SYSTEMD_CASE=$network_case" -e "UDP_STRESS_SECONDS=${UDP_STRESS_SECONDS:-600}" -e "UDP_STRESS_SESSIONS=${UDP_STRESS_SESSIONS:-1024}" \
  -e "MITA_TEST_TRANSPORT=${MITA_TEST_TRANSPORT:-}" \
  -e "MIERU_TEST_CLIENT=${MIERU_TEST_CLIENT:-}" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null

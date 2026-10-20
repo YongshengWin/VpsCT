@@ -39,6 +39,8 @@ def validate(proof, repository, run_id, source_tree, source_head, now=None, requ
     results = proof.get("results", {})
     if set(results) != REQUIRED or any(result != "success" for result in results.values()):
         raise ValueError("CI evidence is missing a successful required gate")
+    if proof.get("soak_sessions") not in (1024, 8192):
+        raise ValueError("missing UDP session profile")
     duration = proof.get("soak_seconds")
     if duration not in (60, 600) or (require_full and duration != 600):
         raise ValueError("release evidence requires the complete 600-second UDP soak")
@@ -89,6 +91,7 @@ def main():
         proof["sha256"] = digest(archive)
         filename = "ci-build.json"
     else:
+        proof["soak_sessions"] = int(os.environ["UDP_STRESS_SESSIONS"])
         proof["soak_seconds"] = int(os.environ["UDP_STRESS_SECONDS"])
         results = json.loads(os.environ["CI_RESULTS"])
         proof["results"] = {key: value["result"] for key, value in results.items()}
