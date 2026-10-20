@@ -37,7 +37,10 @@ func clientProbe() {
 		return
 	}
 	if os.Args[3] == "udp" {
-		got, err := udpAt(port, os.Args[4])
+		// Native CI may schedule the client, proxy and IPv6 neighbor discovery
+		// beyond the raw fixture's 700ms budget. Keep the response deadline
+		// bounded below the caller's 4s process timeout.
+		got, err := udpAtWithin(port, os.Args[4], 2*time.Second)
 		must(err)
 		fmt.Print(got)
 		return

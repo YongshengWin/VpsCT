@@ -226,6 +226,10 @@ func udp(target string) (string, error) {
 	return udpAt(1080, target)
 }
 func udpAt(listen int, target string) (string, error) {
+	return udpAtWithin(listen, target, 700*time.Millisecond)
+}
+
+func udpAtWithin(listen int, target string, timeout time.Duration) (string, error) {
 	c, ip, port, e := socksAt(listen, 3, target)
 	if e != nil {
 		return "", e
@@ -239,7 +243,7 @@ func udpAt(listen int, target string) (string, error) {
 		return "", e
 	}
 	defer u.Close()
-	u.SetDeadline(time.Now().Add(700 * time.Millisecond))
+	u.SetDeadline(time.Now().Add(timeout))
 	b := append([]byte{0, 0, 0}, address(target, 18080)...)
 	b = append(b, []byte("fixture")...)
 	if _, e = u.Write(b); e != nil {
