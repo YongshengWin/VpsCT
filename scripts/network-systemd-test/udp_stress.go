@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,30 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		for _, file := range []string{"/proc/net/snmp", "/sys/fs/cgroup/ctlvps-proxy.slice/memory.current", "/sys/fs/cgroup/ctlvps-proxy.slice/memory.events"} {
 			if body, err := os.ReadFile(file); err == nil {
 				fmt.Printf("UDP stress %s: %s: %s\n", label, file, body)
+			}
+		}
+		for _, name := range []string{"smaps_rollup", "cgroup"} {
+			if body, err := os.ReadFile(fmt.Sprintf("/proc/%d/%s", pid, name)); err == nil {
+				fmt.Printf("UDP stress %s: proxy %s: %s\n", label, name, body)
+				if name == "cgroup" {
+					for _, line := range strings.Split(string(body), "\n") {
+						if path, ok := strings.CutPrefix(line, "0::"); ok {
+							for _, metric := range []string{"memory.current", "memory.max", "memory.events"} {
+								file := filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(path, "/"), metric)
+								if value, err := os.ReadFile(file); err == nil {
+									fmt.Printf("UDP stress %s: %s: %s\n", label, file, value)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		if env, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
+			for _, item := range strings.Split(string(env), "\x00") {
+				if strings.HasPrefix(item, "GOMEMLIMIT=") {
+					fmt.Printf("UDP stress %s: %s\n", label, item)
+				}
 			}
 		}
 	}
