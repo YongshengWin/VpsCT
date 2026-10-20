@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/networkconfig"
@@ -576,6 +577,12 @@ func (d *SingBox) ApplyResources(ctx context.Context, ds *agentproto.DesiredStat
 			return false, e
 		}
 		props = append(props, fmt.Sprintf("Environment=GOMEMLIMIT=%dMiB", max(ds.Tuning.GoMemLimitMB, 64)), "IPAccounting=yes")
+		if !d.Systemd.openRC {
+			// Also change the unit so reapplying existing services restarts them.
+			// OpenRC's strict plan accepts only GOMEMLIMIT; the fixed launcher
+			// injects this setting on both init systems.
+			props = append(props, "Environment=GODEBUG="+agentbudget.SingBoxGoDebug)
+		}
 		unit := singboxUnit
 		if clone.private {
 			unit = "ctlvps-singbox-private.service"

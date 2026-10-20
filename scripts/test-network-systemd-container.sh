@@ -44,9 +44,9 @@ network_args=(--network none)
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
  docker network create --internal --subnet 198.18.37.0/24 "$transit_network" >/dev/null
  network_args=(--network "$transit_network" --ip 198.18.37.2)
- docker run -d --platform "linux/$arch" --name "$landing_container" --network "$transit_network" --ip 198.18.37.3 --privileged --cgroupns=private --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_BIND_FIXTURE=1 -e "NETWORK_SYSTEMD_CASE=$network_case" --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
+ docker run -d --platform "linux/$arch" --name "$landing_container" --network "$transit_network" --ip 198.18.37.3 --privileged --cgroupns=private --memory=1g --memory-swap=1g --tmpfs /run --tmpfs /run/lock --tmpfs /tmp -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_BIND_FIXTURE=1 -e "NETWORK_SYSTEMD_CASE=$network_case" --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
 fi
-docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" --privileged --cgroupns=private \
+docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" --privileged --cgroupns=private --memory=1g --memory-swap=1g \
  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
  -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_NETWORK_CONTRACT_TEST=1 \
  -e "NETWORK_TEST_CLIENT=$client" \

@@ -4,7 +4,6 @@ package proxysandbox
 
 import (
 	"fmt"
-	"os"
 	"runtime"
 	"unsafe"
 
@@ -107,9 +106,5 @@ func launch(bin string, args []string) error {
 			return fmt.Errorf("[proxy_mark_unavailable] SO_MARK with CAP_NET_RAW unavailable; check host kernel and container capabilities: %w", err)
 		}
 	}
-	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "HOME=/nonexistent", "GOMEMLIMIT=" + os.Getenv("GOMEMLIMIT")}
-	if bin == "/opt/ctlvps/bin/mita" {
-		env = append(env, "MITA_CONFIG_JSON_FILE="+os.Getenv("MITA_CONFIG_JSON_FILE"), "MITA_UDS_PATH=/tmp/ctlvps-mita.sock", "MITA_INSECURE_UDS=1")
-	}
-	return unix.Exec(bin, append([]string{bin}, args...), env)
+	return unix.Exec(bin, append([]string{bin}, args...), proxyEnvironment(bin))
 }

@@ -13,8 +13,10 @@ const (
 	ResidentGoBytes       = 64 << 20
 	WorkerGoLimit         = "48MiB"
 	NetworkGoLimit        = "32MiB"
-	ConfigBytes           = 2 << 20
-	SettlementBytes       = 1 << 20
+	// Process-local compatibility for the pinned official Go-based core.
+	SingBoxGoDebug  = "disablethp=1"
+	ConfigBytes     = 2 << 20
+	SettlementBytes = 1 << 20
 	// Small Alpine host/container capacity cannot use larger controller defaults.
 	AlpineSmallMemoryBytes = 384 << 20
 	AlpineProxyMemoryMiB   = 96
