@@ -30,10 +30,8 @@ echo "==> go build (with embedded web)"
 check_dir=$(mktemp -d)
 trap 'rm -rf "$check_dir"' EXIT
 CGO_ENABLED=0 go build -o "$check_dir/ctlvpsd" ./cmd/ctlvpsd
-for arch in amd64; do
-  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvpsd-linux-$arch" ./cmd/ctlvpsd
-  CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvps-agent-linux-$arch" ./cmd/ctlvps-agent
-done
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$check_dir/ctlvpsd-linux-amd64" ./cmd/ctlvpsd
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$check_dir/ctlvps-agent-linux-amd64" ./cmd/ctlvps-agent
 
 echo "==> installer validation"
 bash -n install.sh uninstall.sh

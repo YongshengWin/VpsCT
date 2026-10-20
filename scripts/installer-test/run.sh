@@ -27,10 +27,8 @@ assert path.stat().st_mode & 0o777 == 0o600
 assert setup(path.read_text().strip()) == 200
 assert not path.exists()
 PY
-for arch in amd64; do
-  curl -fsS -H "Host: panel.example.test" "http://127.0.0.1:8080/dl/agent/linux-$arch" -o "/tmp/download-$arch"
-  cmp "/tmp/download-$arch" "/opt/ctlvps/agents/ctlvps-agent-linux-$arch"
-done
+curl -fsS -H "Host: panel.example.test" http://127.0.0.1:8080/dl/agent/linux-amd64 -o /tmp/download-amd64
+cmp /tmp/download-amd64 /opt/ctlvps/agents/ctlvps-agent-linux-amd64
 # A repeated fresh install must never overwrite data or config.
 if bash install.sh "${args[@]}" --site-url https://other.example.test --no-proxy >/dev/null 2>&1; then
   echo 'Existing installation was overwritten' >&2; exit 1
