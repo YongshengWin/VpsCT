@@ -50,7 +50,7 @@
 
 面板需要 Safari 16.4+、Chrome 111+ 或 Firefox 128+。
 
-当前发行版仅支持 **Linux AMD64（x86_64）**，包括控制端、Docker 和被控 agent。ARM 支持暂停，待具备真实测试机器并完成验证后再恢复；历史 ARM Release 附件已撤下。
+当前发行版仅支持 **Linux AMD64（x86_64）**，包括控制端、Docker 和被控 agent。ARM 支持暂停，待具备真实测试机器并完成验证后再恢复；历史 ARM Release 附件已撤下。AMD64 压缩包内保留一个供旧版升级器检查的 ARM 停用提示脚本，执行只会报错退出。
 
 **原生安装**适用于 Debian / Ubuntu、systemd、Linux amd64。准备已解析的面板域名，并确保 80、443 端口可用：
 

@@ -225,6 +225,11 @@ identifier = uuid.uuid4().hex
 request('/api/v1/system/maintenance', {'id': identifier, 'role': 'controller', 'action': 'update',
     'version': version, 'confirm': 'VpsCT', 'password': password})
 def controller_upgraded():
+    for job in request('/api/v1/system/maintenance').get('jobs', []):
+        if job['id'] == identifier and job['status'] == 'failed':
+            log = P('/var/lib/ctlvps-maintenance') / identifier / 'worker.log'
+            if log.exists(): print('Upgrade worker diagnostics:', log.read_text()[-5000:], flush=True)
+            raise AssertionError('web controller upgrade failed: ' + str(job.get('message', job.get('stage'))))
     pid = run('systemctl', 'show', 'ctlvpsd', '-p', 'MainPID', '--value').stdout.strip()
     if not pid.isdigit() or int(pid) == 0: return False
     with P('/proc/' + pid + '/exe').open('rb') as executable:

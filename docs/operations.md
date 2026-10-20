@@ -1,6 +1,6 @@
 # 安装、升级与恢复
 
-当前控制端、Docker 和被控 agent 仅支持 Linux AMD64（x86_64）。ARM 支持暂停，历史独立 ARM Release 附件已撤下，待真实机器验证后恢复。历史 AMD64 包保持原始内容及摘要，不因撤下 ARM 附件重新打包。
+当前控制端、Docker 和被控 agent 仅支持 Linux AMD64（x86_64）。ARM 支持暂停，历史独立 ARM Release 附件已撤下，待真实机器验证后恢复。历史 AMD64 包保持原始内容及摘要，不因撤下 ARM 附件重新打包。新 AMD64 包为兼容旧 AMD64 网页升级器的文件布局，保留 `agents/ctlvps-agent-linux-arm64` 停用提示脚本；它只报错退出，不能启动 agent，且不会作为独立 ARM 附件或下载接口提供。
 
 v0.1.3 默认使用官方 HTTPS 下载与 SHA256 校验，无需准备发布签名密钥、信任根或验证器。可选自定义签名部署见[安全迁移说明](security-migration.md)。
 [返回 README](../README.md)

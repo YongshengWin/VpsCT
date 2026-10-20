@@ -29,6 +29,12 @@ assert not path.exists()
 PY
 curl -fsS -H "Host: panel.example.test" http://127.0.0.1:8080/dl/agent/linux-amd64 -o /tmp/download-amd64
 cmp /tmp/download-amd64 /opt/ctlvps/agents/ctlvps-agent-linux-amd64
+# The old AMD64 archive-layout requirement must never restore ARM execution.
+if /opt/ctlvps/agents/ctlvps-agent-linux-arm64 >/tmp/retired-arm.log 2>&1; then
+  echo 'Retired ARM marker unexpectedly succeeded' >&2; exit 1
+fi
+grep -q 'ARM support is suspended' /tmp/retired-arm.log
+[[ "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: panel.example.test" http://127.0.0.1:8080/dl/agent/linux-arm64)" == 404 ]]
 # A repeated fresh install must never overwrite data or config.
 if bash install.sh "${args[@]}" --site-url https://other.example.test --no-proxy >/dev/null 2>&1; then
   echo 'Existing installation was overwritten' >&2; exit 1

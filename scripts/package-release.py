@@ -53,6 +53,13 @@ def main():
             for agent_arch in ('amd64',):
                 name = f'ctlvps-agent-linux-{agent_arch}'
                 shutil.copy2(ROOT / 'bin' / name, package / 'agents' / name)
+            # v0.1.2-v0.1.6 AMD64 installers require this path to exist before
+            # switching releases. Retain an explicit refusal script, never an
+            # ARM binary or an installable ARM release, for that archive layout.
+            (package / 'agents/ctlvps-agent-linux-arm64').write_text(
+                '#!/bin/sh\n'
+                'echo "VpsCT ARM support is suspended; only Linux AMD64 is supported." >&2\n'
+                'exit 1\n')
             shutil.copy2(ROOT / 'deploy/ctlvpsd.service', package / 'ctlvpsd.service')
             shutil.copy2(ROOT / 'deploy/ctlvps-maintenance.service', package / 'ctlvps-maintenance.service')
             shutil.copy2(ROOT / 'deploy/ctlvpsd.env.example', package / 'ctlvpsd.env.example')
