@@ -303,3 +303,52 @@ func TestForwardImpactIncludesPinnedConsumersAndHistoricalListeners(t *testing.T
 		t.Fatal("forward runtime edit reported saved-only", op, err)
 	}
 }
+
+func TestForwardUDPBudgetIsAggregateAndAllowsCleanup(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	server, _, _ := egressFixture(t, s)
+	for i := 0; i < 8; i++ {
+		f := forwardFixture(server.ID, 25200+i)
+		f.Config.Network, f.Config.MaxTCPConnections, f.Config.MaxUDPSessions, f.Config.UDPIdleSeconds = "udp", 0, 1024, 2
+		if err := s.Tx(ctx, func(tx *sql.Tx) error { _, err := s.createPortForward(ctx, tx, f); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f := forwardFixture(server.ID, 25208)
+	f.Config.Network, f.Config.MaxTCPConnections, f.Config.MaxUDPSessions, f.Config.UDPIdleSeconds = "udp", 0, 1, 2
+	if err := checkForwardUDPBudget(ctx, s.db, f); err == nil {
+		t.Fatal("aggregate UDP budget admitted")
+	}
+	f.Enabled = false
+	if err := checkForwardUDPBudget(ctx, s.db, f); err != nil {
+		t.Fatal("cleanup blocked", err)
+	}
+}
+
+func TestLegacyUDPOverCoreCapacityCanBeDisabledButNotEnabled(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	server, _, _ := egressFixture(t, s)
+	f := forwardFixture(server.ID, 25250)
+	f.Enabled = false
+	f.Config.Network, f.Config.MaxTCPConnections, f.Config.MaxUDPSessions, f.Config.UDPIdleSeconds = "udp", 0, 4096, 2
+	if err := s.Tx(ctx, func(tx *sql.Tx) error { var err error; f, err = s.createPortForward(ctx, tx, f); return err }); err != nil {
+		t.Fatal("history cannot be retained", err)
+	}
+	if _, err := s.GetPortForward(ctx, f.ID); err != nil {
+		t.Fatal("legacy record unreadable", err)
+	}
+	if err := s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := s.updatePortForward(ctx, tx, f.ID, f.Revision, f.Name, true, f.Config)
+		return err
+	}); err == nil {
+		t.Fatal("overcapacity UDP enabled")
+	}
+	if err := s.Tx(ctx, func(tx *sql.Tx) error {
+		_, err := s.updatePortForward(ctx, tx, f.ID, f.Revision, f.Name, false, f.Config)
+		return err
+	}); err != nil {
+		t.Fatal("legacy cleanup blocked", err)
+	}
+}

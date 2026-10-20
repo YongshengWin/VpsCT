@@ -4,6 +4,7 @@ import json, os, pathlib, platform, shutil, ssl, subprocess, sys
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 P=pathlib.Path
 assert P('/.dockerenv').exists(), 'fixture authority is only for disposable containers'
+os.umask(0o022)  # systemd container PID 1 can leave docker exec with umask 0000
 root=P('/fixtures/security'); arch={'x86_64':'amd64','aarch64':'arm64'}[platform.machine()]
 signer=f'/src/bin/ctlvps-sign-linux-{arch}'
 def run(*args): subprocess.run(args,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

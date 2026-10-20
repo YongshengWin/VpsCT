@@ -247,7 +247,7 @@ function SecurityTab() {
         <CardHeader><CardTitle>最近订阅访问</CardTitle></CardHeader>
         <CardContent>
           {access.isLoading ? <Spinner /> : !access.data?.length ? <p className="text-sm text-muted-foreground">无</p> : (
-            <div className="max-h-[32rem] overflow-auto">
+            <div className="max-h-128 overflow-auto">
               <Table>
                 <thead><tr className="border-b"><Th>时间</Th><Th>IP</Th><Th>格式</Th><Th>状态</Th><Th></Th></tr></thead>
                 <tbody>{access.data.map((l) => (

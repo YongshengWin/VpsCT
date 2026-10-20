@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -36,7 +37,22 @@ func TestStreamingExtractionAndAtomicActivation(t *testing.T) {
 			}
 			dst, _ := os.CreateTemp(dir, "stage")
 			defer dst.Close()
-			if err := extractBinaryTo(src, "sing-box", dst); err != nil {
+			denied := errors.New("insufficient extraction space")
+			var rejected bytes.Buffer
+			if err := extractBinaryToBudget(src, "sing-box", &rejected, func(size int64) error {
+				if size != int64(len(want)) {
+					t.Fatalf("budget used %d instead of selected binary size %d", size, len(want))
+				}
+				return denied
+			}); !errors.Is(err, denied) || rejected.Len() != 0 {
+				t.Fatalf("space denial must precede all executable writes: %v, %d bytes", err, rejected.Len())
+			}
+			if err := extractBinaryToBudget(src, "sing-box", dst, func(size int64) error {
+				if size != int64(len(want)) {
+					t.Fatalf("unexpected extraction budget %d", size)
+				}
+				return nil
+			}); err != nil {
 				t.Fatal(err)
 			}
 			dst.Seek(0, io.SeekStart)
@@ -44,6 +60,16 @@ func TestStreamingExtractionAndAtomicActivation(t *testing.T) {
 			if !bytes.Equal(got, want) {
 				t.Fatal("wrong executable")
 			}
+			// Version probing closes the writer to avoid Linux ETXTBSY.
+			// Activation must also work with the reopened read-only candidate.
+			if err := dst.Close(); err != nil {
+				t.Fatal(err)
+			}
+			dst, err := os.Open(dst.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer dst.Close()
 			target := filepath.Join(dir, "sing-box")
 			os.WriteFile(target, []byte("old"), 0755)
 			if err := CommitBinary(dst, target); err != nil {

@@ -5,6 +5,7 @@ import (
 	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/mieruconfig"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/wgconfig"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,17 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 	}
 	if len(d.Nodes) > 2048 || len(d.Hash) != 64 || d.Hash != ContentHash(d) {
 		return errors.New("配置大小或摘要无效")
+	}
+	if d.ForwardUDPVersion < 0 || d.ForwardUDPVersion > networkconfig.ForwardUDPVersion {
+		return errors.New("UDP 会话管理版本不支持")
+	}
+	if d.NATVersion != 0 && d.NATVersion != NATVersion || d.NAT != nil && d.NATVersion != NATVersion {
+		return errors.New("NAT 面板配置缺少受支持的版本声明")
+	}
+	if d.NAT != nil {
+		if err := d.NAT.Validate(); err != nil {
+			return err
+		}
 	}
 	if d.MitaVersion != 0 && d.MitaVersion != 1 {
 		return errors.New("mita 能力版本无效")
@@ -115,7 +127,20 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 		}
 	}
 	forwardIDs := map[int64]bool{}
+	udpSessions := 0
 	for _, f := range d.Forwards {
+		if !f.Blocked {
+			if f.Config.MaxUDPSessions > agentbudget.ForwardUDPPerListener {
+				return errors.New("UDP 转发会话上限超过官方内核容量 1024")
+			}
+			udpSessions += f.Config.MaxUDPSessions
+			if udpSessions > agentbudget.ForwardUDPSessions {
+				return errors.New("UDP 转发总会话预算超过服务器上限")
+			}
+		}
+		if !f.Blocked && f.Config.Network != "tcp" && d.ForwardUDPVersion != networkconfig.ForwardUDPVersion {
+			return errors.New("UDP 固定转发缺少会话管理版本")
+		}
 		if err := f.Validate(); err != nil {
 			return err
 		}

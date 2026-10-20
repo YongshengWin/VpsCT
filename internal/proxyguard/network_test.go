@@ -7,7 +7,7 @@ import (
 )
 
 func TestNetworkDigestAllowsOnlyExpiringReadiness(t *testing.T) {
-	for _, resource := range []string{"n1_ready", "f1_ready"} {
+	for _, resource := range []string{"n1_ready", "f1_ready", "f1_udp_ready"} {
 		t.Run(resource, func(t *testing.T) { testNetworkLeaseDigest(t, resource) })
 	}
 }

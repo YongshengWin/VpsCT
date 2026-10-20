@@ -23,5 +23,5 @@ RUN apt-get update && apt-get install -y --no-install-recommends iproute2 nftabl
 RUN groupadd -g 199 ctlvps-net && useradd -u 199 -g ctlvps-net -M -d /nonexistent -s /usr/sbin/nologin ctlvps-net
 DOCKERFILE
 docker run --rm --name "$container" --network none --privileged --read-only --tmpfs /tmp --tmpfs /run \
- -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_BIND_CASE="$test_case" -v "$work/bind-test:/bind-test:ro" -v "$binary:/fixture-sing-box:ro" "${client_args[@]}" \
+ -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_BIND_CASE="$test_case" -e "CTLVPS_FORWARD_REAPER=${CTLVPS_FORWARD_REAPER:-0}" -e "CTLVPS_FORWARD_CONNECTED_UDP=${CTLVPS_FORWARD_CONNECTED_UDP:-0}" -v "$work/bind-test:/bind-test:ro" -v "$binary:/fixture-sing-box:ro" "${client_args[@]}" \
  ctlvps-network-bind-test:local /bind-test

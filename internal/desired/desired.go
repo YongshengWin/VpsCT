@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/domain"
@@ -70,11 +71,13 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 		networkVersion = max(networkVersion, agentproto.NetworkBindingVersion)
 	}
 	shares := map[int64]domain.Share{}
+	now := b.Now()
 	versions, err := b.versions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	ds := &agentproto.DesiredState{
+		PublicationGeneration:   generation,
 		MitaVersion:             mitaVersion,
 		NetworkSSHVersion:       sshVersion,
 		NetworkWireGuardVersion: wgVersion,
@@ -102,6 +105,14 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 			RestartSec:   3,
 			GoMemLimitMB: 192,
 		},
+	}
+	nat, natRevision, err := b.Store.ControllerNAT(ctx, server.ID)
+	if err != nil {
+		return nil, err
+	}
+	ds.NAT = nat
+	if natRevision > 0 {
+		ds.NATVersion = agentproto.NATVersion
 	}
 	if mitaVersion == 0 {
 		delete(ds.Versions, "mita")
@@ -131,6 +142,9 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 			}
 		}
 		// disabled server: converge to "nothing running"
+		if ds.NetworkBindingVersion == 0 {
+			ds.NetworkGeneration = 0
+		}
 		ds.Hash = Hash(ds)
 		return ds, nil
 	}
@@ -167,13 +181,15 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 				}
 			}
 			if ok {
-				if sh.Status != domain.ShareActive {
+				if sh.NodeExhausted(n) || sh.Status != domain.ShareActive || (sh.ExpiresAt != nil && !now.Before(*sh.ExpiresAt)) || (sh.QuotaBytes > 0 && domain.QuotaBilled(sh.BillingMode, sh.UsedUpload, sh.UsedDownload) >= sh.QuotaBytes) {
 					spec.Blocked = true
 				}
 				spec.ConnlogEnabled = sh.ConnlogEnabled
 				if sh.ConnlogEnabled {
 					connlogAny = true
 				}
+			} else {
+				spec.Blocked = true
 			}
 		} else if selfLog {
 			spec.ConnlogEnabled = true
@@ -276,12 +292,13 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 	if err != nil {
 		return nil, err
 	}
-	// Retain historical UDP resources and their identities, but close their
-	// listeners under official cores until idle expiry is qualified. Do not
-	// reject the whole publication and leave an old UDP listener running.
+	// Close incompatible historical UDP listeners while retaining their meters.
 	for i := range ds.Forwards {
-		if ds.Forwards[i].Config.Network != "tcp" && !corecompat.UDPForward(versions["sing-box"].Version) {
+		if ds.Forwards[i].Config.Network != "tcp" && (!corecompat.UDPForward(versions["sing-box"].Version) || ds.Forwards[i].Config.MaxUDPSessions > agentbudget.ForwardUDPPerListener) {
 			ds.Forwards[i].Blocked = true
+		}
+		if !ds.Forwards[i].Blocked && ds.Forwards[i].Config.Network != "tcp" {
+			ds.ForwardUDPVersion = networkconfig.ForwardUDPVersion
 		}
 	}
 	if len(ds.Forwards) > 0 {
@@ -299,6 +316,9 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 				ds.NetworkWireGuardVersion = agentproto.NetworkWireGuardVersion
 			}
 		}
+	}
+	if ds.NetworkBindingVersion == 0 {
+		ds.NetworkGeneration = 0
 	}
 	ds.Hash = Hash(ds)
 	return ds, nil
@@ -403,7 +423,7 @@ func (b *Builder) publish(ctx context.Context, serverID int64, force bool) (doma
 		if err != nil {
 			return domain.DesiredState{}, false, err
 		}
-		if generation != ds.NetworkGeneration {
+		if generation != ds.PublicationGeneration {
 			continue
 		}
 		ds.GeneratedAt = b.Now()

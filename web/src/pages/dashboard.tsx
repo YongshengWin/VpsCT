@@ -6,7 +6,7 @@ import { get } from "@/lib/api";
 import { useIsAdmin } from "@/lib/auth";
 import type { Server, Series, Share, Subscription } from "@/lib/types";
 import { cn, fmtBytes } from "@/lib/utils";
-import { nicIO } from "@/components/traffic-ways";
+import { billingLabel, trafficIO, trafficUsage } from "@/lib/traffic-billing";
 import { Badge, Button, Card, Empty, Progress, SectionTitle, Spinner } from "@/components/ui";
 import { TrafficBars } from "@/components/charts";
 import { ShareCard } from "@/pages/shares";
@@ -70,8 +70,7 @@ function ServerRow({ s }: { s: Server }) {
   const online = s.agent_status === "online";
   const memPct = s.metrics?.mem_total ? (s.metrics.mem_used / s.metrics.mem_total) * 100 : 0;
   const meta = [s.region, `${s.node_count} 节点`, online && s.metrics ? `CPU ${s.metrics.cpu_percent.toFixed(0)}% · 内存 ${memPct.toFixed(0)}%` : null].filter(Boolean).join(" · ");
-  const billed = s.usage?.billed ?? 0;
-  const io = nicIO(s.usage?.inbound ?? s.usage?.up, s.usage?.outbound ?? s.usage?.down);
+  const usage = trafficUsage(s.usage, s.quota_billing, { quota: s.quota_bytes });
   return (
     <Link to={`/servers/${s.id}`} className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-accent/50">
       <span
@@ -79,18 +78,18 @@ function ServerRow({ s }: { s: Server }) {
         title={online ? "在线" : s.agent_status === "offline" ? "离线" : "未连接"}
       />
       <div className="min-w-0 flex-1">
-        <p className="break-words text-sm font-semibold">{s.name}</p>
-        <p className="break-words text-xs text-muted-foreground">{meta}</p>
+        <p className="wrap-break-word text-sm font-semibold">{s.name}</p>
+        <p className="wrap-break-word text-xs text-muted-foreground">{meta}</p>
       </div>
       <div className="w-44 shrink-0 text-right">
-        <p className="text-xs font-medium tabular-nums">汇总 {fmtBytes(s.usage?.total ?? io.total)}</p>
-        <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">入 {fmtBytes(io.inbound)} · 出 {fmtBytes(io.outbound)}</p>
+        <p className="text-xs font-medium tabular-nums">本期采集 {fmtBytes(usage.total)}</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">入站 {fmtBytes(usage.inbound)} · 出站 {fmtBytes(usage.outbound)}</p>
         {s.quota_bytes > 0 && (
           <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-            配额 {fmtBytes(billed)} / {fmtBytes(s.quota_bytes, 0)}
+            配额已用（{billingLabel(usage.mode)}）{fmtBytes(usage.billed)} / {fmtBytes(usage.quota)}{usage.estimated ? " · 估算" : ""}
           </p>
         )}
-        {s.quota_bytes > 0 && s.usage && <Progress value={s.usage.percent} className="mt-1.5 h-1.5" />}
+        {s.quota_bytes > 0 && s.usage && <Progress value={usage.percent} className="mt-1.5 h-1.5" />}
       </div>
     </Link>
   );
@@ -124,10 +123,10 @@ function MoreLink({ to }: { to: string }) {
 function AdminDashboard({ d }: { d: AdminDash }) {
   const c = d.counts;
   const t = d.traffic;
-  const monthIO = nicIO(t.month_up, t.month_down);
-  const todayIO = nicIO(t.today_up, t.today_down);
+  const monthIO = trafficIO(t.month_up, t.month_down);
+  const todayIO = trafficIO(t.today_up, t.today_down);
   const points = t.servers_30d?.points ?? [];
-  const hasTraffic = points.some((p) => p.up + p.down > 0);
+  const hasTraffic = t.servers_30d?.has_data;
   const fresh = c.servers === 0 && c.nodes === 0 && c.externals === 0;
 
   return (
@@ -139,7 +138,7 @@ function AdminDashboard({ d }: { d: AdminDash }) {
         <Kpi to="/shares" label="分享活跃" value={c.shares_active} of={c.shares} />
         <Kpi to="/subscriptions" label="订阅链接" value={c.subscriptions} />
         <Kpi to="/externals" label="外部订阅" value={c.externals} />
-        <Kpi label="今日流量（汇总）" value={fmtBytes(todayIO.total)} hint={`入 ${fmtBytes(todayIO.inbound)} · 出 ${fmtBytes(todayIO.outbound)}`} />
+        <Kpi label="今日服务器流量（汇总）" value={fmtBytes(todayIO.total)} hint={`入站 ${fmtBytes(todayIO.inbound)} · 出站 ${fmtBytes(todayIO.outbound)}`} />
       </div>
 
       {/* alerts: only when there is something to act on */}
@@ -152,7 +151,7 @@ function AdminDashboard({ d }: { d: AdminDash }) {
                 <Badge variant={a.level === "error" ? "destructive" : a.level === "warn" ? "warning" : "info"} className="shrink-0">
                   {a.level}
                 </Badge>
-                <span className="min-w-0 flex-1 break-words text-sm">{a.message}</span>
+                <span className="min-w-0 flex-1 wrap-break-word text-sm">{a.message}</span>
                 {to && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/60" />}
               </>
             );
@@ -173,9 +172,9 @@ function AdminDashboard({ d }: { d: AdminDash }) {
       <Card className="p-5">
         <div className="flex flex-wrap items-end justify-between gap-x-8 gap-y-3">
           <div>
-            <p className="text-xs font-medium text-muted-foreground">本月流量（汇总）</p>
+            <p className="text-xs font-medium text-muted-foreground">本月服务器流量（汇总）</p>
             <p className="mt-1.5 text-3xl font-bold tabular-nums leading-none">{fmtBytes(monthIO.total)}</p>
-            <p className="mt-1.5 text-xs text-muted-foreground">入站 + 出站</p>
+            <p className="mt-1.5 text-xs text-muted-foreground">网卡采集 · 入站 + 出站，包含系统流量</p>
           </div>
           <dl className="flex flex-wrap gap-6">
             <Figure label="入站" value={fmtBytes(monthIO.inbound)} />

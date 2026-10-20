@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"time"
 )
 
 // Shared by the protocol and the isolated HTTP helper without introducing a
@@ -155,6 +156,29 @@ type Resolved struct {
 	ListenAddress       string
 	ListenInterface     *Interface
 	Direct              *ResolvedDirect
+	Handshake           *ResolvedHandshake `json:",omitempty"`
 	SOCKS5              *ResolvedSOCKS5
 	ForwardTarget       *ResolvedForwardTarget `json:",omitempty"`
+}
+
+// ResolvedHandshake is local-only. The core dials this public literal through
+// the proxy, while keeping the original TLS hostname. No second core DNS lookup
+// or private transport grant is allowed for Reality camouflage.
+type ResolvedHandshake struct {
+	RefreshAt time.Time `json:",omitempty"`
+	Host      string
+	Address   string
+	Port      int
+}
+
+func (h ResolvedHandshake) Validate() error {
+	return (ResolvedSOCKS5{Address: h.Address, Port: h.Port}).Validate()
+}
+
+func (h ResolvedHandshake) WithoutDNSLifetime() ResolvedHandshake {
+	h.RefreshAt = time.Time{}
+	return h
+}
+func (h ResolvedHandshake) DNSRefreshDue(now time.Time) bool {
+	return !h.RefreshAt.IsZero() && !now.Before(h.RefreshAt)
 }

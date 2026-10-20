@@ -1,9 +1,12 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -15,6 +18,7 @@ import (
 
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
+	"ctlvps/internal/safehttp"
 	"ctlvps/internal/store"
 )
 
@@ -255,7 +259,7 @@ func (a *API) testTelegram(w http.ResponseWriter, r *http.Request) error {
 // ---- audit / access log / bans ----
 
 func (a *API) listAudit(w http.ResponseWriter, r *http.Request) error {
-	list, err := a.Store.ListAudit(r.Context(), httpx.QueryInt(r, "limit", 100), httpx.QueryInt(r, "offset", 0))
+	list, err := a.Store.ListAudit(r.Context(), httpx.QueryInt(r, "limit", 100), httpx.QueryOffset(r, "offset", 0))
 	if err != nil {
 		return err
 	}
@@ -264,7 +268,7 @@ func (a *API) listAudit(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (a *API) accessLog(w http.ResponseWriter, r *http.Request) error {
-	list, err := a.Store.ListAccessLog(r.Context(), queryInt64Ptr(r, "subscription_id"), httpx.QueryInt(r, "limit", 100), httpx.QueryInt(r, "offset", 0))
+	list, err := a.Store.ListAccessLog(r.Context(), queryInt64Ptr(r, "subscription_id"), httpx.QueryInt(r, "limit", 100), httpx.QueryOffset(r, "offset", 0))
 	if err != nil {
 		return err
 	}
@@ -428,6 +432,38 @@ func (a *API) downloadAgent(w http.ResponseWriter, r *http.Request) error {
 	}
 	p := a.findAgentBinary(platform)
 	if p != "" {
+		// Bind a queued update to its exact bytes. Keep the same opened file for
+		// hashing and serving so a release symlink switch cannot substitute a
+		// later version between the check and response.
+		if want := r.URL.Query().Get("sha256"); want != "" {
+			decoded, decodeErr := hex.DecodeString(want)
+			if decodeErr != nil || len(decoded) != sha256.Size {
+				return httpx.BadRequest("agent SHA256 参数无效")
+			}
+			f, err := os.Open(p)
+			if err != nil {
+				return httpx.Conflict("agent 发行文件暂不可用，请稍后重试")
+			}
+			defer f.Close()
+			st, err := f.Stat()
+			if err != nil || !st.Mode().IsRegular() || st.Size() > 128<<20 {
+				return httpx.Conflict("agent 发行文件无效")
+			}
+			h := sha256.New()
+			if _, err := safehttp.CopyBounded(h, f, 128<<20); err != nil {
+				return httpx.Conflict("无法校验 agent 发行文件")
+			}
+			if !strings.EqualFold(fmt.Sprintf("%x", h.Sum(nil)), want) {
+				return httpx.Conflict("agent 发行目标已变化，未提供其他版本；请重新获取最新任务")
+			}
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Content-Disposition", `attachment; filename="ctlvps-agent"`)
+			http.ServeContent(w, r, "ctlvps-agent", st.ModTime(), f)
+			return nil
+		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", `attachment; filename="ctlvps-agent"`)
 		http.ServeFile(w, r, p)

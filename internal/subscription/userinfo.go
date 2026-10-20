@@ -12,9 +12,11 @@ import (
 )
 
 // shareUserinfo maps a share's counters onto subscription-userinfo.
-// Clash/Surge used = upload+download, which is inbound+outbound.
+// Clients add upload+download, so these directions represent quota usage.
+// The share API separately retains the original inbound/outbound counters.
 func shareUserinfo(sh domain.Share) Userinfo {
-	return Userinfo{Upload: sh.UsedUpload, Download: sh.UsedDownload, Total: sh.QuotaBytes, Expire: sh.ExpiresAt}
+	upload, download := domain.QuotaUserinfoDirections(sh.BillingMode, sh.UsedUpload, sh.UsedDownload)
+	return Userinfo{Upload: upload, Download: download, Total: sh.QuotaBytes, Expire: sh.ExpiresAt}
 }
 
 // Userinfo mirrors the subscription-userinfo header.
@@ -39,13 +41,14 @@ func ParseUserinfo(h string) (Userinfo, bool) {
 		}
 		k = strings.ToLower(strings.TrimSpace(k))
 		v = strings.TrimSpace(v)
+		switch k {
+		case "upload", "download", "total", "expire":
+		default:
+			continue
+		}
 		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			if f, ferr := strconv.ParseFloat(v, 64); ferr == nil {
-				n = int64(f)
-			} else {
-				continue
-			}
+		if err != nil || n < 0 {
+			return Userinfo{}, false
 		}
 		found = true
 		switch k {
@@ -61,6 +64,9 @@ func ParseUserinfo(h string) (Userinfo, bool) {
 				u.Expire = &t
 			}
 		}
+	}
+	if !domain.ValidTrafficTotals(u.Upload, u.Download) {
+		return Userinfo{}, false
 	}
 	return u, found
 }
@@ -82,7 +88,10 @@ func (u Userinfo) Remaining() int64 {
 	if u.Total <= 0 {
 		return -1
 	}
-	r := u.Total - u.Upload - u.Download
+	if !domain.ValidTrafficTotals(u.Upload, u.Download) {
+		return 0
+	}
+	r := u.Total - domain.Total(u.Upload, u.Download)
 	if r < 0 {
 		return 0
 	}
@@ -108,8 +117,8 @@ func (u Userinfo) InfoLines(now time.Time) []string {
 	var lines []string
 	if u.Total > 0 {
 		lines = append(lines, fmt.Sprintf("剩余流量：%s / %s", FormatBytes(u.Remaining()), FormatBytes(u.Total)))
-	} else if u.Upload+u.Download > 0 {
-		lines = append(lines, fmt.Sprintf("已用流量：%s", FormatBytes(u.Upload+u.Download)))
+	} else if domain.ValidTrafficTotals(u.Upload, u.Download) && domain.Total(u.Upload, u.Download) > 0 {
+		lines = append(lines, fmt.Sprintf("已用流量：%s", FormatBytes(domain.Total(u.Upload, u.Download))))
 	}
 	if u.Expire != nil {
 		days := int(u.Expire.Sub(now).Hours() / 24)

@@ -30,3 +30,14 @@ for ((attempt = 0; attempt < 30; attempt++)); do
 done
 [[ "$(docker exec "$name" sha256sum /data/setup-token)" == "$before" ]]
 printf 'Docker smoke passed: unprivileged startup, writable volume, persistent setup capability.\n'
+
+CTLVPS_COMPOSE_TEST_IMAGE="$image" sh scripts/test-compose-upgrade.sh
+
+# Run the same host workflow under Alpine BusyBox and its packaged Compose v2.
+driver="ctlvps-compose-driver:local"
+docker build -f scripts/compose-test/Dockerfile -t "$driver" .
+docker run --rm --network none \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/src:ro" \
+  -e "CTLVPS_COMPOSE_TEST_IMAGE=$image" \
+  --entrypoint /bin/sh "$driver" /src/scripts/test-compose-upgrade.sh

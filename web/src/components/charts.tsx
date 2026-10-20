@@ -1,18 +1,17 @@
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis, Legend } from "recharts";
 import type { TrafficPoint } from "@/lib/types";
 import { fmtBytes } from "@/lib/utils";
+import { trafficDayLabel, trafficIO } from "@/lib/traffic-billing";
 
 function tickBytes(v: number) {
   return fmtBytes(v, 0);
 }
 
-function dayLabel(s: string) {
-  const d = new Date(s);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
-}
-
 export function TrafficBars({ points, height = 220 }: { points: TrafficPoint[]; height?: number }) {
-  const data = points.map((p) => ({ day: dayLabel(p.bucket), 入站: p.up, 出站: p.down }));
+  const data = points.map((p) => {
+    const io = trafficIO(p.up, p.down);
+    return { day: trafficDayLabel(p.bucket), 入站: io.inbound, 出站: io.outbound };
+  });
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="30%">

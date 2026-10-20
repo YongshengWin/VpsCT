@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -17,6 +19,12 @@ const (
 	SubjectExternal = "external"
 	SubjectShare    = "share"
 )
+
+func validTrafficAddition(inbound, outbound, addInbound, addOutbound int64) bool {
+	return domain.ValidTrafficTotals(inbound, outbound) && domain.ValidTrafficTotals(addInbound, addOutbound) && addInbound <= math.MaxInt64-inbound && addOutbound <= math.MaxInt64-outbound && domain.ValidTrafficTotals(inbound+addInbound, outbound+addOutbound)
+}
+
+func invalidTrafficTotals() error { return errors.New("流量统计超出有效整数范围") }
 
 // CounterState is the last cumulative reading for one counter.
 type CounterState struct {
@@ -52,6 +60,9 @@ func (s *Store) PutCounterState(ctx context.Context, serverID int64, key string,
 
 // AddSample stores a raw cumulative reading.
 func (s *Store) AddSample(ctx context.Context, sm domain.TrafficSample) error {
+	if !domain.ValidTrafficTotals(sm.RxBytes, sm.TxBytes) {
+		return invalidTrafficTotals()
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO traffic_samples(server_id,node_id,ts,rx_bytes,tx_bytes) VALUES (?,?,?,?,?)`,
 		sm.ServerID, nullInt(sm.NodeID), fmtTime(sm.TS), sm.RxBytes, sm.TxBytes)
 	return err
@@ -87,6 +98,9 @@ func (s *Store) ListSamples(ctx context.Context, serverID int64, nodeID *int64, 
 
 // AddTraffic adds deltas to the hourly and daily buckets of subject/id.
 func (s *Store) AddTraffic(ctx context.Context, subject string, id int64, at time.Time, up, down int64) error {
+	if !domain.ValidTrafficTotals(up, down) {
+		return invalidTrafficTotals()
+	}
 	if up == 0 && down == 0 {
 		return nil
 	}
@@ -94,19 +108,29 @@ func (s *Store) AddTraffic(ctx context.Context, subject string, id int64, at tim
 	hour := at.Truncate(time.Hour).Format(time.RFC3339)
 	day := at.Format("2006-01-02")
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO traffic_hourly(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?)
-			ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up, down=down+excluded.down`, hour, subject, id, up, down); err != nil {
-			return err
+		for _, bucket := range []struct{ table, key string }{{"traffic_hourly", hour}, {"traffic_daily", day}} {
+			var previousUp, previousDown int64
+			err := tx.QueryRowContext(ctx, "SELECT up,down FROM "+bucket.table+" WHERE bucket=? AND subject=? AND subject_id=?", bucket.key, subject, id).Scan(&previousUp, &previousDown)
+			if err != nil && !isNoRows(err) {
+				return err
+			}
+			if !validTrafficAddition(previousUp, previousDown, up, down) {
+				return invalidTrafficTotals()
+			}
+			if _, err := tx.ExecContext(ctx, "INSERT INTO "+bucket.table+"(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?) ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up,down=down+excluded.down", bucket.key, subject, id, up, down); err != nil {
+				return err
+			}
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO traffic_daily(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?)
-			ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=up+excluded.up, down=down+excluded.down`, day, subject, id, up, down)
-		return err
+		return nil
 	})
 }
 
 // SetDailyTraffic overwrites the daily bucket (used for external subscriptions
 // whose usage is reported as absolute totals by the upstream).
 func (s *Store) SetDailyTraffic(ctx context.Context, subject string, id int64, day time.Time, up, down int64) error {
+	if !domain.ValidTrafficTotals(up, down) {
+		return invalidTrafficTotals()
+	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO traffic_daily(bucket,subject,subject_id,up,down) VALUES (?,?,?,?,?)
 		ON CONFLICT(bucket,subject,subject_id) DO UPDATE SET up=excluded.up, down=excluded.down`, day.UTC().Format("2006-01-02"), subject, id, up, down)
 	return err
@@ -126,6 +150,9 @@ func (s *Store) DailyTraffic(ctx context.Context, subject string, id int64, from
 		var day string
 		if err := rows.Scan(&day, &b.Up, &b.Down); err != nil {
 			return nil, err
+		}
+		if !domain.ValidTrafficTotals(b.Up, b.Down) {
+			return nil, invalidTrafficTotals()
 		}
 		b.Bucket, _ = time.Parse("2006-01-02", day)
 		out = append(out, b)
@@ -148,6 +175,9 @@ func (s *Store) HourlyTraffic(ctx context.Context, subject string, id int64, fro
 		if err := rows.Scan(&h, &b.Up, &b.Down); err != nil {
 			return nil, err
 		}
+		if !domain.ValidTrafficTotals(b.Up, b.Down) {
+			return nil, invalidTrafficTotals()
+		}
 		b.Bucket, _ = time.Parse(time.RFC3339, h)
 		out = append(out, b)
 	}
@@ -158,6 +188,9 @@ func (s *Store) HourlyTraffic(ctx context.Context, subject string, id int64, fro
 func (s *Store) SumTraffic(ctx context.Context, subject string, id int64, from, to time.Time) (up, down int64, err error) {
 	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(up),0), COALESCE(SUM(down),0) FROM traffic_daily WHERE subject=? AND subject_id=? AND bucket>=? AND bucket<=?`,
 		subject, id, from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02")).Scan(&up, &down)
+	if err == nil && !domain.ValidTrafficTotals(up, down) {
+		err = invalidTrafficTotals()
+	}
 	return
 }
 
@@ -175,6 +208,9 @@ func (s *Store) SumTrafficIDs(ctx context.Context, subject string, ids []int64, 
 	}
 	args = append(args, from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02"))
 	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(SUM(up),0), COALESCE(SUM(down),0) FROM traffic_daily WHERE subject=? AND subject_id IN (`+strings.Join(ph, ",")+`) AND bucket>=? AND bucket<=?`, args...).Scan(&up, &down)
+	if err == nil && !domain.ValidTrafficTotals(up, down) {
+		err = invalidTrafficTotals()
+	}
 	return
 }
 
@@ -192,6 +228,9 @@ func (s *Store) DailyTotals(ctx context.Context, subject string, from, to time.T
 		var day string
 		if err := rows.Scan(&day, &b.Up, &b.Down); err != nil {
 			return nil, err
+		}
+		if !domain.ValidTrafficTotals(b.Up, b.Down) {
+			return nil, invalidTrafficTotals()
 		}
 		b.Bucket, _ = time.Parse("2006-01-02", day)
 		out = append(out, b)
@@ -234,7 +273,11 @@ func (s *Store) NodeTrafficSummaries(ctx context.Context, days int) (map[int64]T
 			rows.Close()
 			return nil, err
 		}
-		out[id] = TrafficSummary{Inbound: rx, Outbound: tx, Total: rx + tx, Days: days, HasData: true}
+		if !domain.ValidTrafficTotals(rx, tx) {
+			rows.Close()
+			return nil, invalidTrafficTotals()
+		}
+		out[id] = TrafficSummary{Inbound: rx, Outbound: tx, Total: domain.Total(rx, tx), Days: days, HasData: true}
 	}
 	err = rows.Err()
 	rows.Close()

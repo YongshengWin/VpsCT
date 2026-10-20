@@ -19,7 +19,7 @@ VpsCT 的许可证适用于本项目原创代码，不替代第三方组件各�
 
 | 生态 | 组件 | 版本 | 许可与原始声明 |
 |---|---|---|---|
-| go-runtime | Go standard library and runtime | go1.26.8 | BSD-3-Clause; [LICENSE](third_party/go-runtime/go1.26.8/LICENSE), [PATENTS](third_party/go-runtime/go1.26.8/PATENTS) |
+| go-runtime | Go standard library and runtime | go1.26.9 | BSD-3-Clause; [LICENSE](third_party/go-runtime/go1.26.9/LICENSE), [PATENTS](third_party/go-runtime/go1.26.9/PATENTS) |
 | go | cloud.google.com/go/compute/metadata | v0.7.0 | See license text; [LICENSE](third_party/go/cloud.google.com_go_compute_metadata_v0.7.0/LICENSE) |
 | go | github.com/Microsoft/go-winio | v0.6.2 | See license text; [LICENSE](third_party/go/github.com_Microsoft_go-winio_v0.6.2/LICENSE) |
 | go | github.com/cenkalti/backoff/v5 | v5.0.3 | See license text; [LICENSE](third_party/go/github.com_cenkalti_backoff_v5_v5.0.3/LICENSE) |
@@ -95,7 +95,7 @@ VpsCT 的许可证适用于本项目原创代码，不替代第三方组件各�
 | go | go.opentelemetry.io/otel/trace | v1.36.0 | See license text; [LICENSE](third_party/go/go.opentelemetry.io_otel_trace_v1.36.0/LICENSE) |
 | go | golang.org/x/crypto | v0.57.0 | See license text; [LICENSE](third_party/go/golang.org_x_crypto_v0.57.0/LICENSE) |
 | go | golang.org/x/mod | v0.41.0 | See license text; [LICENSE](third_party/go/golang.org_x_mod_v0.41.0/LICENSE) |
-| go | golang.org/x/net | v0.58.0 | See license text; [LICENSE](third_party/go/golang.org_x_net_v0.58.0/LICENSE) |
+| go | golang.org/x/net | v0.60.0 | See license text; [LICENSE](third_party/go/golang.org_x_net_v0.60.0/LICENSE) |
 | go | golang.org/x/oauth2 | v0.35.0 | See license text; [LICENSE](third_party/go/golang.org_x_oauth2_v0.35.0/LICENSE) |
 | go | golang.org/x/sync | v0.23.0 | See license text; [LICENSE](third_party/go/golang.org_x_sync_v0.23.0/LICENSE) |
 | go | golang.org/x/sys | v0.48.0 | See license text; [LICENSE](third_party/go/golang.org_x_sys_v0.48.0/LICENSE) |
@@ -202,7 +202,7 @@ VpsCT 的许可证适用于本项目原创代码，不替代第三方组件各�
 | npm | set-cookie-parser | 2.7.2 | MIT; [LICENSE](third_party/npm/set-cookie-parser_2.7.2/LICENSE) |
 | npm | string-width | 4.2.3 | MIT; [license](third_party/npm/string-width_4.2.3/license) |
 | npm | strip-ansi | 6.0.1 | MIT; [license](third_party/npm/strip-ansi_6.0.1/license) |
-| npm | tailwind-merge | 2.6.1 | MIT; [LICENSE.md](third_party/npm/tailwind-merge_2.6.1/LICENSE.md) |
+| npm | tailwind-merge | 3.7.0 | MIT; [LICENSE.md](third_party/npm/tailwind-merge_3.7.0/LICENSE.md) |
 | npm | tiny-invariant | 1.3.3 | MIT; [LICENSE](third_party/npm/tiny-invariant_1.3.3/LICENSE) |
 | npm | tslib | 2.8.1 | 0BSD; [LICENSE.txt](third_party/npm/tslib_2.8.1/LICENSE.txt) |
 | npm | victory-vendor | 36.9.2 | MIT AND ISC; [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-array/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-color/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-ease/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-format/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-interpolate/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-path/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-scale/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-shape/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-time/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-time-format/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-timer/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/d3-voronoi/LICENSE), [LICENSE](third_party/npm/victory-vendor_36.9.2/lib-vendor/internmap/LICENSE) |

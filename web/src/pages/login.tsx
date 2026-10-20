@@ -75,7 +75,7 @@ export function LoginPage() {
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10">
       {/* soft pastel backdrop */}
       <div aria-hidden className="pointer-events-none absolute -left-32 -top-32 h-96 w-96 rounded-full bg-tint-peach blur-3xl" />
-      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-24 h-[28rem] w-[28rem] rounded-full bg-tint-lavender blur-3xl" />
+      <div aria-hidden className="pointer-events-none absolute -bottom-40 -right-24 h-112 w-md rounded-full bg-tint-lavender blur-3xl" />
       <div aria-hidden className="pointer-events-none absolute bottom-10 left-1/3 h-64 w-64 rounded-full bg-tint-sky blur-3xl" />
 
       <button onClick={toggle} className="absolute right-4 top-4 rounded-full p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground" aria-label="切换主题">

@@ -11,6 +11,14 @@ import (
 
 func networkOperationError(err error) error {
 	switch {
+	case errors.Is(err, store.ErrNATNotReady), errors.Is(err, store.ErrNATResources), errors.Is(err, store.ErrNATPublicHost):
+		return natAPIError(err)
+	case errors.Is(err, store.ErrAccessRouteInUse):
+		return httpx.E(409, "route_in_use", err.Error())
+	case errors.Is(err, store.ErrRouteOwned):
+		return httpx.E(409, "route_owned", err.Error())
+	case errors.Is(err, store.ErrAccessRoute):
+		return httpx.BadRequest(err.Error())
 	case errors.Is(err, store.ErrManagedTransit):
 		return httpx.E(409, "managed_transit", err.Error())
 	case errors.Is(err, store.ErrTransitRequest):
@@ -66,7 +74,7 @@ func (a *API) serverNetworkOperations(w http.ResponseWriter, r *http.Request) er
 	if _, err = a.Store.GetServer(r.Context(), id); err != nil {
 		return networkOperationError(err)
 	}
-	operations, err := a.Store.NetworkOperations(r.Context(), id, httpx.QueryInt(r, "limit", 30), httpx.QueryInt(r, "offset", 0))
+	operations, err := a.Store.NetworkOperations(r.Context(), id, httpx.QueryInt(r, "limit", 30), httpx.QueryOffset(r, "offset", 0))
 	if err != nil {
 		return err
 	}

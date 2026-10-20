@@ -81,6 +81,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		req.Header.Set(agentproto.NetworkSSHHeader, fmt.Sprint(agentproto.NetworkSSHVersion))
 		req.Header.Set(agentproto.NetworkEgressHeader, fmt.Sprint(agentproto.NetworkEgressVersion))
 		req.Header.Set(agentproto.NetworkForwardHeader, fmt.Sprint(agentproto.NetworkForwardVersion))
+		req.Header.Set(networkconfig.ForwardUDPHeader, fmt.Sprint(networkconfig.ForwardUDPVersion))
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")

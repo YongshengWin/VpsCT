@@ -32,6 +32,11 @@ func ResourceSetName(r agentproto.ResourceIdentity) string {
 // The watchdog must ignore dynamic elements only in these exact lease sets.
 func ParseLeaseSetName(name string) (agentproto.ResourceIdentity, bool) {
 	var r agentproto.ResourceIdentity
+	if strings.HasPrefix(name, "f") && strings.HasSuffix(name, "_udp_ready") {
+		base := strings.TrimSuffix(name, "_udp_ready") + "_ready"
+		r, ok := ParseLeaseSetName(base)
+		return r, ok && UDPSetName(r.ID) == name
+	}
 	if len(name) < 8 || !strings.HasSuffix(name, "_ready") {
 		return r, false
 	}
@@ -143,3 +148,5 @@ func (p Plan) Renew(ready map[int64]bool) (string, error) {
 func (p Plan) Revoke(affected map[int64]bool) (string, error) {
 	return p.RevokeResources(nodeReadiness(affected))
 }
+
+func UDPSetName(id int64) string { return fmt.Sprintf("f%d_udp_ready", id) }

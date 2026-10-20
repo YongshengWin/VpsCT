@@ -6,6 +6,7 @@ import (
 	"ctlvps/internal/networkconfig"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -83,6 +84,7 @@ const (
 
 // Server is a VPS managed (or at least observed) by ctlvps.
 type Server struct {
+	IsNAT         bool      `json:"is_nat"`
 	ID            int64     `json:"id"`
 	Name          string    `json:"name"`
 	Region        string    `json:"region"` // two-letter country/region code
@@ -91,7 +93,7 @@ type Server struct {
 	Notes         string    `json:"notes"`
 	QuotaBytes    int64     `json:"quota_bytes"`     // 0 = unlimited
 	QuotaResetDay int       `json:"quota_reset_day"` // 1..28, or 31 = last day (29/30/31 normalize to 31)
-	QuotaBilling  string    `json:"quota_billing"`   // kept for compat; quota always uses inbound+outbound
+	QuotaBilling  string    `json:"quota_billing"`   // dual, up (inbound), down (outbound), or max
 	CoreMode      CoreMode  `json:"core_mode"`
 	IPv4Only      bool      `json:"ipv4_only"`
 	CertMode      string    `json:"cert_mode"` // self_signed|acme|external
@@ -161,6 +163,7 @@ type Node struct {
 	NetworkRevision  int64               `json:"network_revision,omitempty"`
 	ID               int64               `json:"id"`
 	Name             string              `json:"name"`
+	OriginalName     string              `json:"original_name,omitempty"`
 	Protocol         string              `json:"protocol"`
 	Server           string              `json:"server"`
 	Port             int                 `json:"port"`
@@ -260,6 +263,7 @@ type ChainSpec struct {
 
 // NodeSelection is the set of sources a generated subscription draws from.
 type NodeSelection struct {
+	RouteIDs       []string `json:"route_ids,omitempty"`
 	IncludeAll     bool     `json:"include_all,omitempty"` // every enabled node except share-dedicated ones
 	NodeIDs        []int64  `json:"node_ids"`
 	ExternalSubIDs []int64  `json:"external_sub_ids"`
@@ -337,33 +341,35 @@ const (
 
 // ShareTarget selects which protocols a share gets on one server.
 type ShareTarget struct {
-	Network   *networkconfig.Node `json:"network,omitempty"`
-	ServerID  int64               `json:"server_id"`
-	Protocols []string            `json:"protocols"`
+	Network    *networkconfig.Node `json:"network,omitempty"`
+	ServerID   int64               `json:"server_id"`
+	Protocols  []string            `json:"protocols"`
+	QuotaBytes map[string]int64    `json:"quota_bytes,omitempty"` // per-protocol dedicated entry limits; 0 = unlimited
 }
 
 // Share is a customer allotment: dedicated inbounds on chosen servers plus
 // a metered quota and a subscription.
 type Share struct {
-	ID             int64         `json:"id"`
-	Name           string        `json:"name"`
-	UserID         *int64        `json:"user_id,omitempty"`
-	Targets        []ShareTarget `json:"targets"`
-	ExtraNodeIDs   []int64       `json:"extra_node_ids"` // imported nodes mixed in (soft limit only)
-	QuotaBytes     int64         `json:"quota_bytes"`    // 0 = unlimited
-	BillingMode    string        `json:"billing_mode"`   // kept for compat; quota always uses inbound+outbound
-	ResetDay       int           `json:"reset_day"`      // 1..28, or 31 = last day; 0 = never
-	ExpiresAt      *time.Time    `json:"expires_at,omitempty"`
-	Status         ShareStatus   `json:"status"`
-	TemplateID     *int64        `json:"template_id,omitempty"`
-	ConnlogEnabled bool          `json:"connlog_enabled"`
-	Notes          string        `json:"notes"`
-	SubscriptionID *int64        `json:"subscription_id,omitempty"`
-	PeriodStart    time.Time     `json:"period_start"`
-	UsedUpload     int64         `json:"used_upload"`
-	UsedDownload   int64         `json:"used_download"`
-	CreatedAt      time.Time     `json:"created_at"`
-	UpdatedAt      time.Time     `json:"updated_at"`
+	ID             int64              `json:"id"`
+	Name           string             `json:"name"`
+	UserID         *int64             `json:"user_id,omitempty"`
+	Targets        []ShareTarget      `json:"targets"`
+	NodeUsage      map[int64][2]int64 `json:"node_usage"`     // raw directions since per-node accounting began or last reset
+	ExtraNodeIDs   []int64            `json:"extra_node_ids"` // reused nodes without share-specific metering
+	QuotaBytes     int64              `json:"quota_bytes"`    // 0 = unlimited
+	BillingMode    string             `json:"billing_mode"`   // dual/up/down/max; independent of server quotas
+	ResetDay       int                `json:"reset_day"`      // 1..28, or 31 = last day; 0 = never
+	ExpiresAt      *time.Time         `json:"expires_at,omitempty"`
+	Status         ShareStatus        `json:"status"`
+	TemplateID     *int64             `json:"template_id,omitempty"`
+	ConnlogEnabled bool               `json:"connlog_enabled"`
+	Notes          string             `json:"notes"`
+	SubscriptionID *int64             `json:"subscription_id,omitempty"`
+	PeriodStart    time.Time          `json:"period_start"`
+	UsedUpload     int64              `json:"used_upload"`
+	UsedDownload   int64              `json:"used_download"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
 }
 
 const (
@@ -385,16 +391,65 @@ func NormalizeResetDay(n int) int {
 	return n
 }
 
-// NormalizeBilling accepts legacy mode names and always stores dual.
-// Quota is inbound + outbound; the selector is gone.
-func NormalizeBilling(mode string) (string, bool) {
+// NormalizeQuotaBilling validates quota accounting for servers and shares.
+// Legacy "sum" and an omitted mode keep the historical two-way default.
+func NormalizeQuotaBilling(mode string) (string, bool) {
 	switch mode {
-	case "", BillingDual, BillingSum, BillingUp, BillingDown, BillingMax:
+	case "", BillingSum, BillingDual:
 		return BillingDual, true
+	case BillingUp, BillingDown, BillingMax:
+		return mode, true
 	default:
 		return "", false
 	}
 }
+
+// NormalizeBilling is the compatibility name for share quota accounting.
+func NormalizeBilling(mode string) (string, bool) { return NormalizeQuotaBilling(mode) }
+
+// NormalizeServerQuotaBilling is the compatibility name for server quotas.
+func NormalizeServerQuotaBilling(mode string) (string, bool) { return NormalizeQuotaBilling(mode) }
+
+// QuotaBilled applies a quota mode to the full period's raw direction totals.
+// Aggregate all resources and deltas before calling it: max is not additive.
+// Unknown historical modes fall back to two-way accounting.
+func QuotaBilled(mode string, up, down int64) int64 {
+	switch mode {
+	case BillingUp:
+		return Inbound(up, down)
+	case BillingDown:
+		return Outbound(up, down)
+	case BillingMax:
+		if up > down {
+			return up
+		}
+		return down
+	default:
+		return Total(up, down)
+	}
+}
+
+// QuotaUserinfoDirections projects billed usage onto the standard subscription
+// header, whose clients always add upload and download. Raw counters stay in the
+// API; max contributes only its larger full-period direction (inbound on ties).
+func QuotaUserinfoDirections(mode string, inbound, outbound int64) (upload, download int64) {
+	switch mode {
+	case BillingUp:
+		return inbound, 0
+	case BillingDown:
+		return 0, outbound
+	case BillingMax:
+		if inbound >= outbound {
+			return inbound, 0
+		}
+		return 0, outbound
+	default:
+		return inbound, outbound
+	}
+}
+
+// ServerQuotaBilled applies a server quota to its period's NIC totals.
+func ServerQuotaBilled(mode string, up, down int64) int64 { return QuotaBilled(mode, up, down) }
 
 // Inbound is NIC rx (into the VPS). Stored as the "up" column.
 func Inbound(up, _ int64) int64 { return up }
@@ -403,7 +458,14 @@ func Inbound(up, _ int64) int64 { return up }
 func Outbound(_, down int64) int64 { return down }
 
 // Total is inbound + outbound.
+// Metering and external input must first satisfy ValidTrafficTotals.
 func Total(up, down int64) int64 { return up + down }
+
+// ValidTrafficTotals prevents invalid or overflowing raw usage from entering
+// accounting. Reject it before committing counters so a valid retry can settle.
+func ValidTrafficTotals(inbound, outbound int64) bool {
+	return inbound >= 0 && outbound >= 0 && inbound <= math.MaxInt64-outbound
+}
 
 // OneWay is outbound (legacy name).
 func OneWay(up, down int64) int64 { return Outbound(up, down) }
@@ -411,8 +473,8 @@ func OneWay(up, down int64) int64 { return Outbound(up, down) }
 // TwoWay is inbound + outbound (legacy name).
 func TwoWay(up, down int64) int64 { return Total(up, down) }
 
-// Billed is always inbound + outbound. mode is ignored.
-func Billed(_ string, up, down int64) int64 { return Total(up, down) }
+// Billed is the compatibility name for quota accounting.
+func Billed(mode string, up, down int64) int64 { return QuotaBilled(mode, up, down) }
 
 // TrafficSample is a raw cumulative counter reading (retained ~48h).
 type TrafficSample struct {
@@ -577,4 +639,43 @@ func ProtocolAllowed(p string, mode CoreMode) bool {
 		}
 	}
 	return false
+}
+
+// NodeQuota returns the dedicated entry limit, independent of the share total.
+func (s Share) NodeQuota(n Node) int64 {
+	if n.ServerID == nil {
+		return 0
+	}
+	for _, t := range s.Targets {
+		if t.ServerID == *n.ServerID {
+			return t.QuotaBytes[n.Protocol]
+		}
+	}
+	return 0
+}
+
+func (s Share) NodeExhausted(n Node) bool {
+	q := s.NodeQuota(n)
+	u := s.NodeUsage[n.ID]
+	return q > 0 && QuotaBilled(s.BillingMode, u[0], u[1]) >= q
+}
+
+func ValidateShareNodeQuotas(targets []ShareTarget) error {
+	for _, t := range targets {
+		for protocol, quota := range t.QuotaBytes {
+			if quota < 0 {
+				return fmt.Errorf("节点配额不能为负数")
+			}
+			found := false
+			for _, p := range t.Protocols {
+				if p == protocol {
+					found = true
+				}
+			}
+			if !found {
+				return fmt.Errorf("节点配额必须对应已选协议")
+			}
+		}
+	}
+	return nil
 }

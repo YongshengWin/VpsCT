@@ -1,6 +1,7 @@
 import { SSHClientFields } from "@/components/ssh-client-fields";
 import { TunnelClientFields } from "@/components/tunnel-client-fields";
 import * as React from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Plus, Upload, Trash2, Pencil, QrCode, RotateCcw, Search, GripVertical, Link2, Unlink, ArrowRightLeft } from "lucide-react";
@@ -14,6 +15,7 @@ import { Badge, Button, Confirm, Dialog, Empty, Field, Input, PageHeader, Select
 import { useToast } from "@/components/toast";
 import { TrafficIO } from "@/components/traffic-ways";
 import { TrafficBars } from "@/components/charts";
+import { trafficIO } from "@/lib/traffic-billing";
 import { NodeNetwork } from "@/components/node-network";
 import { useIsAdmin } from "@/lib/auth";
 
@@ -30,6 +32,9 @@ export function SourceBadge({ n }: { n: Node }) {
 }
 
 export function NodeRow({ n, onOpen, selectable, selected, onSelect, dragHandle, rowRef, style, configurationHint }: { configurationHint?: string; n: Node; onOpen: () => void; selectable?: boolean; selected?: boolean; onSelect?: (v: boolean) => void; dragHandle?: React.ReactNode; rowRef?: (el: HTMLTableRowElement | null) => void; style?: React.CSSProperties }) {
+  const io = trafficIO(n.traffic?.inbound, n.traffic?.outbound);
+  const isAdmin = useIsAdmin();
+  const [renaming, setRenaming] = React.useState(false);
   return (
     <Tr ref={rowRef} style={style} className={cn(n.revoked && "opacity-50", "cursor-pointer")} onClick={onOpen}>
       {selectable && (
@@ -39,16 +44,20 @@ export function NodeRow({ n, onOpen, selectable, selected, onSelect, dragHandle,
       )}
       {dragHandle !== undefined && <Td className="w-8" onClick={(e) => e.stopPropagation()}>{dragHandle}</Td>}
       <Td>
-        <p className="max-w-[20rem] break-words font-medium">{n.name}</p>
+        <p className="max-w-[20rem] wrap-break-word font-medium">{n.name}</p>
         {n.source === "chain" && n.chain_front_name && <p className="mt-0.5 text-[11px] text-muted-foreground">经 {n.chain_front_name} 前置</p>}
         {n.tags?.length ? <p className="mt-0.5 flex flex-wrap gap-1">{n.tags.map((t) => <span key={t} className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{t}</span>)}</p> : null}
       </Td>
       <Td><ProtocolBadge p={n.protocol} /></Td>
       <Td className="mono text-xs text-muted-foreground">{n.server || "—"}:{n.port}</Td>
       <Td><SourceBadge n={n} /></Td>
-      <Td>{n.source !== "deployed" ? <span className="text-xs text-muted-foreground">不可采集</span> : !n.traffic ? <span className="text-xs text-muted-foreground">暂不可用</span> : !n.traffic.has_data ? <span className="text-xs text-muted-foreground">暂无采集记录</span> : <div><p className="tabular-nums font-medium">{fmtBytes(n.traffic.total)}</p><p className="text-xs text-muted-foreground">入 {fmtBytes(n.traffic.inbound)} · 出 {fmtBytes(n.traffic.outbound)}</p></div>}</Td>
+      <Td>{n.source !== "deployed" ? <span className="text-xs text-muted-foreground">不可采集</span> : !n.traffic ? <span className="text-xs text-muted-foreground">暂不可用</span> : !n.traffic.has_data ? <span className="text-xs text-muted-foreground">暂无采集记录</span> : <div><p className="tabular-nums font-medium">{fmtBytes(io.total)}</p><p className="text-xs text-muted-foreground">入站 {fmtBytes(io.inbound)} · 出站 {fmtBytes(io.outbound)}</p></div>}</Td>
       <Td>{configurationHint && <p className="mb-1 max-w-48 text-xs text-amber-600">{configurationHint} · 见服务器提示</p>}{n.revoked ? <Badge variant="destructive">已撤销</Badge> : n.enabled ? <Badge variant="success">启用</Badge> : <Badge variant="secondary">禁用</Badge>}</Td>
       <Td className="text-right" onClick={(e) => e.stopPropagation()}>
+        {isAdmin && n.source === "imported" && <>
+          <Button size="icon" variant="ghost" title="重命名" aria-label={`重命名 ${n.name}`} onClick={() => setRenaming(true)}><Pencil className="h-4 w-4" /></Button>
+          {renaming && <NodeRenameDialog node={n} onClose={() => setRenaming(false)} />}
+        </>}
         {n.uri && (
           <Button size="icon" variant="ghost" title="复制链接" onClick={async () => { await copyText(n.uri!); }}>
             <Copy className="h-4 w-4" />
@@ -57,6 +66,28 @@ export function NodeRow({ n, onOpen, selectable, selected, onSelect, dragHandle,
       </Td>
     </Tr>
   );
+}
+
+function NodeRenameDialog({ node, onClose }: { node: Node; onClose: () => void }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [name, setName] = React.useState(node.name);
+  const rename = useMutation({
+    mutationFn: () => put<Node>(`/api/v1/nodes/${node.id}`, { name: name.trim() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["nodes"] });
+      qc.invalidateQueries({ queryKey: ["subscriptions"] });
+      toast.success("已重命名");
+      onClose();
+    },
+    onError: (e) => toast.fromError(e),
+  });
+  return createPortal(<div className="text-left"><Dialog open onClose={() => { if (!rename.isPending) onClose(); }} title="重命名节点" description="自定义名称会用于订阅输出，刷新上游订阅后仍会保留。"
+    footer={<><Button variant="outline" disabled={rename.isPending} onClick={onClose}>取消</Button><Button loading={rename.isPending} disabled={!name.trim() || name.trim() === node.name} onClick={() => rename.mutate()}>保存</Button></>}>
+    <form onSubmit={(e) => { e.preventDefault(); if (name.trim() && name.trim() !== node.name && !rename.isPending) rename.mutate(); }}>
+      <Field label="节点名称" hint={`上游名称：${node.original_name || node.name}`}><Input autoFocus aria-label="节点名称" value={name} onChange={(e) => setName(e.target.value)} /></Field>
+    </form>
+  </Dialog></div>, document.body);
 }
 
 function SortableRow({ n, onOpen, selected, onSelect }: { n: Node; onOpen: () => void; selected: boolean; onSelect: (v: boolean) => void }) {
@@ -381,7 +412,7 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
             <div className="max-h-64 overflow-auto rounded-xl border">
               {preview.proxies.map((p, i) => (
                 <div key={i} className="flex items-center justify-between border-b px-3 py-1.5 text-sm last:border-0">
-                  <span className="break-words">{String(p.name)}</span>
+                  <span className="wrap-break-word">{String(p.name)}</span>
                   <span className="ml-2 shrink-0 text-xs text-muted-foreground">{String(p.type)} · {String(p.server)}:{String(p.port)}</span>
                 </div>
               ))}

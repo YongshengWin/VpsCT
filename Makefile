@@ -55,6 +55,9 @@ vet:
 
 ## check: fast checks; install web dependencies first with npm ci
 check: vet test
+	go run ./scripts/generate-agent-contracts.go -check
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills/vpsct/scripts -p 'test_*.py'
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s skills -p 'test_install*.py'
 	cd web && npm run typecheck
 
 docker:

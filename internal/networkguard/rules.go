@@ -41,6 +41,13 @@ func (p Plan) Rules() (string, error) {
 		gate := "meta nfproto != @" + set + " drop"
 		rule("input", port, gate)
 		if b.Forward != nil {
+			if b.Forward.MaxUDPSessions > 0 {
+				udpSet := UDPSetName(b.ForwardID)
+				fmt.Fprintf(&s, "add set inet %s %s { type nf_proto; flags timeout; timeout 6s; gc-interval 1s; size 2; }\n", Table, udpSet)
+				rule("input", fmt.Sprintf("ct direction original udp dport %d", b.ListenPort), "meta nfproto != @"+udpSet+" drop")
+				mark, _ := b.Resource().Mark()
+				rule("output", fmt.Sprintf("ct direction reply ct mark 0x%08x meta l4proto udp", mark), "meta nfproto != @"+udpSet+" drop")
+			}
 			// ACL runs for every packet, including existing flows. No accept
 			// here may skip the interface, budget or general proxy hooks.
 			allowed := "tcp"

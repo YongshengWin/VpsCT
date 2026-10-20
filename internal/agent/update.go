@@ -107,6 +107,10 @@ func applySelfUpdateInline(ctx context.Context, baseURL string, spec agentproto.
 	if spec.SHA256 == "" || spec.URL == "" {
 		return fmt.Errorf("incomplete update spec")
 	}
+	version := maintenance.CanonicalReleaseVersion(spec.Version)
+	if version == "" {
+		return fmt.Errorf("update release version missing or invalid; update the controller first")
+	}
 	target := executablePath()
 	if target == "" {
 		return fmt.Errorf("cannot resolve executable path")
@@ -136,7 +140,7 @@ func applySelfUpdateInline(ctx context.Context, baseURL string, spec agentproto.
 	if !strings.EqualFold(got, spec.SHA256) {
 		return fmt.Errorf("sha256 mismatch")
 	}
-	if err = verifyRelease(ctx, "agent", "", data); err != nil {
+	if err = verifyRelease(ctx, "agent", version, data); err != nil {
 		return err
 	}
 	if err = data.Chmod(0700); err != nil {

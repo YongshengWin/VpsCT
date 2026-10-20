@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 binary=${SINGBOX_BIN:?Set SINGBOX_BIN to a pre-verified official Linux sing-box binary}
 client=${NETWORK_TEST_CLIENT:-sing-box}
 network_case=${NETWORK_SYSTEMD_CASE:-direct}
-case "$network_case" in native-subscriptions|subscriptions|direct|socks|socks-private|forward|forward-udp|forward-socks|forward-ssh|forward-wireguard|ssh|wireguard|mita|wgaccess|transit|transit-ss2022|protocols|listen|reality|forward-dns|forward-private) ;; *) echo 'unsupported NETWORK_SYSTEMD_CASE' >&2; exit 1;; esac
+case "$network_case" in native-subscriptions|subscriptions|direct|socks|socks-private|forward|forward-stress|forward-udp|forward-both|forward-udp6|forward-socks-udp|forward-wireguard-udp|forward-socks|forward-ssh|forward-wireguard|ssh|wireguard|mita|wgaccess|transit|transit-ss2022|protocols|listen|reality|forward-dns|forward-private) ;; *) echo 'unsupported NETWORK_SYSTEMD_CASE' >&2; exit 1;; esac
 case "$client" in
  sing-box) ;;
  shadowsocks-rust) : "${SSLOCAL_BIN:?Set SSLOCAL_BIN to pre-verified official shadowsocks-rust 1.25.0 sslocal}" ;;
@@ -50,7 +50,7 @@ docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" 
  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
  -e CTLVPS_BIND_FIXTURE=1 -e CTLVPS_SYSTEMD_NETWORK_FIXTURE=1 -e CTLVPS_NETWORK_CONTRACT_TEST=1 \
  -e "NETWORK_TEST_CLIENT=$client" \
- -e "NETWORK_SYSTEMD_CASE=$network_case" \
+ -e "NETWORK_SYSTEMD_CASE=$network_case" -e "UDP_STRESS_SECONDS=${UDP_STRESS_SECONDS:-600}" \
  -e "MITA_TEST_TRANSPORT=${MITA_TEST_TRANSPORT:-}" \
  -e "MIERU_TEST_CLIENT=${MIERU_TEST_CLIENT:-}" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
@@ -66,7 +66,7 @@ if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
  docker exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
 fi
 if [[ "$network_case" != native-subscriptions && "$network_case" != subscriptions && "$network_case" != forward-private && "$network_case" != forward-dns && "$network_case" != forward-socks && "$network_case" != forward-ssh && "$network_case" != forward-wireguard && "$network_case" != forward-udp && "$network_case" != reality && "$network_case" != listen && "$network_case" != protocols && "$network_case" != transit && "$network_case" != transit-ss2022 && "$network_case" != forward && "$network_case" != ssh && "$network_case" != wireguard && "$network_case" != mita && "$network_case" != wgaccess ]]; then docker exec "$container" /fixtures/transport.test -test.run '^TestNetworkContractContainer$' -test.v; fi
-if ! docker exec "$container" timeout 600s /fixtures/integration; then
+if ! docker exec "$container" timeout 1400s /fixtures/integration; then
  if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then cat "$fixture/landing.log"; docker exec "$landing_container" journalctl --no-pager -n 60 -u ctlvps-agent.service -u ctlvps-singbox.service; fi
  docker exec "$container" journalctl --no-pager -n 100 -u ctlvps-agent.service -u ctlvps-singbox.service -u ctlvps-proxy-guard.service -u 'ctlvps-mita@*.service'
  exit 1

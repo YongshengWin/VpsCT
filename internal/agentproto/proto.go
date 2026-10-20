@@ -4,6 +4,7 @@ package agentproto
 
 import (
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/natconfig"
 	"ctlvps/internal/networkconfig"
 	"time"
 )
@@ -102,72 +103,90 @@ type CertStatus struct {
 }
 
 // Diagnostics is the health section of a heartbeat.
+type ForwardUDPStatus struct {
+	State       string        `json:"state"`
+	Code        string        `json:"code,omitempty"`
+	UpdatedAt   time.Time     `json:"updated_at"`
+	LastHealthy time.Time     `json:"last_healthy"`
+	Active      map[int64]int `json:"active,omitempty"`
+	Reaped      uint64        `json:"reaped"`
+	SweepMillis int64         `json:"sweep_millis"`
+}
+
 type Diagnostics struct {
-	MeterInventoryVersion   int                            `json:"meter_inventory_version,omitempty"`
-	RetainedNodeMeters      []int64                        `json:"retained_node_meters,omitempty"`
-	NetworkTransportVersion int                            `json:"network_transport_version,omitempty"`
-	TransportGrants         []networkconfig.TransportGrant `json:"transport_grants,omitempty"`
-	NetworkSSHVersion       int                            `json:"network_ssh_version,omitempty"`
-	NetworkWireGuardVersion int                            `json:"network_wireguard_version,omitempty"`
-	MitaVersion             int                            `json:"mita_version,omitempty"`
-	NetworkEgressVersion    int                            `json:"network_egress_version,omitempty"`
-	NetworkForwardVersion   int                            `json:"network_forward_version,omitempty"`
-	NetworkBindingVersion   int                            `json:"network_binding_version,omitempty"`
-	NetworkConfigureAllowed bool                           `json:"network_configure_allowed,omitempty"`
-	NetworkBindingErrors    map[int64]string               `json:"network_binding_errors,omitempty"`
-	NetworkForwardErrors    map[int64]string               `json:"network_forward_errors,omitempty"`
-	ForwardDNSVersion       int                            `json:"forward_dns_version,omitempty"`
-	ForwardPrivateVersion   int                            `json:"forward_private_version,omitempty"`
-	ForwardTransportVersion int                            `json:"forward_transport_version,omitempty"`
-	ForwardGrants           []networkconfig.ForwardGrant   `json:"forward_grants,omitempty"`
-	ListenBindingVersion    int                            `json:"listen_binding_version,omitempty"`
-	NetworkGuardError       string                         `json:"network_guard_error,omitempty"`
-	NetworkBillingVersion   int                            `json:"network_billing_version,omitempty"`
-	NetworkBillingError     string                         `json:"network_billing_error,omitempty"`
-	SecurityVersion         int                            `json:"security_version,omitempty"`
-	SecurityPolicy          bool                           `json:"security_policy,omitempty"`
-	SecurityPaused          bool                           `json:"security_paused,omitempty"`
-	MeteringError           string                         `json:"metering_error,omitempty"`
-	Maintenance             int                            `json:"maintenance,omitempty"`
-	Cores                   []CoreStatus                   `json:"cores"`
-	Certs                   []CertStatus                   `json:"certs,omitempty"`
-	ClockSkewMs             int64                          `json:"clock_skew_ms"`
-	BBR                     bool                           `json:"bbr"`
-	CongestionCtl           string                         `json:"congestion_ctl"`
-	IPv6Reachable           bool                           `json:"ipv6_reachable"`
-	IPv4Reachable           bool                           `json:"ipv4_reachable"`
-	OOMEvents               int                            `json:"oom_events"`
-	Nftables                bool                           `json:"nftables"`
-	Systemd                 bool                           `json:"systemd"`
-	TimeSync                bool                           `json:"time_sync"`
-	Warnings                []string                       `json:"warnings,omitempty"`
-	RecentErrors            []string                       `json:"recent_errors,omitempty"`
-	ConnlogLag              int64                          `json:"connlog_lag"` // buffered events not yet uploaded
-	BinarySHA256            string                         `json:"binary_sha256,omitempty"`
+	NetworkProxyInboundVersion int                            `json:"network_proxy_inbound_version,omitempty"`
+	ForwardUDP                 *ForwardUDPStatus              `json:"forward_udp,omitempty"`
+	ForwardUDPVersion          int                            `json:"forward_udp_version,omitempty"`
+	NAT                        *NATStatus                     `json:"nat,omitempty"`
+	MeterInventoryVersion      int                            `json:"meter_inventory_version,omitempty"`
+	RetainedNodeMeters         []int64                        `json:"retained_node_meters,omitempty"`
+	NetworkTransportVersion    int                            `json:"network_transport_version,omitempty"`
+	TransportGrants            []networkconfig.TransportGrant `json:"transport_grants,omitempty"`
+	NetworkSSHVersion          int                            `json:"network_ssh_version,omitempty"`
+	NetworkWireGuardVersion    int                            `json:"network_wireguard_version,omitempty"`
+	MitaVersion                int                            `json:"mita_version,omitempty"`
+	NetworkEgressVersion       int                            `json:"network_egress_version,omitempty"`
+	NetworkForwardVersion      int                            `json:"network_forward_version,omitempty"`
+	NetworkBindingVersion      int                            `json:"network_binding_version,omitempty"`
+	NetworkConfigureAllowed    bool                           `json:"network_configure_allowed,omitempty"`
+	NetworkBindingErrors       map[int64]string               `json:"network_binding_errors,omitempty"`
+	NetworkForwardErrors       map[int64]string               `json:"network_forward_errors,omitempty"`
+	ForwardDNSVersion          int                            `json:"forward_dns_version,omitempty"`
+	ForwardPrivateVersion      int                            `json:"forward_private_version,omitempty"`
+	ForwardTransportVersion    int                            `json:"forward_transport_version,omitempty"`
+	ForwardGrants              []networkconfig.ForwardGrant   `json:"forward_grants,omitempty"`
+	ListenBindingVersion       int                            `json:"listen_binding_version,omitempty"`
+	NetworkGuardError          string                         `json:"network_guard_error,omitempty"`
+	NetworkBillingVersion      int                            `json:"network_billing_version,omitempty"`
+	NetworkBillingError        string                         `json:"network_billing_error,omitempty"`
+	SecurityVersion            int                            `json:"security_version,omitempty"`
+	SecurityPolicy             bool                           `json:"security_policy,omitempty"`
+	SecurityPaused             bool                           `json:"security_paused,omitempty"`
+	MeteringError              string                         `json:"metering_error,omitempty"`
+	Maintenance                int                            `json:"maintenance,omitempty"`
+	Cores                      []CoreStatus                   `json:"cores"`
+	Certs                      []CertStatus                   `json:"certs,omitempty"`
+	ClockSkewMs                int64                          `json:"clock_skew_ms"`
+	BBR                        bool                           `json:"bbr"`
+	CongestionCtl              string                         `json:"congestion_ctl"`
+	IPv6Reachable              bool                           `json:"ipv6_reachable"`
+	IPv4Reachable              bool                           `json:"ipv4_reachable"`
+	OOMEvents                  int                            `json:"oom_events"`
+	Nftables                   bool                           `json:"nftables"`
+	Systemd                    bool                           `json:"systemd"`
+	TimeSync                   bool                           `json:"time_sync"`
+	Warnings                   []string                       `json:"warnings,omitempty"`
+	RecentErrors               []string                       `json:"recent_errors,omitempty"`
+	ConnlogLag                 int64                          `json:"connlog_lag"` // buffered events not yet uploaded
+	BinarySHA256               string                         `json:"binary_sha256,omitempty"`
 }
 
 // Heartbeat is sent every poll interval.
 type Heartbeat struct {
-	NetworkBillingHeld     bool                   `json:"network_billing_held,omitempty"`
-	NetworkBillingRevision int64                  `json:"network_billing_revision,omitempty"`
-	NetworkBillingLegacy   *LegacyNetworkCounters `json:"network_billing_legacy,omitempty"`
-	NetworkBillingSwitch   *NetworkBillingSwitch  `json:"network_billing_switch,omitempty"`
-	FinalMeters            *MeterSettlement       `json:"final_meters,omitempty"`
-	Version                string                 `json:"version"`
-	BinarySHA256           string                 `json:"binary_sha256,omitempty"`
-	Epoch                  string                 `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
-	TS                     time.Time              `json:"ts"`
-	PublicIPv4             string                 `json:"public_ipv4"`
-	PublicIPv6             string                 `json:"public_ipv6"`
-	Metrics                Metrics                `json:"metrics"`
-	Ports                  []PortCounter          `json:"ports"`
-	ForwardCounters        []ForwardCounter       `json:"forward_counters,omitempty"`
-	ForwardReceipt         *ForwardReceipt        `json:"forward_receipt,omitempty"`
-	AppliedRevision        int64                  `json:"applied_revision"`
-	AppliedHash            string                 `json:"applied_hash"`
-	ApplyStatus            string                 `json:"apply_status"` // applied|failed|pending
-	ApplyError             string                 `json:"apply_error,omitempty"`
-	Diagnostics            Diagnostics            `json:"diagnostics"`
+	NetworkBillingHeld      bool                   `json:"network_billing_held,omitempty"`
+	NetworkBillingRevision  int64                  `json:"network_billing_revision,omitempty"`
+	NetworkBillingLegacy    *LegacyNetworkCounters `json:"network_billing_legacy,omitempty"`
+	NetworkBillingSwitch    *NetworkBillingSwitch  `json:"network_billing_switch,omitempty"`
+	FinalMeters             *MeterSettlement       `json:"final_meters,omitempty"`
+	Version                 string                 `json:"version"`
+	BinarySHA256            string                 `json:"binary_sha256,omitempty"`
+	Epoch                   string                 `json:"epoch"` // changes when counters reset; ingest rebases if NIC did not reset
+	TS                      time.Time              `json:"ts"`
+	PublicIPv4              string                 `json:"public_ipv4"`
+	PublicIPv6              string                 `json:"public_ipv6"`
+	Metrics                 Metrics                `json:"metrics"`
+	Ports                   []PortCounter          `json:"ports"`
+	ForwardCounters         []ForwardCounter       `json:"forward_counters,omitempty"`
+	ForwardReceipt          *ForwardReceipt        `json:"forward_receipt,omitempty"`
+	AppliedRevision         int64                  `json:"applied_revision"`
+	AppliedHash             string                 `json:"applied_hash"`
+	ApplyStatus             string                 `json:"apply_status"` // applied|failed|pending
+	ApplyError              string                 `json:"apply_error,omitempty"`
+	NodeApplicationRevision int64                  `json:"node_application_revision,omitempty"`
+	NodeApplicationHash     string                 `json:"node_application_hash,omitempty"`
+	NodeApplicationSequence int64                  `json:"node_application_sequence,omitempty"`
+	NodeApplications        []NodeApplication      `json:"node_applications,omitempty"`
+	Diagnostics             Diagnostics            `json:"diagnostics"`
 }
 
 // HeartbeatResponse tells the agent what to do next.
@@ -199,9 +218,10 @@ type MaintenanceCommand struct {
 
 // AgentUpdateSpec tells an agent to replace its own binary.
 type AgentUpdateSpec struct {
-	SHA256 string `json:"sha256"`
-	URL    string `json:"url"`
-	Size   int64  `json:"size,omitempty"`
+	Version string `json:"version,omitempty"`
+	SHA256  string `json:"sha256"`
+	URL     string `json:"url"`
+	Size    int64  `json:"size,omitempty"`
 }
 
 // CertSpec tells the agent how to obtain the TLS certificate for a node.
@@ -242,6 +262,12 @@ type CoreVersion struct {
 
 // DesiredState is the full declarative state for one server.
 type DesiredState struct {
+	ForwardUDPVersion int               `json:"forward_udp_version,omitempty"`
+	NATVersion        int               `json:"nat_version,omitempty"`
+	NAT               *natconfig.Config `json:"nat,omitempty"`
+	// PublicationGeneration is a controller-local database barrier. Ordinary
+	// nodes keep their existing wire contract without opting into networking.
+	PublicationGeneration   int64                  `json:"-"`
 	NetworkBindingVersion   int                    `json:"network_binding_version,omitempty"`
 	NetworkSSHVersion       int                    `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion int                    `json:"network_wireguard_version,omitempty"`
@@ -284,11 +310,13 @@ type Tuning struct {
 
 // ApplyReport is sent after the agent reconciles a revision.
 type ApplyReport struct {
-	Revision int64    `json:"revision"`
-	Hash     string   `json:"hash"`
-	Status   string   `json:"status"` // applied|failed
-	Error    string   `json:"error,omitempty"`
-	Details  []string `json:"details,omitempty"`
+	NodeApplications        []NodeApplication `json:"node_applications,omitempty"`
+	NodeApplicationSequence int64             `json:"node_application_sequence,omitempty"`
+	Revision                int64             `json:"revision"`
+	Hash                    string            `json:"hash"`
+	Status                  string            `json:"status"` // applied|failed
+	Error                   string            `json:"error,omitempty"`
+	Details                 []string          `json:"details,omitempty"`
 }
 
 // ConnEvent is one observed connection.

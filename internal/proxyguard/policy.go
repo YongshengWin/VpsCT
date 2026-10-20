@@ -9,12 +9,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"ctlvps/internal/networkguard"
+	"ctlvps/internal/openrc"
 	"golang.org/x/sys/unix"
 )
 
@@ -35,6 +38,13 @@ type policy struct {
 }
 
 func command(ctx context.Context, input, name string, args ...string) ([]byte, error) {
+	if name == "systemctl" && openrc.Enabled() {
+		if input != "" {
+			return nil, errors.New("OpenRC 服务控制不接受标准输入")
+		}
+		out, err := openrc.Control(ctx, args...)
+		return []byte(out), err
+	}
 	c := exec.CommandContext(ctx, name, args...)
 	c.Stdin = strings.NewReader(input)
 	b, e := c.CombinedOutput()
@@ -446,11 +456,38 @@ func Check(ctx context.Context) error {
 }
 
 func Entry(args []string) (bool, error) {
-	if len(args) == 0 || args[0] != "proxy-guard" {
+	if len(args) == 0 || (args[0] != "proxy-guard" && args[0] != "proxy-guard-loop") {
 		return false, nil
 	}
 	if len(args) != 1 {
-		return true, fmt.Errorf("proxy-guard takes no arguments")
+		return true, fmt.Errorf("%s takes no arguments", args[0])
+	}
+	if args[0] == "proxy-guard-loop" {
+		if !openrc.Enabled() || os.Geteuid() != 0 {
+			return true, errors.New("proxy-guard-loop 仅支持 root/OpenRC")
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := Check(checkCtx)
+			cancel()
+			if ctx.Err() != nil {
+				return true, nil
+			}
+			if err != nil {
+				// Keep the independent supervisor alive while its existing Check
+				// path leaves failed protection closed and managed proxies paused.
+				fmt.Fprintln(os.Stderr, "proxy firewall integrity:", err)
+			}
+			select {
+			case <-ctx.Done():
+				return true, nil
+			case <-ticker.C:
+			}
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

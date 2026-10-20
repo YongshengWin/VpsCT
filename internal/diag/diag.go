@@ -5,6 +5,7 @@ package diag
 import (
 	"context"
 	"ctlvps/internal/boundedexec"
+	"ctlvps/internal/openrc"
 	"net"
 	"os"
 	"os/exec"
@@ -22,7 +23,7 @@ type Host struct {
 	IPv6Reachable bool
 	OOMEvents     int
 	Nftables      bool
-	Systemd       bool
+	Systemd       bool // wire-compatible service-manager availability (systemd or OpenRC)
 	Warnings      []string
 }
 
@@ -57,7 +58,11 @@ func Collect(ctx context.Context) Host {
 	h.IPv4Reachable = reachable(ctx, "1.1.1.1:443") || reachable(ctx, "8.8.8.8:443")
 	h.IPv6Reachable = reachable(ctx, "[2606:4700:4700::1111]:443") || reachable(ctx, "[2001:4860:4860::8888]:443")
 	h.Nftables = exec.CommandContext(ctx, "nft", "--version").Run() == nil
-	h.Systemd = exec.CommandContext(ctx, "systemctl", "--version").Run() == nil
+	if openrc.Enabled() {
+		h.Systemd = openrc.Available(ctx)
+	} else {
+		h.Systemd = exec.CommandContext(ctx, "systemctl", "--version").Run() == nil
+	}
 	if out, _, err := boundedexec.Run(ctx, "", 256<<10, "journalctl", "-k", "--since", "-24h", "--no-pager", "-o", "cat", "--grep", "(?i)out of memory|oom-kill", "--lines", "1000"); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			l := strings.ToLower(line)
@@ -109,6 +114,21 @@ func (e *sysctlError) Error() string { return "sysctl: " + e.msg }
 
 // EnsureChrony makes sure a time daemon is enabled (best effort).
 func EnsureChrony(ctx context.Context) {
+	ensureChrony(ctx, openrc.Enabled())
+}
+
+func ensureChrony(ctx context.Context, useOpenRC bool) {
+	if useOpenRC {
+		for _, service := range []string{"chronyd", "chrony"} {
+			if exec.CommandContext(ctx, "rc-service", "--exists", service).Run() != nil {
+				continue
+			}
+			_ = exec.CommandContext(ctx, "rc-update", "add", service, "default").Run()
+			_ = exec.CommandContext(ctx, "rc-service", service, "start").Run()
+			return
+		}
+		return
+	}
 	for _, unit := range []string{"chrony", "chronyd", "systemd-timesyncd"} {
 		if exec.CommandContext(ctx, "systemctl", "is-enabled", unit).Run() == nil {
 			_ = exec.CommandContext(ctx, "systemctl", "start", unit).Run()

@@ -20,6 +20,8 @@ import (
 
 	lifecycle "ctlvps"
 	"ctlvps/internal/agentnet"
+	"ctlvps/internal/openrc"
+	"ctlvps/internal/safehttp"
 	"ctlvps/internal/secureupdate"
 	"golang.org/x/sys/unix"
 	"runtime"
@@ -97,13 +99,19 @@ func (m *Manager) Run(id string) error {
 	} else if err == nil && s.Role == "controller" {
 		status, message, err = m.updateController(ctx, s, log, stage)
 	} else if err == nil {
-		status, message, err = m.updateAgent(ctx, s, log, stage)
+		status, message, err = m.updateAgent(ctx, s, log, stage, releaseConfiguration)
 	}
 	if err != nil {
 		_, _ = fmt.Fprintln(log, err)
 	}
 	releaseConfiguration()
-	stage(status, status, message)
+	terminalStage := status
+	var transient *agentDownloadError
+	if status == "failed" && errors.As(err, &transient) {
+		terminalStage = "download_retryable"
+		message = "agent 下载传输未完成，原程序未更换；控制端会有限重试，详情见维护日志"
+	}
+	stage(status, terminalStage, message)
 	// Completed reports are retried independently of the agent. Its token and
 	// data may already be gone; this callback can only update this one job.
 	if s.CallbackURL != "" {
@@ -157,7 +165,7 @@ func (m *Manager) updateController(ctx context.Context, s Spec, log io.Writer, s
 	return "failed", "升级未完成；请查看维护日志及升级前备份", err
 }
 
-func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage func(string, string, string)) (string, string, error) {
+func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage func(string, string, string), releaseConfiguration func()) (string, string, error) {
 	const target = "/usr/local/bin/ctlvps-agent"
 	lock, err := os.OpenFile("/run/lock/ctlvps-install.lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -182,7 +190,7 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 	if err != nil {
 		return "failed", "无法读取新程序大小", err
 	}
-	if err = secureupdate.VerifyReader(ctx, "agent", "", payload); err != nil {
+	if err = verifyAgentPayload(ctx, s.Version, payload); err != nil {
 		return "failed", "官方发行校验失败，原程序未更换", err
 	}
 	if err := command(ctx, log, newPath, "version"); err != nil {
@@ -220,31 +228,64 @@ func (m *Manager) updateAgent(ctx context.Context, s Spec, log io.Writer, stage 
 		return "failed", "无法启用预留空间，原 agent 保持运行", err
 	}
 	reservation = nil
+	if openrc.Enabled() {
+		if err := checkOpenRCMaintenanceCandidate(ctx, newPath); err != nil {
+			return "failed", "候选 agent 不支持 OpenRC 网页维护", err
+		}
+		if err := openrc.Verify("ctlvps-agent.service"); err != nil {
+			return "failed", "OpenRC 服务配置不是默认安装", err
+		}
+		if err := command(ctx, log, newPath, "openrc-check"); err != nil {
+			return "failed", "候选 agent 不支持本机 OpenRC 环境", err
+		}
+	}
 	stage("running", "restart", "正在替换并重启 agent，已部署服务继续运行")
-	if err := command(ctx, log, "systemctl", "stop", "ctlvps-agent"); err != nil {
+	if err := agentService(ctx, log, "stop"); err != nil {
 		return "failed", "停止 agent 失败，原程序未更换", err
 	}
 	// /var/lib and /usr/local may be different filesystems; stage beside target
 	// before renaming atomically. Never overwrite a symlink left by an operator.
 	err = installAgentFile(newPath, target)
+	if err == nil && openrc.Enabled() {
+		err = installOpenRCScript(ctx, target)
+	}
+	if openrc.Enabled() {
+		releaseConfiguration()
+	}
 	if err == nil {
-		err = command(ctx, log, "systemctl", "start", "ctlvps-agent")
+		err = agentService(ctx, log, "start")
 	}
 	if err == nil {
 		err = agentHealthy(ctx, s.SHA256)
 	}
 	if err == nil {
-		return "succeeded", "agent 升级完成，运行文件校验通过", nil
+		return "succeeded", "agent 程序已更新，运行文件校验通过；节点恢复情况请查看配置及节点状态", nil
 	}
 	_, _ = fmt.Fprintln(log, "new agent failed:", err)
 	stage("running", "rollback", "新 agent 启动失败，正在恢复旧程序")
-	_ = command(ctx, log, "systemctl", "stop", "ctlvps-agent")
+	if stopErr := agentService(ctx, log, "stop"); stopErr != nil {
+		return "failed", "无法安全停止新 agent，保留恢复文件", stopErr
+	}
+	if openrc.Enabled() {
+		release, lockErr := m.WaitStartupConfigurationLock(ctx)
+		if lockErr != nil {
+			return "failed", "无法取得恢复锁", lockErr
+		}
+		defer release()
+		releaseConfiguration = release
+	}
 	rollback := recovery.CheckLocal()
 	if rollback == nil {
 		rollback = installAgentFile(oldPath, target)
 	}
 	if rollback == nil {
-		rollback = command(ctx, log, "systemctl", "start", "ctlvps-agent")
+		if openrc.Enabled() {
+			rollback = installOpenRCScript(ctx, target)
+			releaseConfiguration()
+		}
+		if rollback == nil {
+			rollback = agentService(ctx, log, "start")
+		}
 	}
 	if rollback == nil {
 		oldSHA, hashErr := hashFile(oldPath)
@@ -306,8 +347,8 @@ func hashFile(path string) (string, error) {
 func agentHealthy(ctx context.Context, want string) error {
 	stable := 0
 	for attempt := 0; attempt < 30; attempt++ {
-		pid, err := exec.CommandContext(ctx, "systemctl", "show", "ctlvps-agent", "-p", "MainPID", "--value").Output()
-		p := strings.TrimSpace(string(pid))
+		pid, err := agentPID(ctx)
+		p := strings.TrimSpace(pid)
 		if err == nil && p != "0" && p != "" {
 			if got, err := hashFile("/proc/" + p + "/exe"); err == nil && strings.EqualFold(got, want) {
 				stable++
@@ -329,6 +370,23 @@ func agentHealthy(ctx context.Context, want string) error {
 	return errors.New("agent process did not become healthy")
 }
 
+var verifyAgentRelease = secureupdate.VerifyReader
+
+func verifyAgentPayload(ctx context.Context, version string, payload io.ReadSeeker) error {
+	version = CanonicalReleaseVersion(version)
+	if version == "" {
+		return errors.New("缺少有效 agent 发行版本，请先升级控制端后重试")
+	}
+	return verifyAgentRelease(ctx, "agent", version, payload)
+}
+
+// Only transport failures before any activation are eligible for bounded
+// retries. Digest, release trust, compatibility and rollback failures are not.
+type agentDownloadError struct{ err error }
+
+func (e *agentDownloadError) Error() string { return e.err.Error() }
+func (e *agentDownloadError) Unwrap() error { return e.err }
+
 func downloadAgent(ctx context.Context, rawURL, want, path string) error {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || !shaPattern.MatchString(want) {
@@ -349,6 +407,9 @@ func downloadAgent(ctx context.Context, rawURL, want, path string) error {
 	}()
 	h := sha256.New()
 	n, err := downloadAgentTo(ctx, rawURL, io.MultiWriter(f, h))
+	if err != nil && !errors.Is(err, safehttp.ErrSize) {
+		err = &agentDownloadError{err: err}
+	}
 	if err == nil {
 		err = f.Sync()
 	}

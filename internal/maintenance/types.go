@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -21,6 +22,19 @@ var versionPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9][A
 var repoPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 var shaPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 var ErrBusy = errors.New("本机已有维护任务正在执行")
+
+// CanonicalReleaseVersion strips only the display commit suffix. Updates must
+// bind verification to a release tag, never silently substitute GitHub latest.
+func CanonicalReleaseVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if i := strings.Index(value, " ("); i >= 0 && strings.HasSuffix(value, ")") {
+		value = value[:i]
+	}
+	if !versionPattern.MatchString(value) {
+		return ""
+	}
+	return value
+}
 
 func NewID() string {
 	var b [16]byte
@@ -56,11 +70,12 @@ func (r Request) Validate() error {
 // Job contains only displayable data. Credentials belong exclusively to Spec.
 type Job struct {
 	Request
-	Status    string    `json:"status"`
-	Stage     string    `json:"stage"`
-	Message   string    `json:"message"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	PreviousSHA256 string    `json:"previous_sha256,omitempty"`
+	Status         string    `json:"status"`
+	Stage          string    `json:"stage"`
+	Message        string    `json:"message"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (j Job) Active() bool { return j.Status == "queued" || j.Status == "running" }

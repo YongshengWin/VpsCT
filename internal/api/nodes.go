@@ -421,7 +421,7 @@ func (a *API) setNodeChain(w http.ResponseWriter, r *http.Request) error {
 		OwnerUserID:      userFrom(r.Context()).ID,
 		Tags:             []string{},
 	}
-	if err := a.Store.CreateNode(r.Context(), &ch); err != nil {
+	if err := a.Store.CreateChainNode(r.Context(), &ch, landing.ID); err != nil {
 		return err
 	}
 	a.audit(r, "node.chain", ch.Name, map[string]any{"front": front.Name, "landing": landing.Name})
@@ -455,6 +455,9 @@ func (a *API) updateNode(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
 	}
+	if in.Name != "" && strings.TrimSpace(in.Name) == "" {
+		return httpx.BadRequest("名称不能为空")
+	}
 	if n.Source == domain.NodeDeployed || n.Source == domain.NodeChain {
 		// only cosmetic fields may change on deployed nodes
 		if in.Name != "" {
@@ -473,7 +476,7 @@ func (a *API) updateNode(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := a.Store.UpdateNode(r.Context(), &n); err != nil {
-		return err
+		return natAPIError(err)
 	}
 	if n.Source == domain.NodeDeployed && n.ServerID != nil {
 		_, _, _ = a.Desired.Publish(r.Context(), *n.ServerID)
@@ -496,7 +499,7 @@ func (a *API) deleteNode(w http.ResponseWriter, r *http.Request) error {
 		return httpx.BadRequest("分享节点请在分享中调整目标协议")
 	}
 	if err := a.Store.DeleteNode(r.Context(), id); err != nil {
-		return err
+		return networkOperationError(err)
 	}
 	if n.Source == domain.NodeDeployed && n.ServerID != nil {
 		_, _, _ = a.Desired.Publish(r.Context(), *n.ServerID)

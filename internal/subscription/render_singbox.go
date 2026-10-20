@@ -99,6 +99,9 @@ func SingBoxOutbound(p proxynode.Proxy, via string) (map[string]any, bool) {
 	switch p.Type {
 	case "ss":
 		o["type"] = "shadowsocks"
+		if udp, exists := p.Params["udp"]; exists && !toBool(udp) {
+			o["network"] = "tcp"
+		}
 		o["method"] = p.Str("cipher")
 		o["password"] = p.Str("password")
 		if plugin := p.Str("plugin"); plugin != "" {

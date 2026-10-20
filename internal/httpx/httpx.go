@@ -97,7 +97,7 @@ func PathInt64(r *http.Request, name string) (int64, error) {
 	return n, nil
 }
 
-// QueryInt reads an integer query parameter with default.
+// QueryInt reads a bounded count query parameter with default.
 func QueryInt(r *http.Request, name string, def int) int {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -109,6 +109,24 @@ func QueryInt(r *http.Request, name string, def int) int {
 	}
 	if n > 10000 {
 		return 10000
+	}
+	return n
+}
+
+// QueryOffset reads a non-negative pagination offset without a count cap.
+func QueryOffset(r *http.Request, name string, def int) int {
+	n, err := strconv.Atoi(r.URL.Query().Get(name))
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// QueryInt64 preserves a full-width non-negative ID cursor.
+func QueryInt64(r *http.Request, name string, def int64) int64 {
+	n, err := strconv.ParseInt(r.URL.Query().Get(name), 10, 64)
+	if err != nil || n < 0 {
+		return def
 	}
 	return n
 }

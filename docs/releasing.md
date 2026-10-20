@@ -1,6 +1,6 @@
 # 维护者发布流程
 
-[返回 README](../README.md) · [查看验收记录](readiness.md)
+[返回 README](../README.md) · [查看验收记录](readiness.md) · [升级稳定性与验收](upgrade-reliability.md)
 
 按“确定版本 → 构建与验收 → 创建草稿 → 公开发行 → 验证下载”的顺序发布。首次开源还需要完成仓库创建和安全设置；创建仓库、提交、推送及公开发行均按维护者明确授权执行。
 
@@ -18,7 +18,7 @@
 
 ### 1.2 每个版本
 
-当前修复版本使用 [v0.1.6 发布说明](releases/v0.1.6.md)；上一版完整功能验收见 [v0.1.5 专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
+当前候选版本使用 [v0.1.7 发布说明](releases/v0.1.7.md)；上一版完整功能验收见 [v0.1.5 专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
 
 确定 `vX.Y.Z` 版本号，将 CHANGELOG 中的 Unreleased 内容归入该版本。注明数据库迁移、agent 兼容要求、已验证范围和已知限制。依赖有变化时重新生成第三方声明。
 
@@ -39,16 +39,19 @@ bash scripts/check.sh
 在项目根目录执行，替换实际仓库归属和版本：
 
 ```bash
-make release VERSION=v0.1.6 REPOSITORY=YongshengWin/VpsCT
+make release VERSION=v0.1.7 REPOSITORY=YongshengWin/VpsCT
 ```
 
-产物位于 `release/v0.1.6/`：
+产物位于 `release/v0.1.7/`：
 
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
+| `install-agent.sh` | 固定发行版本的 agent 安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.6-linux-amd64.tar.gz`、`ctlvps-v0.1.6-linux-arm64.tar.gz` | 对应架构控制端、双架构 agent、服务配置、说明文档与许可文件 |
+| `ctlvps-v0.1.7-linux-amd64.tar.gz`、`ctlvps-v0.1.7-linux-arm64.tar.gz` | 对应架构控制端及校验器、双架构 agent、安装脚本、服务配置、说明文档与许可文件 |
+| `ctlvps-agent-linux-amd64`、`ctlvps-agent-linux-arm64` | agent 独立分发文件 |
+| `ctlvps-verify-linux-amd64`、`ctlvps-verify-linux-arm64` | 安装及恢复使用的对应架构校验器 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
@@ -65,42 +68,51 @@ README 的安装与更新命令使用 `releases/latest/download/install.sh`，�
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-release_dir=release/v0.1.6 # 替换为刚用当前源码构建的待发布版本目录
+release_dir=release/v0.1.7 # 替换为刚用当前源码构建的待发布版本目录
 bash scripts/test-install-container.sh "$release_dir"
 bash scripts/test-uninstall-container.sh
 bash scripts/test-maintenance-container.sh "$release_dir"
 bash scripts/test-docker.sh
+
+legacy_dir=$(mktemp -d)
+bash scripts/fetch-upgrade-fixture.sh v0.1.5 "$legacy_dir"
+SINGBOX_BIN=/path/to/verified-official-sing-box-1.14.1 \
+  bash scripts/test-web-upgrade-container.sh "$release_dir" "$legacy_dir"
 ```
 
 安装器容器测试中的 systemd 为测试替身；卸载测试使用独立的真实 systemd / nftables 容器，覆盖两端同机、数据保留、清空、重复运行及异常路径。网页维护测试使用真实控制端、agent、独立维护进程和 systemd，发行下载由固定本地附件替代；需传入当前源码构建的发行目录，不能用已发布的旧版附件代替。公开前还需在明确授权的全新 Linux 测试主机上验收 HTTPS 证书、管理员初始化和 agent 接入，并验证从上一版升级及恢复数据的流程。
 
+最后一项是实际历史版本的网页升级验收：历史附件必须来自官方 `v0.1.5` Release，获取脚本逐文件核对 GitHub 资产 SHA256；不能把当前源码改成旧版本号充当历史版本。`SINGBOX_BIN` 必须是已核验官方资产 SHA256、与容器架构一致的 sing-box 1.14.1。测试容器禁止外网，使用真实 systemd、历史控制端及 agent、新候选程序和官方客户端，通过网页维护 API 升级，检查旧 agent 离线期间的已确认订阅保留、新 agent 同步与应用，以及上游 `latest` 变化后的固定版本重装。它还使用升级前的同一份订阅，实际代理域名 HTTP/HTTPS 请求。
+
+该测试覆盖当前宿主架构的 Shadowsocks 节点路径，不代表全部协议、UDP、多网卡、中转或公网供应商网络均已验收；其他能力按对应专项测试补齐。历史控制端升级时会执行旧附件内的安装器，因此新版安装器的失败恢复仍须单独运行安装器及维护故障用例。详细边界见 [升级验收矩阵](upgrade-reliability.md#5-验收与发布门禁)。
+
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
 ```bash
-sudo bash install.sh --assets-dir /path/to/release/v0.1.6 \
-  --version v0.1.6 --domain panel.example.com
+sudo bash install.sh --assets-dir /path/to/release/v0.1.7 \
+  --version v0.1.7 --domain panel.example.com
 ```
 
 这里使用发行目录内生成的 `install.sh`，目录同时包含对应架构压缩包和 `SHA256SUMS`。该模式仍需系统软件源提供依赖。实际验证过哪些系统和架构，就在验收记录中写明哪些；交叉编译不能替代实机安装。
 
 ## 3. 创建并检查 Release 草稿
 
-最终提交通过检查后，由维护者授权创建并推送版本标签。`Release draft` 工作流会先运行 CI，再构建附件并创建草稿。
+最终提交通过检查后，由维护者授权创建并推送版本标签。`Release draft` 工作流会先运行 CI，再构建附件；创建草稿前，必须让这些已打包的候选附件通过第 2.3 节的真实历史网页升级测试。工作流从官方 GitHub 资产取得历史附件及 sing-box 1.14.1，并验证 SHA256；下载、校验或容器验收失败均停止草稿创建。该自动门禁目前运行于 Ubuntu 24.04 AMD64，其他架构的运行验收单独记录。
 
-维护者明确选择本地发布时，也可从最终干净提交执行必要检查与 `make release`，上传同一提交构建的附件及 SHA256SUMS；保留检查日志，并完成同样的草稿与公开下载核验。GitHub 工作流保留作为独立验证，不覆盖已存在附件。
+维护者明确选择本地发布时，也可从最终干净提交执行必要检查与 `make release`，上传同一提交构建的附件及 SHA256SUMS；保留检查日志，并完成同样的草稿与公开下载核验。真实历史网页升级也是本地发布的必需门禁，验证对象必须是最终上传的附件。验收后重新构建或改动附件时，重新核对 SHA256 并运行附件验收，不沿用前一份构建的结果。GitHub 工作流保留作为独立验证，不覆盖已存在附件。
 
 维护者检查草稿时，依次确认：
 
 1. 标签对应正确提交，变更记录和兼容说明完整。
 2. 安装脚本中的仓库、版本与草稿一致。
 3. 双架构附件、许可文件及校验清单齐全，归档内的文档链接可用。
-4. 安装、升级和恢复验收记录已填写，未覆盖的范围明确列出。
+4. 最终附件的安装、真实历史网页升级和恢复验收记录已填写，附版本、提交、架构及校验清单，未覆盖的范围明确列出；不能只以源码单元测试或交叉编译成功替代附件验收。
 
 草稿尚不能作为普通用户的公开下载入口。工作流遇到已有 Release 会跳过创建，不自动覆盖附件；若失败时已留下草稿，先检查附件再决定补传或重建。
 
 ## 4. 公开发行并验证下载
 
-维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.6-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
+维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.7-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
 
 发布后从未登录 GitHub 的环境检查：
 

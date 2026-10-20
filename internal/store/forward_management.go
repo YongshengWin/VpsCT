@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/corecompat"
 	"ctlvps/internal/domain"
@@ -27,6 +28,9 @@ func (s *Store) PreviewPortForward(ctx context.Context, in PortForwardRequest) (
 		if in.Action != "create" {
 			f, err = scanForward(tx.QueryRowContext(ctx, `SELECT `+forwardCols+` FROM port_forwards WHERE id=?`, in.ForwardID))
 			if err != nil {
+				return err
+			}
+			if err := s.RequireUnmanagedForward(ctx, tx, f.ID); err != nil {
 				return err
 			}
 			if f.Revision != in.ExpectedRevision {
@@ -69,7 +73,14 @@ func (s *Store) previewPortForward(ctx context.Context, q querier, f domain.Port
 	if in.Action != "delete" {
 		candidate := f
 		candidate.Config = *in.Config
+		candidate.Enabled = in.Enabled
+		natErr := s.validateNATForward(ctx, q, candidate)
+		v.check("nat_coverage", natErr == nil, "监听公网端口须由已确认的 NAT 映射提供完整传输")
 		if in.Enabled && candidate.Config.Network != "tcp" {
+			budgetErr := checkForwardUDPBudget(ctx, q, candidate)
+			v.check("forward_udp_listener_budget", candidate.Config.MaxUDPSessions <= agentbudget.ForwardUDPPerListener, "官方内核每条 UDP 转发最多 1024 会话，请减少后再启用")
+			v.check("forward_udp_budget", budgetErr == nil, "该服务器 UDP 转发总会话预算不能超过 8192")
+			v.check("forward_udp_agent", v.ForwardUDPVersion == networkconfig.ForwardUDPVersion, "UDP 转发需要支持会话回收的新 agent，请先升级")
 			var pinned string
 			err := q.QueryRowContext(ctx, `SELECT value FROM settings WHERE key=?`, domain.SettingSingBoxVersion).Scan(s.scanSecret("settings.value", &pinned))
 			if err != nil && !isNoRows(err) {

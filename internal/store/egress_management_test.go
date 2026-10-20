@@ -76,8 +76,8 @@ func TestEgressManagementReceiptsAndAuditAreAtomic(t *testing.T) {
 	if err != nil || op.Status != "saved" || op.Generation != 0 || op.DesiredRevision != 0 {
 		t.Fatal(op, err)
 	}
-	if generation, _ := s.NetworkGeneration(ctx, server.ID); generation != 0 {
-		t.Fatal("unused template opted server into runtime")
+	if generation, _ := s.NetworkGeneration(ctx, server.ID); generation != 1 {
+		t.Fatal("unused template changed server publication generation")
 	}
 	if replay, err := s.RequestEgressProfile(ctx, in, domain.AuditEvent{}); err != nil || replay != op {
 		t.Fatal("create not idempotent", replay, err)

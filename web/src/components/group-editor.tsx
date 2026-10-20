@@ -195,7 +195,7 @@ export function GroupEditor({ groups: rawGroups, onChange, nodes, className, var
                 </div>
                 <DropZone id={`drop:${active}`} highlight={!!dragging?.startsWith("p:")}>
                   <SortableContext items={g.proxies.map((p) => `m:${active}:${p}`)} strategy={horizontalListSortingStrategy}>
-                    <div className="flex min-h-[3rem] flex-wrap gap-1.5">
+                    <div className="flex min-h-12 flex-wrap gap-1.5">
                       {g.proxies.map((p) => <MemberChip key={p} id={`m:${active}:${p}`} name={p} kind={candidates.find((c) => c.name === p)?.kind} onRemove={() => removeMember(active, p)} />)}
                       {g.proxies.length === 0 && <span className="self-center text-xs text-muted-foreground">{g.include_all ? "没有额外成员也可以，节点靠上面自动收。" : "空组生成时会填 DIRECT。"}</span>}
                     </div>
@@ -305,7 +305,7 @@ function PaletteItem({ c, disabled, onAdd }: { c: Candidate; disabled: boolean; 
   return (
     <div ref={setNodeRef} {...attributes} {...listeners} className={cn("flex items-center gap-2 rounded-md px-2 py-1.5 text-sm", disabled ? "opacity-40" : "cursor-grab hover:bg-accent/50", isDragging && "opacity-30")}>
       <KindDot kind={c.kind} />
-      <span className="min-w-0 flex-1 break-words">{c.name}</span>
+      <span className="min-w-0 flex-1 wrap-break-word">{c.name}</span>
       {c.sub && <span className="shrink-0 text-[10px] text-muted-foreground">{c.sub}</span>}
       <button disabled={disabled} onClick={onAdd} className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-0" title="添加"><Plus className="h-3.5 w-3.5" /></button>
     </div>
@@ -319,7 +319,7 @@ function MemberChip({ id, name, kind, onRemove }: { id: string; name: string; ki
     <span ref={setNodeRef} style={style} className="inline-flex max-w-full items-center gap-1 rounded-md border bg-background px-2 py-1 text-xs">
       <button {...attributes} {...listeners} className="cursor-grab touch-none text-muted-foreground"><GripVertical className="h-3 w-3" /></button>
       <KindDot kind={kind} />
-      <span className="break-words">{name}</span>
+      <span className="wrap-break-word">{name}</span>
       <button onClick={onRemove} className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
     </span>
   );

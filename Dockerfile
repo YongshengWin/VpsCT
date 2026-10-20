@@ -8,7 +8,7 @@ COPY web/ .
 RUN npm run build
 
 # ---- go ----
-FROM golang:1.26.8-alpine AS build
+FROM golang:1.26.9-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=
 WORKDIR /src
@@ -38,5 +38,5 @@ ENV CTLVPS_LISTEN=:8080 \
 VOLUME ["/data", "/keys"]
 EXPOSE 8080
 USER ctlvps
-HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+HEALTHCHECK --interval=30s --timeout=10s CMD wget -T 8 -qO- http://127.0.0.1:8080/healthz?ready=1 >/dev/null || exit 1
 ENTRYPOINT ["/app/ctlvpsd"]

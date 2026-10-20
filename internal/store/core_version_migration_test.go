@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,16 +23,8 @@ func TestCoreVersionMigrationPreservesLegacyDefaultsAndExplicitPins(t *testing.T
 		{"prerelease pin", "1.14.0-rc.1", "1.14.0-rc.1", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "legacy.db")
-			s, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// v30 changes data only, so this reconstructs a v29 installation,
-			// including one with no users or servers yet.
-			if _, err = s.db.Exec("UPDATE schema_version SET version=29; DELETE FROM settings WHERE key='core.singbox_version'"); err != nil {
-				t.Fatal(err)
-			}
+			s, path := historicalStore(t, 29)
+			var err error
 			if !tc.missing {
 				var value any = s.seal("settings.value", tc.value)
 				if tc.plain {
@@ -90,8 +81,8 @@ func TestFreshCoreDefaultAndExplicitDefaultChoiceArePinned(t *testing.T) {
 }
 
 func TestCorePinMigrationFailsClosedAndRetriesAtomically(t *testing.T) {
-	s := openTest(t)
-	if _, err := s.db.Exec("UPDATE schema_version SET version=29; UPDATE settings SET value='enc:v1:corrupt' WHERE key='core.singbox_version'"); err != nil {
+	s, _ := historicalStore(t, 29)
+	if _, err := s.db.Exec("INSERT INTO settings(key,value) VALUES('core.singbox_version','enc:v1:corrupt')"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.migrate(); err == nil {

@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 P = pathlib.Path
 assert P('/.dockerenv').exists() and P('/proc/1/comm').read_text().strip() == 'systemd'
+os.umask(0o022)
 arch = {'aarch64': 'arm64', 'x86_64': 'amd64'}[platform.machine()]
 asset = next(P('/assets').glob(f'*-linux-{arch}.tar.gz'))
 root = P('/opt/ctlvps')
@@ -116,7 +117,8 @@ with tarfile.open(asset) as archive:
 # Derive newer targets from the supplied release, including real release tags.
 initial_version = (root / 'releases/initial/VERSION').read_text().strip()
 run('python3','/src/scripts/security-fixture.py','sign','controller',initial_version,str(asset))
-run('/usr/local/libexec/ctlvps-verify','verify-release','controller',initial_version,str(asset))
+verification = run('/usr/local/libexec/ctlvps-verify','verify-release','controller',initial_version,str(asset), check=False)
+assert verification.returncode == 0, ('initial fixture verification failed', verification.stdout[-1500:])
 (root / 'releases/initial/VERIFIED-SHA256').write_text(hashlib.sha256(asset.read_bytes()).hexdigest()+'\n')
 match = re.fullmatch(r'v(\d+)\.(\d+)\.(\d+)(?:-[A-Za-z0-9.-]+)?', initial_version)
 assert match, initial_version
@@ -202,6 +204,7 @@ job = controller_job('update', broken_version)
 root_status(job, 'rolled_back')
 assert (root / 'current').resolve() == previous
 assert not (root / 'data/failed-upgrade-marker').exists()
+assert list((root / 'backups').glob('*/failed-upgrade-data/failed-upgrade-marker')), 'failed data retained for diagnosis'
 assert request('/api/v1/auth/setup')['needs_setup'] is False
 print('PASS failed startup restores previous binary AND previous data', flush=True)
 

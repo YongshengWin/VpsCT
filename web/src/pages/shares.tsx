@@ -10,7 +10,8 @@ import { DateTimeInput, ResetDayInput } from "@/components/datetime-picker";
 import { useToast } from "@/components/toast";
 import { useAuth, useIsAdmin } from "@/lib/auth";
 import { TrafficBars } from "@/components/charts";
-import { nicIO, TrafficIO } from "@/components/traffic-ways";
+import { TrafficIO } from "@/components/traffic-ways";
+import { BILLING_OPTIONS, billingLabel, billingMode, trafficUsage, trafficPeriodDate, validGiB, type BillingMode } from "@/lib/traffic-billing";
 import { SubscriptionLinks } from "@/pages/subscriptions";
 import { NodeRow, NodeDetailDialog } from "@/pages/nodes";
 
@@ -22,24 +23,26 @@ export function StatusBadge({ s }: { s: ShareStatus }) {
 // ShareCard is used on the dashboard (user view) and in the list.
 export function ShareCard({ share, link = true }: { share: Share; link?: boolean }) {
   const u = share.usage;
+  const usage = trafficUsage(u, share.billing_mode, { inbound: share.used_upload, outbound: share.used_download, quota: share.quota_bytes });
   const body = (
     <Card className="h-full p-4 transition-colors hover:bg-accent/30">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="break-words font-medium">{share.name}</p>
-          <p className="break-words text-xs text-muted-foreground">{share.user_name ? `用户 ${share.user_name} · ` : ""}{share.targets.length} 台服务器 · {share.targets.reduce((a, t) => a + t.protocols.length, 0) + share.extra_node_ids.length} 节点</p>
+          <p className="wrap-break-word font-medium">{share.name}</p>
+          <p className="wrap-break-word text-xs text-muted-foreground">{share.user_name ? `用户 ${share.user_name} · ` : ""}{share.targets.length} 台服务器 · {share.targets.reduce((a, t) => a + t.protocols.length, 0) + share.extra_node_ids.length} 节点</p>
         </div>
         <StatusBadge s={share.status} />
       </div>
       <div className="mt-3">
         <div className="mb-1 flex justify-between text-xs text-muted-foreground">
-          <span>本期汇总 {fmtBytes(u.total ?? nicIO(share.used_upload, share.used_download).total)}{u.quota > 0 && ` · 配额 ${fmtBytes(u.used)} / ${fmtBytes(u.quota)}`}</span>
-          <span>{u.quota > 0 ? `${u.percent.toFixed(0)}%` : "不限量"}</span>
+          <span>计入配额已用（{billingLabel(usage.mode)}）</span>
+          <span>{usage.quota > 0 ? `${usage.percent.toFixed(0)}%` : "不限量"}</span>
         </div>
-        <Progress value={u.quota > 0 ? u.percent : 0} />
-        <TrafficIO className="mt-1.5" compact inbound={u.inbound ?? share.used_upload} outbound={u.outbound ?? share.used_download} />
+        <p className="mb-1.5 text-sm font-medium tabular-nums">{fmtBytes(usage.billed)}{usage.quota > 0 && ` / ${fmtBytes(usage.quota)} · 剩余 ${fmtBytes(usage.remaining)}`}</p>
+        <Progress value={usage.percent} />
+        <TrafficIO className="mt-1.5" compact inbound={usage.inbound} outbound={usage.outbound} />
         <p className="mt-1 text-xs text-muted-foreground">
-          {u.next_reset ? `下次重置 ${fmtDate(u.next_reset, false)}` : "不重置"}
+          {u.next_reset ? `下次重置 ${trafficPeriodDate(u.next_reset)}（UTC）` : "不重置"}
           {share.expires_at && ` · 到期 ${fmtDate(share.expires_at, false)}`}
         </p>
       </div>
@@ -79,7 +82,7 @@ interface Form {
   targets: ShareTarget[];
   extra_node_ids: number[];
   quota_gb: string;
-  billing_mode: string;
+  billing_mode: BillingMode;
   reset_day: string;
   expires_at: string;
   template_id: number;
@@ -104,17 +107,21 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
   const users = useQuery({ queryKey: ["users"], queryFn: () => get<User[]>("/api/v1/users"), enabled: open });
   const templates = useQuery({ queryKey: ["templates"], queryFn: () => get<RuleTemplate[]>("/api/v1/templates"), enabled: open });
   const [f, setF] = React.useState<Form>(emptyForm);
+  const [nodeQuotas, setNodeQuotas] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
-    setF(share ? { name: share.name, user_id: share.user_id ?? 0, targets: share.targets ?? [], extra_node_ids: share.extra_node_ids ?? [], quota_gb: bytesToGb(share.quota_bytes), billing_mode: share.billing_mode, reset_day: String(share.reset_day ?? 0), expires_at: share.expires_at ? toLocal(share.expires_at) : "", template_id: share.template_id ?? 0, connlog_enabled: share.connlog_enabled, notes: share.notes } : emptyForm);
+    setF(share ? { name: share.name, user_id: share.user_id ?? 0, targets: share.targets ?? [], extra_node_ids: share.extra_node_ids ?? [], quota_gb: bytesToGb(share.quota_bytes), billing_mode: billingMode(share.billing_mode), reset_day: String(share.reset_day ?? 0), expires_at: share.expires_at ? toLocal(share.expires_at) : "", template_id: share.template_id ?? 0, connlog_enabled: share.connlog_enabled, notes: share.notes } : emptyForm);
+    setNodeQuotas(Object.fromEntries((share?.targets ?? []).flatMap(t => t.protocols.map(p => [`${t.server_id}:${p}`, bytesToGb(t.quota_bytes?.[p] ?? 0)]))));
   }, [share, open]);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
   const m = useMutation({
     mutationFn: () => {
-      const payload = { ...f, user_id: f.user_id || null, quota_bytes: gbToBytes(f.quota_gb), reset_day: parseResetDay(f.reset_day), template_id: f.template_id || null, expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : "0001-01-01T00:00:00Z" };
+      const targets = f.targets.map(t => ({ ...t, quota_bytes: Object.fromEntries(t.protocols.map(p => [p, gbToBytes(nodeQuotas[`${t.server_id}:${p}`] ?? "")])) }));
+      const payload = { ...f, targets, user_id: f.user_id || null, quota_bytes: gbToBytes(f.quota_gb), reset_day: parseResetDay(f.reset_day), template_id: f.template_id || null, expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : "0001-01-01T00:00:00Z" };
       return share ? put<Share>(`/api/v1/shares/${share.id}`, payload) : post<Share>("/api/v1/shares", payload);
     },
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["shares"] }); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["subscriptions"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success(share ? "已保存，节点变更将在下次心跳生效" : "分享已创建");
       onClose();
       if (!share) nav(`/shares/${r.id}`);
@@ -137,8 +144,8 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
   // Single column sized to the content: the old two-column layout left the
   // right half empty whenever there were no servers / spare nodes.
   return (
-    <Dialog open={open} onClose={onClose} title={share ? "编辑分享" : "新建分享"} size="md" description="每个勾选的「服务器 × 协议」会生成一个独立端口与凭据的专属入口，流量按端口计量。"
-      footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending}>{share ? "保存" : "创建"}</Button></>}>
+    <Dialog open={open} onClose={onClose} title={share ? "编辑分享" : "新建分享"} size="md" description="每个勾选的「服务器 × 协议」会生成一个独立端口与凭据的专属入口，专属节点独立计量。"
+      footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending} disabled={!validGiB(f.quota_gb, true) || f.targets.some(t => t.protocols.some(p => !validGiB(nodeQuotas[`${t.server_id}:${p}`] ?? "", true)))}>{share ? "保存" : "创建"}</Button></>}>
       <div className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="名称"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="给小王" /></Field>
@@ -168,7 +175,7 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
                 return (
                   <div key={s.id} className="rounded-xl border p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <p className="min-w-0 break-words text-sm font-medium">{s.name} <span className="text-xs text-muted-foreground">{s.region}{s.region ? " · " : ""}{s.agent_status === "online" ? "在线" : STATUS_LABELS[s.agent_status]}</span></p>
+                      <p className="min-w-0 wrap-break-word text-sm font-medium">{s.name} <span className="text-xs text-muted-foreground">{s.region}{s.region ? " · " : ""}{s.agent_status === "online" ? "在线" : STATUS_LABELS[s.agent_status]}</span></p>
                       {t && <Badge variant="info">{t.protocols.length}</Badge>}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -179,6 +186,9 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
                         </label>
                       ))}
                     </div>
+                    {t && <div className="mt-3 space-y-2">{t.protocols.map(p => <Field key={p} label={`${PROTOCOL_LABELS[p] ?? p} 额度 (GiB)`}>
+                      <Input aria-label={`${s.name} ${PROTOCOL_LABELS[p] ?? p} 节点额度`} type="number" min={0} step="any" placeholder="不限" value={nodeQuotas[`${s.id}:${p}`] ?? ""} onChange={e => setNodeQuotas(prev => ({ ...prev, [`${s.id}:${p}`]: e.target.value }))} />
+                    </Field>)}</div>}
                     {t && <Field label="新入口网络" hint="仅在新建入口时复制监听与固定出口版本，已有入口保持各自设置。应用会重启共享代理。"><Select aria-label={`分享网络 ${s.name}`} value={t.network?JSON.stringify(t.network):""} onChange={e=>set("targets",f.targets.map(x=>x.server_id===s.id?{...x,network:e.target.value?JSON.parse(e.target.value):undefined}:x))}>
                     <option value="">默认网络</option>
                     {t.network&&<option value={JSON.stringify(t.network)}>已保存的网络模板</option>}
@@ -191,15 +201,16 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
           )}
         </section>
 
+        <p className="text-xs text-muted-foreground">节点额度留空或 0 为不限；单个节点用尽只停该入口，分享总额度同时生效。节点沿用分享的计费方式与重置日。已有分享的节点用量从支持此功能的版本升级后开始累计。</p>
         {extraCandidates.length > 0 && (
           <section>
             <p className="mb-1 text-sm font-medium">附加节点</p>
-            <p className="mb-2 text-xs text-muted-foreground">导入/手动节点无法硬性限流，用量仅按订阅侧估算，建议只作备用。</p>
+            <p className="mb-2 text-xs text-muted-foreground">附加节点复用原有凭据，无法将用量归属这份分享，不计入分享的已采集流量与配额，也无法按这份分享硬性限流，建议只作备用。</p>
             <div className="max-h-44 overflow-auto rounded-xl border">
               {extraCandidates.map((n) => (
                 <label key={n.id} className="flex items-center gap-2 border-b px-3 py-1.5 text-sm last:border-0">
                   <input type="checkbox" className="accent-primary" checked={f.extra_node_ids.includes(n.id)} onChange={(e) => set("extra_node_ids", e.target.checked ? [...f.extra_node_ids, n.id] : f.extra_node_ids.filter((x) => x !== n.id))} />
-                  <span className="min-w-0 flex-1 break-words">{n.name}</span><span className="text-xs text-muted-foreground">{PROTOCOL_LABELS[n.protocol] ?? n.protocol}</span>
+                  <span className="min-w-0 flex-1 wrap-break-word">{n.name}</span><span className="text-xs text-muted-foreground">{PROTOCOL_LABELS[n.protocol] ?? n.protocol}</span>
                 </label>
               ))}
             </div>
@@ -209,9 +220,15 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
         <section className="space-y-3">
           <p className="text-sm font-medium">配额与有效期</p>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="配额 (GiB)" hint="0 不限，按入站+出站汇总"><Input type="number" min={0} step="0.1" value={f.quota_gb} onChange={(e) => set("quota_gb", e.target.value)} /></Field>
+            <Field label="分享总额度 (GiB)" hint="0 为不限，所有专属节点共同计入"><Input type="number" min={0} step="any" value={f.quota_gb} onChange={(e) => set("quota_gb", e.target.value)} /></Field>
             <Field label="重置日" hint="1–28 固定那天；29/30/31 都是每月最后一天。"><ResetDayInput value={f.reset_day} onChange={(v) => set("reset_day", v)} /></Field>
           </div>
+          <Field label="流量计费方式" hint="这份分享独立计费，不继承服务器方式。较大值按本期入站、出站分别累计后比较；流量图仍展示原始方向。">
+            <Select aria-label="分享流量计费方式" value={f.billing_mode} onChange={(e) => set("billing_mode", billingMode(e.target.value))}>
+              {BILLING_OPTIONS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </Field>
+          {share && billingMode(share.billing_mode) !== f.billing_mode && <p className="text-xs text-muted-foreground">保存后按新方式重新计算本期已采集流量，不会清零用量；达到配额时可能停用分享。</p>}
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="到期时间" hint="留空永久"><DateTimeInput value={f.expires_at} onChange={(v) => set("expires_at", v)} placeholder="永久有效" /></Field>
             <Field label="订阅模板" hint="留空用内置默认（地区组 / 应用组 / 分流规则）">
@@ -255,6 +272,7 @@ export function ShareDetailPage() {
   const s = q.data;
   if (!s) return <Empty title="分享不存在" />;
   const u = s.usage;
+  const usage = trafficUsage(u, s.billing_mode, { inbound: s.used_upload, outbound: s.used_download, quota: s.quota_bytes });
   return (
     <div>
       <PageHeader
@@ -282,12 +300,14 @@ export function ShareDetailPage() {
         <Card>
           <CardHeader><CardTitle>本期用量</CardTitle></CardHeader>
           <CardContent>
-            <p className="text-2xl font-semibold tabular-nums">{fmtBytes(u.total ?? nicIO(s.used_upload, s.used_download).total)}</p>
-            <p className="text-xs text-muted-foreground">本期汇总 · {u.quota > 0 ? `配额 ${fmtBytes(u.used)} / ${fmtBytes(u.quota)} · 剩余 ${fmtBytes(Math.max(0, u.remaining))}` : "不限量"} · 自 {fmtDate(s.period_start, false)}</p>
-            <Progress className="mt-3" value={u.quota > 0 ? u.percent : 0} />
-            <TrafficIO className="mt-4" inbound={u.inbound ?? s.used_upload} outbound={u.outbound ?? s.used_download} />
+            <p className="text-2xl font-semibold tabular-nums">{fmtBytes(usage.billed)}</p>
+            <p className="text-xs text-muted-foreground">计入配额已用 · {usage.quota > 0 ? `${fmtBytes(usage.quota)} 配额 · ${usage.percent.toFixed(1)}% · 剩余 ${fmtBytes(usage.remaining)}` : "不限量"} · 自 {trafficPeriodDate(s.period_start)}（UTC）</p>
+            <Progress className="mt-3" value={usage.percent} />
+            <TrafficIO className="mt-4" inbound={usage.inbound} outbound={usage.outbound} />
+            {s.extra_node_ids.length > 0 && <p className="mt-2 text-xs text-muted-foreground">以上统计仅包含这份分享的专属节点。{s.extra_node_ids.length} 个附加节点复用原有凭据，用量不计入本分享的流量或配额。</p>}
             <dl className="mt-4 space-y-1.5 text-xs text-muted-foreground">
-              <div className="flex justify-between"><dt>下次重置</dt><dd>{u.next_reset ? fmtDate(u.next_reset, false) : "不重置"}</dd></div>
+              <div className="flex justify-between"><dt>计费方式</dt><dd>{billingLabel(usage.mode)}</dd></div>
+              <div className="flex justify-between"><dt>下次重置（UTC）</dt><dd>{u.next_reset ? trafficPeriodDate(u.next_reset) : "不重置"}</dd></div>
               <div className="flex justify-between"><dt>到期</dt><dd>{s.expires_at ? fmtDate(s.expires_at) : "永久"}</dd></div>
               <div className="flex justify-between"><dt>连接日志</dt><dd>{s.connlog_enabled ? "开启" : "关闭"}</dd></div>
             </dl>
@@ -303,7 +323,7 @@ export function ShareDetailPage() {
       </div>
       <Card className="mt-4">
         <CardHeader><CardTitle>近 30 天流量（柱为入站/出站）</CardTitle></CardHeader>
-        <CardContent><TrafficBars points={traffic.data?.points ?? []} /></CardContent>
+        <CardContent>{traffic.isLoading ? <Spinner /> : traffic.isError ? <p className="text-sm text-destructive">流量加载失败，请稍后重试</p> : traffic.data?.has_data ? <><TrafficIO inbound={traffic.data.total_up} outbound={traffic.data.total_down} /><TrafficBars points={traffic.data.points} /><p className="text-xs text-muted-foreground">仅汇总这份分享已采集的节点流量；计费方式不改变原始入站、出站和汇总。</p></> : <p className="text-sm text-muted-foreground">近 30 天暂无采集记录</p>}</CardContent>
       </Card>
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
@@ -315,6 +335,19 @@ export function ShareDetailPage() {
                 <tbody>{s.nodes.map((n) => <NodeRow key={n.id} n={n} onOpen={() => setNodeDetail(n)} />)}</tbody>
               </Table>
             )}
+            {!!s.nodes?.length && <div className="mt-4 space-y-2">
+              <p className="text-sm font-medium">节点额度与已计量用量</p>
+              <p className="text-xs text-muted-foreground">沿用分享计费方式与重置日；已有分享从支持此功能的版本升级后开始累计节点用量。</p>
+              {s.nodes.map(n => {
+                const quota = s.targets.find(t => t.server_id === n.server_id)?.quota_bytes?.[n.protocol] ?? 0;
+                const raw = s.node_usage?.[String(n.id)] ?? [0, 0];
+                const used = trafficUsage(undefined, s.billing_mode, { inbound: raw[0], outbound: raw[1], quota });
+                return <div key={n.id} className="rounded-lg border p-3 text-sm">
+                  <div className="flex flex-wrap justify-between gap-2"><span>{n.name}</span><span>{fmtBytes(used.billed)} / {quota > 0 ? fmtBytes(quota) : "不限"}{quota > 0 && used.billed >= quota && <Badge variant="warning" className="ml-2">节点额度用尽</Badge>}</span></div>
+                  {quota > 0 && <Progress className="mt-2" value={used.percent} />}
+                </div>;
+              })}
+            </div>}
             {admin && s.connlog_enabled && <Link to={`/connlog?share_id=${s.id}`} className="mt-3 inline-flex items-center gap-1 text-sm text-primary hover:underline"><ScrollText className="h-4 w-4" /> 查看该分享的连接日志</Link>}
           </CardContent>
         </Card>

@@ -10,6 +10,8 @@
 # runtime data
 /data/
 /deploy/data/
+/deploy/backups/
+/deploy/.compose-upgrade.lock/
 /backups/
 setup-token
 *.key

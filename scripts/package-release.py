@@ -61,6 +61,7 @@ def main():
                 shutil.copy2(ROOT / name, package / name)
             shutil.copytree(ROOT / 'third_party', package / 'third_party')
             shutil.copytree(ROOT / 'docs', package / 'docs')
+            shutil.copytree(ROOT / 'skills', package / 'skills', ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
             (package / 'VERSION').write_text(args.version + '\n')
             (package / 'REPOSITORY').write_text(args.repository + '\n')
             def metadata(info):

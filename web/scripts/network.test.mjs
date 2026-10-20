@@ -6,7 +6,7 @@ test("binding UI checks the public node cipher, not the private server method", 
   const node = { core: "singbox", protocol: "ss", params: { cipher: "2022-blake3-aes-128-gcm" } };
   assert.equal(canBindNodeNetwork(node), true);
   assert.equal(canBindNodeNetwork({ ...node, params: { method: node.params.cipher } }), false);
-  assert.equal(canBindNodeNetwork({ ...node, params: { cipher: "2022-blake3-aes-256-gcm" } }), false);
+  assert.equal(canBindNodeNetwork({ ...node, params: { cipher: "2022-blake3-aes-256-gcm" } }), true);
   assert.equal(canBindNodeNetwork({ ...node, core: "snell" }), false);
 });
 

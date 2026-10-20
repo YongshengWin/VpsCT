@@ -126,9 +126,25 @@ restore_previous() {
   [[ -f "$PREVIOUS/VERIFIED-SHA256" && ! -L "$PREVIOUS/VERIFIED-SHA256" ]] || return 1
   "$WORK/backup-tool" check-recovery "$WORK/recovery.json" || return 1
   [[ ! -L "$INSTALL_DIR/data" ]] || return 1
-  rm -rf --one-file-system -- "$INSTALL_DIR/data" || return 1
+  # Authenticate and fully extract the recovery copy before touching live data.
+  # Keep the failed upgrade's data for diagnosis and another recovery attempt.
   "$WORK/backup-tool" backup open /etc/ctlvps/secrets.key "$BACKUP/data.tar.gz.enc" "$WORK/restore.tar.gz" || return 1
-  tar -xzf "$WORK/restore.tar.gz" -C "$INSTALL_DIR" || return 1
+  local restore_dir
+  restore_dir=$(mktemp -d "$INSTALL_DIR/.restore.XXXXXXXX") || return 1
+  if ! tar -xzf "$WORK/restore.tar.gz" -C "$restore_dir" || [[ ! -d "$restore_dir/data" || -L "$restore_dir/data" ]]; then
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  if [[ -e "$BACKUP/failed-upgrade-data" ]] || ! mv -- "$INSTALL_DIR/data" "$BACKUP/failed-upgrade-data"; then
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  if ! mv -- "$restore_dir/data" "$INSTALL_DIR/data"; then
+    mv -- "$BACKUP/failed-upgrade-data" "$INSTALL_DIR/data" || true
+    rm -rf --one-file-system -- "$restore_dir"
+    return 1
+  fi
+  rm -rf --one-file-system -- "$restore_dir"
   cp -- "$BACKUP/ctlvpsd.env" "$ENV_FILE" || return 1
   if ! grep -q "^CTLVPS_SECRETS_KEY_FILE=" "$ENV_FILE"; then printf "\nCTLVPS_SECRETS_KEY_FILE=/etc/ctlvps/secrets.key\n" >> "$ENV_FILE"; fi
   cp -- "$BACKUP/ctlvpsd.service" "$SERVICE_FILE" || return 1
@@ -140,7 +156,7 @@ restore_previous() {
   systemctl start ctlvpsd || return 1
   local attempt
   for ((attempt = 0; attempt < 30; attempt++)); do
-    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 2 "http://$LISTEN/healthz" > /dev/null; then
+    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 6 "http://$LISTEN/healthz?ready=1" > /dev/null; then
       if [[ -f "$BACKUP/ctlvps-maintenance.service" ]]; then systemctl restart ctlvps-maintenance || return 1; fi
       return 0
     fi
@@ -434,7 +450,7 @@ EOF
   # --now does not restart an already active service; upgrades were stopped above.
   local ready=0 attempt
   for ((attempt = 0; attempt < 30; attempt++)); do
-    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 2 "http://$LISTEN/healthz" > /dev/null; then
+    if systemctl is-active --quiet ctlvpsd && curl --noproxy '*' --fail --silent --max-time 6 "http://$LISTEN/healthz?ready=1" > /dev/null; then
       ready=1; break
     fi
     sleep 1

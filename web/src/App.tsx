@@ -18,6 +18,8 @@ import { ConnlogPage } from "@/pages/connlog";
 import { UsersPage } from "@/pages/users";
 import { SettingsPage } from "@/pages/settings";
 import { AccountPage } from "@/pages/account";
+import { ManualPage } from "@/pages/manual";
+import { AIPage } from "@/pages/ai";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -135,6 +137,8 @@ export default function App() {
                 <Route path="templates" element={<RequireAuth admin><TemplatesPage /></RequireAuth>} />
                 <Route path="connlog" element={<RequireAuth admin><ConnlogPage /></RequireAuth>} />
                 <Route path="account" element={<AccountPage />} />
+                <Route path="ai" element={<AIPage />} />
+                <Route path="manual" element={<ManualPage />} />
                 <Route path="users" element={<RequireAuth admin><UsersPage /></RequireAuth>} />
                 <Route path="settings" element={<RequireAuth admin><SettingsPage /></RequireAuth>} />
                 <Route path="*" element={<Navigate to="/" replace />} />

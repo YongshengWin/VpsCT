@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/maintenance"
 )
 
 type agentBinMeta struct {
@@ -101,9 +102,10 @@ func (a *API) agentUpdateSpec(arch string) *agentproto.AgentUpdateSpec {
 		return nil
 	}
 	return &agentproto.AgentUpdateSpec{
-		SHA256: meta.SHA256,
-		URL:    "/dl/agent/linux-" + normalizeAgentArch(arch),
-		Size:   meta.Size,
+		Version: maintenance.CanonicalReleaseVersion(a.Config.Version),
+		SHA256:  meta.SHA256,
+		URL:     "/dl/agent/linux-" + normalizeAgentArch(arch) + "?sha256=" + meta.SHA256,
+		Size:    meta.Size,
 	}
 }
 

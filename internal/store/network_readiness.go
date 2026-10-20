@@ -29,6 +29,8 @@ type NetworkReadinessCheck struct {
 // Readiness describes admission from the controller's current observation. It
 // never replaces the agent's fresh local checks, guard leases or apply receipt.
 type NetworkReadiness struct {
+	ProxyInboundVersion     int                     `json:"proxy_inbound_version,omitempty"`
+	ForwardUDPVersion       int                     `json:"forward_udp_version,omitempty"`
 	Impact                  *NetworkImpact          `json:"impact,omitempty"`
 	ServerID                int64                   `json:"server_id"`
 	Architecture            string                  `json:"architecture"`
@@ -98,12 +100,14 @@ func (s *Store) networkReadinessForCore(ctx context.Context, q querier, serverID
 	diagnosticsValid := json.Unmarshal(a.Diagnostics, &diag) == nil && agentproto.ValidateNetworkDiagnostics(diag) == nil
 	if diagnosticsValid {
 		v.EgressVersion = diag.NetworkEgressVersion
+		v.ProxyInboundVersion = diag.NetworkProxyInboundVersion
 		v.SSHVersion = diag.NetworkSSHVersion
 		v.WireGuardVersion = diag.NetworkWireGuardVersion
 		v.ForwardVersion = diag.NetworkForwardVersion
 		v.ForwardDNSVersion = diag.ForwardDNSVersion
 		v.ForwardPrivateVersion = diag.ForwardPrivateVersion
 		v.ForwardTransportVersion = diag.ForwardTransportVersion
+		v.ForwardUDPVersion = diag.ForwardUDPVersion
 		state.forwardGrants = diag.ForwardGrants
 		v.TransportVersion = diag.NetworkTransportVersion
 		state.grants = diag.TransportGrants
@@ -152,7 +156,7 @@ func (s *Store) networkReadinessForCore(ctx context.Context, q querier, serverID
 		v.check("forward_protocol", diagnosticsValid && diag.NetworkForwardVersion == agentproto.NetworkForwardVersion, "存在固定转发或清理任务，需要兼容 agent 执行网络变更")
 	}
 	v.check("local_policy", diagnosticsValid && diag.SecurityVersion >= 1 && diag.SecurityPolicy && !diag.SecurityPaused && diag.NetworkConfigureAllowed, "本机安全策略必须允许 agent 配置且未暂停变更")
-	v.check("systemd", diagnosticsValid && diag.Systemd, "需要 systemd 管理代理进程")
+	v.check("systemd", diagnosticsValid && diag.Systemd, "需要可用的代理服务管理器")
 	v.check("nftables", diagnosticsValid && diag.Nftables, "需要 nftables 执行计量和出口保护")
 	v.check("metering", diagnosticsValid && diag.NetworkBindingVersion == agentproto.NetworkBindingVersion && diag.MeteringError == "", "节点计量必须可用")
 	v.check("network_guard", diagnosticsValid && diag.NetworkBindingVersion == agentproto.NetworkBindingVersion && diag.NetworkGuardError == "", "本机网络保护任务必须正常")
@@ -273,7 +277,10 @@ func (s *Store) previewNodeNetworkForEgress(ctx context.Context, q querier, n do
 			}
 			direct = &cfg
 		case "socks5", "ssh", "wireguard", "ss2022":
-			v.check("transport_inbound", agentproto.SOCKS5BindingSupported(spec, v.PinnedCoreVersion), "经中转出口的入口目前需要 SS-2022 AES-128")
+			v.check("transport_inbound", agentproto.SOCKS5BindingSupported(spec, v.PinnedCoreVersion), "所选入口需支持 sing-box 出口绑定")
+			if !agentproto.LegacyProxyInbound(spec) {
+				v.check("proxy_inbound_agent", v.ProxyInboundVersion == agentproto.NetworkProxyInboundVersion, "请先升级入口 agent，以支持 VLESS 等代理节点绑定中转出口")
+			}
 			if p.Kind == "ss2022" {
 				v.check("ss2022_core", corecompat.SS2022Outbound(v.PinnedCoreVersion), corecompat.SS2022Requirement)
 			}

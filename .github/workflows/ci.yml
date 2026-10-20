@@ -118,3 +118,81 @@ jobs:
           for scenario in transit-ss2022 forward subscriptions; do
             NETWORK_SYSTEMD_CASE="$scenario" bash scripts/test-network-systemd-container.sh
           done
+      - name: Historical web upgrade and unchanged subscription traffic
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/fetch-upgrade-fixture.sh v0.1.5 "$RUNNER_TEMP/web-upgrade-legacy"
+          make release VERSION=v0.1.999-upgrade-ci REPOSITORY=YongshengWin/VpsCT
+          bash scripts/test-web-upgrade-container.sh release/v0.1.999-upgrade-ci "$RUNNER_TEMP/web-upgrade-legacy"
+  compatibility:
+    name: Compatibility (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 65
+    env:
+      FIXTURE_ARCH: ${{ matrix.arch }}
+      NETWORK_TEST_ARCH: ${{ matrix.arch }}
+      ALPINE_TEST_ARCH: ${{ matrix.arch }}
+      ISSUE_TEST_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build embedded frontend
+        run: cd web && npm ci --no-audit --no-fund && npm run build
+      - name: Native systemd, cgroup, nftables and seccomp regressions
+        run: bash scripts/test-issue-regressions-container.sh
+      - name: Native Alpine first install and terminal update
+        run: bash scripts/test-alpine-installer-container.sh
+      - name: Verify official tunnel and Alpine test fixtures
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch-network-test-fixtures.py "$RUNNER_TEMP/issue-fixtures" --arch "$FIXTURE_ARCH"
+      - name: Native multihomed, SSH and WireGuard lifecycle
+        env:
+          NETWORK_TEST_CLIENT: shadowsocks-rust
+        run: |
+          export SINGBOX_BIN="$RUNNER_TEMP/issue-fixtures/sing-box"
+          export SSLOCAL_BIN="$RUNNER_TEMP/issue-fixtures/sslocal"
+          for scenario in direct ssh wireguard; do
+            NETWORK_SYSTEMD_CASE="$scenario" bash scripts/test-network-systemd-container.sh
+          done
+      - name: Native Alpine services, accounting and maintenance
+        run: |
+          export SINGBOX_MUSL_BIN="$RUNNER_TEMP/issue-fixtures/sing-box-musl"
+          export MITA_BIN="$RUNNER_TEMP/issue-fixtures/mita"
+          export MIERU_BIN="$RUNNER_TEMP/issue-fixtures/mieru"
+          ALPINE_TEST_MEMORY='256m 512m' bash scripts/test-alpine-container.sh
+          ALPINE_TEST_CASE=mita ALPINE_TEST_MEMORY=512m bash scripts/test-alpine-container.sh
+          ALPINE_TEST_CASE=udp ALPINE_TEST_MEMORY=512m bash scripts/test-alpine-container.sh
+          MAINTENANCE_INIT=openrc bash scripts/test-maintenance-container.sh
+          MAINTENANCE_INIT=openrc ALPINE_TEST_PURGE=1 bash scripts/test-maintenance-container.sh
+      - name: Native UDP forwarding lifecycle and proxy exits
+        run: |
+          export SINGBOX_BIN="$RUNNER_TEMP/issue-fixtures/sing-box"
+          for scenario in forward-udp forward-both forward-udp6 forward-socks-udp forward-wireguard-udp; do
+            NETWORK_SYSTEMD_CASE="$scenario" bash scripts/test-network-systemd-container.sh
+          done
+      - name: Native UDP capacity and ten-minute soak
+        env:
+          UDP_STRESS_SECONDS: '600'
+          NETWORK_SYSTEMD_CASE: forward-stress
+        run: |
+          export SINGBOX_BIN="$RUNNER_TEMP/issue-fixtures/sing-box"
+          bash scripts/test-network-systemd-container.sh

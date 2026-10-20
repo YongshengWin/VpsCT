@@ -11,9 +11,13 @@ import (
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/openrc"
 )
 
 func (a *Agent) maintenanceSupported() bool {
+	if openrc.Enabled() && openrc.Verify("ctlvps-agent.service") != nil {
+		return false
+	}
 	u, err := url.Parse(a.State.ServerURL)
 	return !a.HoldUpdates && maintenance.Supported() && a.StateDir == "/var/lib/ctlvps-agent" && executablePath() == "/usr/local/bin/ctlvps-agent" && err == nil && u.Scheme == "https" && u.User == nil
 }
@@ -33,7 +37,7 @@ func (a *Agent) maintain(ctx context.Context, c agentproto.MaintenanceCommand) e
 	}
 	spec := maintenance.Spec{Request: c.Request, SHA256: c.SHA256, CallbackURL: strings.TrimRight(a.State.ServerURL, "/") + path + "/report", CallbackToken: c.ReportToken}
 	if c.Request.Action == "update" {
-		spec.DownloadURL = strings.TrimRight(a.State.ServerURL, "/") + "/dl/agent/linux-" + runtime.GOARCH
+		spec.DownloadURL = strings.TrimRight(a.State.ServerURL, "/") + "/dl/agent/linux-" + runtime.GOARCH + "?sha256=" + url.QueryEscape(c.SHA256)
 	}
 	m := maintenance.NewManager()
 	j, err := m.Start(spec)
@@ -44,7 +48,7 @@ func (a *Agent) maintain(ctx context.Context, c agentproto.MaintenanceCommand) e
 	}
 	if err != nil {
 		if j.ID == "" {
-			j = maintenance.Job{Request: c.Request, Status: "failed", Stage: "dispatch", Message: "无法启动维护任务，请检查本机是否已有任务运行及 systemd 日志", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+			j = maintenance.Job{Request: c.Request, Status: "failed", Stage: "dispatch", Message: "无法启动维护任务，请检查本机是否已有任务运行及 本机维护日志", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
 		}
 		_ = client.do(ctx, "POST", path+"/report", j, nil, false)
 		return err

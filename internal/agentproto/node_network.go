@@ -15,6 +15,8 @@ const NetworkBindingVersion = networkconfig.BindingVersion
 // sufficient: the executable may have been replaced since the last heartbeat.
 const NetworkBindingHeader = networkconfig.BindingHeader
 
+const NetworkProxyInboundVersion = 1
+
 const NetworkEgressVersion = networkconfig.EgressVersion
 const NetworkEgressHeader = networkconfig.EgressHeader
 const NetworkWireGuardVersion = networkconfig.WireGuardVersion
@@ -26,6 +28,34 @@ const NetworkSSHHeader = networkconfig.SSHHeader
 const NetworkTransportVersion = 1
 
 func ValidateNetworkDiagnostics(d Diagnostics) error {
+	if s := d.ForwardUDP; s != nil {
+		switch s.State {
+		case "inactive", "starting", "healthy", "degraded", "paused":
+		default:
+			return errors.New("UDP 运行状态无效")
+		}
+		if s.Code != "" && s.Code != "udp_core_unavailable" && s.Code != "udp_api_unavailable" && s.Code != "udp_conntrack_unavailable" && s.Code != "udp_guard_unavailable" || s.Reaped > 1<<53-1 || s.SweepMillis < 0 || s.SweepMillis > 60000 || len(s.Active) > agentbudget.ActiveForwards {
+			return errors.New("UDP 诊断超出边界")
+		}
+		total := 0
+		for id, n := range s.Active {
+			if id < 1 || id > 0xffffff || n < 0 || n > agentbudget.ForwardUDPSessions {
+				return errors.New("UDP 会话统计无效")
+			}
+			total += n
+		}
+		if total > agentbudget.ForwardUDPSessions {
+			return errors.New("UDP 会话统计超过预算")
+		}
+	}
+
+	if d.NetworkProxyInboundVersion < 0 || d.NetworkProxyInboundVersion > NetworkProxyInboundVersion {
+		return errors.New("代理入口出口能力版本无效")
+	}
+
+	if d.ForwardUDPVersion < 0 || d.ForwardUDPVersion > 64 {
+		return errors.New("UDP 会话管理能力版本无效")
+	}
 	if d.ForwardPrivateVersion < 0 || d.ForwardPrivateVersion > 64 || len(d.ForwardGrants) > 0 && d.ForwardPrivateVersion != 1 {
 		return errors.New("私网转发能力诊断无效")
 	}
@@ -236,15 +266,18 @@ func DirectBindingSupported(n NodeSpec, version string) bool {
 	}
 }
 
-// Extend this admission list only with production inbound/transport evidence.
-// In particular, Reality's separate handshake path also needs scoped DNS and
-// destination checks; a working SS inbound must not implicitly qualify it.
+// Transport inbounds keep the same guarded business outbound. Reality's
+// independent handshake additionally requires an agent-local public-IP pin.
 func SOCKS5BindingSupported(n NodeSpec, version string) bool {
-	if !NetworkBindingSupported(n.Core, version) || (n.Protocol != "ss" && n.Protocol != "shadowsocks") {
+	if n.Core != "singbox" || !NetworkBindingSupported(n.Core, version) {
 		return false
 	}
-	method, ok := n.Params["method"]
-	return !ok || method == "" || method == "2022-blake3-aes-128-gcm"
+	switch n.Protocol {
+	case "ss", "shadowsocks", "vless", "trojan", "anytls", "hysteria2", "tuic":
+		return true
+	default:
+		return false
+	}
 }
 
 // Standalone cores expose only listening selection, never a custom dial path.
@@ -253,4 +286,14 @@ func ListenBindingSupported(n NodeSpec, version string) bool {
 }
 func CoreVersionKey(core string) string {
 	return map[string]string{"singbox": "sing-box", "snell": "snell-server", "mieru": "mita"}[core]
+}
+
+// LegacyProxyInbound is the precise admission supported by agents predating
+// NetworkProxyInboundVersion. A newer cipher needs the same explicit upgrade.
+func LegacyProxyInbound(n NodeSpec) bool {
+	if n.Core != "singbox" || (n.Protocol != "ss" && n.Protocol != "shadowsocks") {
+		return false
+	}
+	method, ok := n.Params["method"]
+	return !ok || method == "" || method == "2022-blake3-aes-128-gcm"
 }

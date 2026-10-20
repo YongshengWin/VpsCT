@@ -63,6 +63,21 @@ func (s *Store) ListMaintenance(ctx context.Context, serverID int64) ([]Maintena
 	return out, rows.Err()
 }
 
+// Target history must not be truncated to the 20 rows used by the panel. It
+// remains authoritative after unrelated maintenance records are added.
+func (s *Store) LatestAgentUpdate(ctx context.Context, serverID int64, sha string) (MaintenanceJob, error) {
+	return s.scanMaintenance(s.db.QueryRowContext(ctx, `SELECT server_id,result,status,report_token,report_hash,agent_sha,delete_server FROM maintenance_jobs WHERE server_id=? AND agent_sha=? COLLATE NOCASE AND agent_sha<>'' ORDER BY created_at DESC,rowid DESC LIMIT 1`, serverID, sha))
+}
+
+// Unclaimed expirations and superseded targets did not mutate the remote host
+// and do not spend the retry budget. A confirmed installation starts a new
+// budget if a later heartbeat shows that the running binary has changed again.
+func (s *Store) AgentUpdateAttempts(ctx context.Context, serverID int64, sha string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM maintenance_jobs WHERE server_id=? AND agent_sha=? COLLATE NOCASE AND status NOT IN ('expired','cancelled') AND rowid>COALESCE((SELECT MAX(rowid) FROM maintenance_jobs WHERE server_id=? AND agent_sha=? COLLATE NOCASE AND status='succeeded'),0)`, serverID, sha, serverID, sha).Scan(&count)
+	return count, err
+}
+
 // SaveMaintenance is a compare-and-swap: terminal reports, expiry and claims
 // cannot resurrect or overwrite a job in a different state.
 func (s *Store) SaveMaintenance(ctx context.Context, j MaintenanceJob, previous string) error {

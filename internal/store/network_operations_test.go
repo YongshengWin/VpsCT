@@ -23,6 +23,8 @@ func TestNetworkRequestIsAtomicAuditedAndIdempotent(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	in := operationFixture(t, s)
+	initialNode, _ := s.GetNode(ctx, in.NodeID)
+	initialGeneration, _ := s.NetworkGeneration(ctx, *initialNode.ServerID)
 	if _, err := s.db.Exec(`CREATE TRIGGER fixture_audit_failure BEFORE INSERT ON audit_log WHEN NEW.action='node.network.request' BEGIN SELECT RAISE(ABORT,'fixture'); END`); err != nil {
 		t.Fatal(err)
 	}
@@ -33,14 +35,14 @@ func TestNetworkRequestIsAtomicAuditedAndIdempotent(t *testing.T) {
 	if err != nil || n.Network != nil || n.NetworkRevision != 0 {
 		t.Fatal("failed transaction changed the node", err)
 	}
-	if gen, err := s.NetworkGeneration(ctx, *n.ServerID); err != nil || gen != 0 {
+	if gen, err := s.NetworkGeneration(ctx, *n.ServerID); err != nil || gen != initialGeneration {
 		t.Fatal("failed transaction advanced generation", gen, err)
 	}
 	if _, err := s.db.Exec(`DROP TRIGGER fixture_audit_failure`); err != nil {
 		t.Fatal(err)
 	}
 	op, err := s.RequestNodeNetwork(ctx, in, domain.AuditEvent{})
-	if err != nil || op.Status != "queued" || op.ResourceRevision != 1 || op.Generation != 1 || op.DesiredRevision != 0 {
+	if err != nil || op.Status != "queued" || op.ResourceRevision != 1 || op.Generation != initialGeneration+1 || op.DesiredRevision != 0 {
 		t.Fatal(op, err)
 	}
 	retry, err := s.RequestNodeNetwork(ctx, in, domain.AuditEvent{})
@@ -270,7 +272,7 @@ func TestConcurrentNetworkRequestCreatesOneIntent(t *testing.T) {
 		}
 	}
 	op, err := s.RequestNodeNetwork(ctx, in, domain.AuditEvent{})
-	if err != nil || op.ResourceRevision != 1 || op.Generation != 1 {
+	if err != nil || op.ResourceRevision != 1 || op.Generation != 3 {
 		t.Fatal("concurrent duplicate changed policy twice", op, err)
 	}
 	var count int
@@ -347,9 +349,12 @@ func TestNetworkGenerationBracketsLegacyDesiredInputsWithoutHeartbeatChurn(t *te
 	assertChanged(`UPDATE nodes SET share_id=100 WHERE id=?`, in.NodeID)
 	assertChanged(`UPDATE shares SET status='paused' WHERE id=100`)
 	assertChanged(`UPDATE shares SET connlog_enabled=1 WHERE id=100`)
+	// This fixture deliberately advertises an override. Changing that endpoint
+	// is a client configuration mutation, unlike an inherited IP observation.
+	assertChanged(`UPDATE nodes SET server='override.example.test' WHERE id=?`, in.NodeID)
 	for _, query := range []string{
 		`UPDATE shares SET used_upload=used_upload+1 WHERE id=100`,
-		`UPDATE nodes SET server='observation.example.test',updated_at='observation'`,
+		`UPDATE nodes SET updated_at='observation'`,
 		`UPDATE servers SET notes='observation',quota_bytes=1000`,
 		`INSERT INTO settings(key,value) VALUES('unrelated.fixture','value')`,
 	} {
@@ -363,12 +368,14 @@ func TestNetworkGenerationBracketsLegacyDesiredInputsWithoutHeartbeatChurn(t *te
 	if _, _, err := s.PublishDesired(ctx, 0, operationCandidate(op), false); !errors.Is(err, ErrDesiredConflict) {
 		t.Fatal("old candidate restored revoked credentials", err)
 	}
-	// Servers that never opted in retain their legacy wire/hash contract.
+	// Ordinary servers also persist publication intent without enabling network
+	// binding capabilities or adding a node network policy.
 	legacy, _, _ := egressFixture(t, s)
+	beforeLegacy, _ := s.NetworkGeneration(ctx, legacy.ID)
 	if _, err = s.db.Exec(`UPDATE servers SET ipv4_only=1 WHERE id=?`, legacy.ID); err != nil {
 		t.Fatal(err)
 	}
-	if gen, err := s.NetworkGeneration(ctx, legacy.ID); err != nil || gen != 0 {
-		t.Fatal("ordinary legacy update opted a server into networking", gen, err)
+	if gen, err := s.NetworkGeneration(ctx, legacy.ID); err != nil || gen != beforeLegacy+1 {
+		t.Fatal("ordinary update lost durable publication intent", gen, err)
 	}
 }

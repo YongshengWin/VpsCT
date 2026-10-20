@@ -7,9 +7,12 @@ import (
 )
 
 // nft JSON hides xt_multiport's ports. Read the compatibility frontend without
-// changing it, and cross-check the two views. Only this exact port-scoped jump
-// shape is understood; unknown matches/actions and default-drop remain errors.
+// changing it, and cross-check the two views. Native expressions use the
+// destination-port proof below; opaque xt rules retain the strict jump shape.
 func compatInputDisjoint(c *ingressEntry, rules []*ingressEntry, ports map[string]map[int]bool, listing string) bool {
+	if c.Policy == "accept" && (c.Family == "inet" || c.Family == "ip" || c.Family == "ip6") && chainDestinationPortsDisjoint(rules, ports) {
+		return true
+	}
 	if (c.Family != "ip" && c.Family != "ip6") || c.Table != "filter" || c.Name != "INPUT" || c.Policy != "accept" || listing == "" {
 		return false
 	}
@@ -80,4 +83,119 @@ func compatInputDisjoint(c *ingressEntry, rules []*ingressEntry, ports map[strin
 		}
 	}
 	return true
+}
+
+// Only read-only matches and counters may precede the proven destination-port
+// restriction. Source ports describe the remote client and prove nothing about
+// the local listener. Unknown expressions fail closed, even after the match.
+func chainDestinationPortsDisjoint(rules []*ingressEntry, ports map[string]map[int]bool) bool {
+	if len(rules) == 0 {
+		return false
+	}
+	for _, rule := range rules {
+		proven, verdict := false, false
+		for _, expression := range rule.Expr {
+			if len(expression) != 1 || verdict {
+				return false
+			}
+			for kind, raw := range expression {
+				switch kind {
+				case "match":
+					var match struct {
+						Op    string                     `json:"op"`
+						Left  map[string]json.RawMessage `json:"left"`
+						Right json.RawMessage            `json:"right"`
+					}
+					if json.Unmarshal(raw, &match) != nil || len(match.Left) != 1 || len(match.Right) == 0 || match.Op != "==" {
+						return false
+					}
+					if payload, ok := match.Left["payload"]; ok {
+						var p struct {
+							Protocol string `json:"protocol"`
+							Field    string `json:"field"`
+						}
+						if json.Unmarshal(payload, &p) != nil {
+							return false
+						}
+						switch {
+						case (p.Protocol == "tcp" || p.Protocol == "udp") && p.Field == "dport":
+							if destinationSetDisjoint(match.Right, ports[p.Protocol]) {
+								proven = true
+							} else {
+								return false
+							}
+						case (p.Protocol == "ip" || p.Protocol == "ip6") && (p.Field == "saddr" || p.Field == "daddr"):
+							// Additional address predicates can only narrow the rule.
+						default:
+							return false
+						}
+					} else if meta, ok := match.Left["meta"]; ok {
+						var m struct {
+							Key string `json:"key"`
+						}
+						var proto string
+						if json.Unmarshal(meta, &m) != nil || m.Key != "l4proto" || json.Unmarshal(match.Right, &proto) != nil || (proto != "tcp" && proto != "udp") {
+							return false
+						}
+					} else {
+						return false
+					}
+				case "counter":
+				case "accept", "drop", "reject", "jump", "goto", "return":
+					if !proven {
+						return false
+					}
+					verdict = true
+				default:
+					return false
+				}
+			}
+		}
+		if !proven || !verdict {
+			return false
+		}
+	}
+	return true
+}
+
+func destinationSetDisjoint(raw json.RawMessage, ports map[int]bool) bool {
+	if n, err := strconv.Atoi(string(raw)); err == nil {
+		return n >= 1 && n <= 65535 && !ports[n]
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(raw, &object) != nil || len(object) != 1 {
+		return false
+	}
+	if value, ok := object["range"]; ok {
+		var bounds []int
+		if json.Unmarshal(value, &bounds) != nil || len(bounds) != 2 || bounds[0] < 1 || bounds[1] > 65535 || bounds[0] > bounds[1] {
+			return false
+		}
+		for p := range ports {
+			if p >= bounds[0] && p <= bounds[1] {
+				return false
+			}
+		}
+		return true
+	}
+	if value, ok := object["set"]; ok {
+		var members []json.RawMessage
+		if json.Unmarshal(value, &members) != nil || len(members) == 0 {
+			return false
+		}
+		for _, member := range members {
+			// nft inline sets contain port numbers or ranges, not nested sets.
+			var nested map[string]json.RawMessage
+			if json.Unmarshal(member, &nested) == nil {
+				if _, ok := nested["range"]; !ok {
+					return false
+				}
+			}
+			if !destinationSetDisjoint(member, ports) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

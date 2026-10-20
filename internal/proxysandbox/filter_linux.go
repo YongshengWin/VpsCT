@@ -14,6 +14,16 @@ import (
 // Install synchronizes the filter across Go runtime threads before exec.
 // Architecture checking also rejects compat socketcall/x32 bypasses.
 func Install() error {
+	return install(false)
+}
+
+// InstallGuard keeps the watchdog's service RPC and nft netlink access while
+// preserving its systemd restriction against Internet and other socket families.
+func InstallGuard() error {
+	return install(true)
+}
+
+func install(guard bool) error {
 	var arch uint32
 	switch runtime.GOARCH {
 	case "amd64":
@@ -36,12 +46,34 @@ func Install() error {
 		jeq(uint32(unix.SYS_IO_URING_SETUP), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
 		jeq(uint32(unix.SYS_IO_URING_ENTER), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
 		jeq(uint32(unix.SYS_IO_URING_REGISTER), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
+		// OpenRC supplies the mount sandbox directly. Prevent the untrusted
+		// process from creating or joining another namespace after launch.
+		jeq(uint32(unix.SYS_UNSHARE), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
+		jeq(uint32(unix.SYS_SETNS), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
+		// clone3 carries flags behind a pointer which classic seccomp cannot
+		// inspect. ENOSYS lets libc use clone for ordinary thread creation.
+		jeq(uint32(unix.SYS_CLONE3), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.ENOSYS)),
+		jeq(uint32(unix.SYS_CLONE), 0, 3), ld(16),
+		{Code: unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K, K: unix.CLONE_NEWCGROUP | unix.CLONE_NEWIPC | unix.CLONE_NEWNET | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWUSER | unix.CLONE_NEWUTS, Jt: 0, Jf: 1}, ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
+		ld(0),
+		jeq(uint32(unix.SYS_PERSONALITY), 0, 1), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
 		// x32 is not a supported ABI even though it uses AUDIT_ARCH_X86_64.
 		{Code: unix.BPF_JMP | unix.BPF_JSET | unix.BPF_K, K: 0x40000000, Jt: 0, Jf: 1}, ret(unix.SECCOMP_RET_KILL_PROCESS),
-		jeq(uint32(unix.SYS_SOCKET), 0, 7),
-		ld(16), jeq(unix.AF_PACKET, 6, 0), jeq(unix.AF_INET, 1, 0), jeq(unix.AF_INET6, 0, 3),
-		ld(24), {Code: unix.BPF_ALU | unix.BPF_AND | unix.BPF_K, K: 15}, jeq(unix.SOCK_RAW, 1, 0),
-		ret(unix.SECCOMP_RET_ALLOW), ret(unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)),
+	}
+	if guard {
+		f = append(f,
+			jeq(uint32(unix.SYS_SOCKET), 1, 0), jeq(uint32(unix.SYS_SOCKETPAIR), 0, 4),
+			ld(16), jeq(unix.AF_UNIX, 2, 0), jeq(unix.AF_NETLINK, 1, 0),
+			ret(unix.SECCOMP_RET_ERRNO|uint32(unix.EPERM)), ret(unix.SECCOMP_RET_ALLOW),
+		)
+	} else {
+		f = append(f,
+			jeq(uint32(unix.SYS_SOCKET), 1, 0), jeq(uint32(unix.SYS_SOCKETPAIR), 0, 9),
+			ld(16), jeq(unix.AF_UNIX, 7, 0), jeq(unix.AF_NETLINK, 6, 0), jeq(unix.AF_INET, 2, 0), jeq(unix.AF_INET6, 1, 0),
+			ret(unix.SECCOMP_RET_ERRNO|uint32(unix.EPERM)),
+			ld(24), unix.SockFilter{Code: unix.BPF_ALU | unix.BPF_AND | unix.BPF_K, K: 15}, jeq(unix.SOCK_RAW, 1, 0),
+			ret(unix.SECCOMP_RET_ALLOW), ret(unix.SECCOMP_RET_ERRNO|uint32(unix.EPERM)),
+		)
 	}
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		return err
@@ -61,7 +93,7 @@ func Install() error {
 func launch(bin string, args []string) error {
 	runtime.LockOSThread()
 	if err := Install(); err != nil {
-		return err
+		return fmt.Errorf("[proxy_sandbox_unavailable] seccomp unavailable in this kernel or runtime: %w", err)
 	}
 	// Probe the exact operation required by routing_mark, including on old kernels.
 	if bin == "/opt/ctlvps/bin/sing-box" {
@@ -72,7 +104,7 @@ func launch(bin string, args []string) error {
 		err = unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_MARK, 0x43000001)
 		unix.Close(fd)
 		if err != nil {
-			return fmt.Errorf("SO_MARK without NET_ADMIN unavailable: %w", err)
+			return fmt.Errorf("[proxy_mark_unavailable] SO_MARK with CAP_NET_RAW unavailable; check host kernel and container capabilities: %w", err)
 		}
 	}
 	env := []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C", "HOME=/nonexistent", "GOMEMLIMIT=" + os.Getenv("GOMEMLIMIT")}

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/natconfig"
 	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/wgconfig"
 )
@@ -32,6 +33,8 @@ type Options struct {
 	Domain         string // TLS domain when cert mode is acme/external; empty = public host
 	Obfs           bool   // hysteria2 salamander
 	SnellVersion   int
+	SSMethod       string
+	SSNetwork      string // empty/both = TCP+UDP; tcp = TCP only
 	MieruTransport string
 	CertID         string
 	CertMode       string // inherit server when empty
@@ -52,6 +55,49 @@ func AllocatePort(used map[int]bool) (int, error) {
 		}
 	}
 	return 0, errors.New("no free port")
+}
+
+// AllocateNodePort keeps legacy allocation on ordinary hosts, but a NAT host
+// uses only its confirmed provider pool with every required transport present.
+func AllocateNodePort(used map[int]bool, config *natconfig.Config, protocol string, params map[string]any) (int, error) {
+	if config == nil {
+		return AllocatePort(used)
+	}
+	if protocol == "mieru" && (params == nil || params["transport"] == nil || params["transport"] == "") {
+		params = map[string]any{"transport": "TCP"}
+	}
+	networks, err := natconfig.ProtocolNetworks(protocol, params)
+	if err != nil {
+		return 0, err
+	}
+	pools, err := config.Pools()
+	if err != nil {
+		return 0, err
+	}
+	key := networks[0]
+	if len(networks) > 1 {
+		key = "both"
+	}
+	pairs, err := config.Expand()
+	if err != nil {
+		return 0, err
+	}
+	blocked := map[int]bool{}
+	for _, p := range pairs {
+		if p.PublicPort != p.LocalPort {
+			blocked[p.LocalPort] = true
+		}
+	}
+	available := []int{}
+	for _, port := range pools[key] {
+		if !used[port] && !blocked[port] && (protocol != "mieru" || port >= 1025) {
+			available = append(available, port)
+		}
+	}
+	if len(available) == 0 {
+		return 0, errors.New("商家 NAT 映射中没有支持该协议的可用公网端口")
+	}
+	return available[mrand.IntN(len(available))], nil
 }
 
 // UUID returns a random v4 UUID string.
@@ -237,12 +283,32 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 		}
 		srv["password"] = pw
 	case domain.ProtocolShadowsocks:
-		key := SS2022Key(16)
-		client["cipher"] = "2022-blake3-aes-128-gcm"
+		method := opts.SSMethod
+		if method == "" {
+			method = "2022-blake3-aes-128-gcm"
+		}
+		var key string
+		switch method {
+		case "2022-blake3-aes-128-gcm":
+			key = SS2022Key(16)
+		case "2022-blake3-aes-256-gcm":
+			key = SS2022Key(32)
+		case "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305":
+			key = Password(32)
+		default:
+			return domain.Node{}, errors.New("不支持的 Shadowsocks 加密方式")
+		}
+		if opts.SSNetwork != "" && opts.SSNetwork != "both" && opts.SSNetwork != "tcp" {
+			return domain.Node{}, errors.New("Shadowsocks 传输只支持 tcp 或 both")
+		}
+		client["cipher"] = method
 		client["password"] = key
-		client["udp"] = true
-		srv["method"] = "2022-blake3-aes-128-gcm"
+		client["udp"] = opts.SSNetwork != "tcp"
+		srv["method"] = method
 		srv["password"] = key
+		if opts.SSNetwork == "tcp" {
+			srv["network"] = "tcp"
+		}
 		delete(srv, "cert_mode")
 		delete(srv, "tls_domain")
 	case domain.ProtocolWireGuard:
@@ -314,6 +380,10 @@ func RegenerateCredentials(n *domain.Node, server domain.Server) error {
 	var oldSrv map[string]any
 	_ = json.Unmarshal(n.ServerParams, &oldSrv)
 	opts := Options{Name: n.Name, Protocol: n.Protocol, Port: n.ListenPort, CertMode: fmt.Sprint(oldSrv["cert_mode"])}
+	if n.Protocol == domain.ProtocolShadowsocks {
+		opts.SSMethod, _ = oldSrv["method"].(string)
+		opts.SSNetwork, _ = oldSrv["network"].(string)
+	}
 	if transport, ok := oldSrv["transport"].(string); ok {
 		opts.MieruTransport = transport
 	}

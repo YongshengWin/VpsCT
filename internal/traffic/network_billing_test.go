@@ -2,6 +2,7 @@ package traffic_test
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,108 @@ import (
 	"ctlvps/internal/store"
 	"ctlvps/internal/traffic"
 )
+
+func TestInterfaceCumulativeOverflowAcrossPeriodsRollsBackCutover(t *testing.T) {
+	ctx := context.Background()
+	st, ing, server, _, _, now := accurateLedgerFixture(t, 0, 0)
+	q := int64(math.MaxInt64 / 4)
+	hb := agentproto.Heartbeat{TS: *now, Epoch: "boot", Metrics: agentproto.Metrics{NetRx: q, NetTx: q}}
+	if _, err := ing.Ingest(ctx, server, hb); err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{strings.Repeat("a", 32), strings.Repeat("e", 32)}
+	policy, err := st.RequestNetworkBilling(ctx, server.ID, 0, agentproto.NetworkBillingPolicy{Mode: "interfaces", InterfaceIDs: ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := &agentproto.NetworkSnapshot{Version: 1, CollectorID: strings.Repeat("b", 32), BootID: "boot", Sequence: 1, SampledAt: *now, Status: "ok", Interfaces: []agentproto.NetworkInterface{
+		{ID: ids[0], Generation: strings.Repeat("c", 32), Name: "eth0", Index: 2, Kind: "physical", CountersValid: true},
+		{ID: ids[1], Generation: strings.Repeat("c", 32), Name: "eth1", Index: 3, Kind: "physical", CountersValid: true},
+	}}
+	sw := &agentproto.NetworkBillingSwitch{ID: strings.Repeat("d", 32), Next: policy, TS: *now, Legacy: agentproto.LegacyNetworkCounters{Epoch: "boot", Rx: q, Tx: q}, Snapshot: snapshot}
+	if result, err := ing.Ingest(ctx, server, agentproto.Heartbeat{NetworkBillingSwitch: sw}); err != nil || result.NetworkBillingAck != sw.ID {
+		t.Fatal(result, err)
+	}
+	next := *snapshot
+	next.Interfaces = append([]agentproto.NetworkInterface(nil), snapshot.Interfaces...)
+	next.Sequence++
+	next.Interfaces[0].Rx, next.Interfaces[0].Tx = q, q
+	hb.TS = now.Add(time.Second)
+	hb.NetworkBillingRevision, hb.Metrics.Network = policy.Revision, &next
+	if _, err := ing.Ingest(ctx, server, hb); err != nil {
+		t.Fatal(err)
+	}
+	// Each period's ledger and each direction remain representable. Only the
+	// chart's continuous cumulative inbound+outbound now exceeds MaxInt64.
+	*now = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	next.Sequence++
+	next.SampledAt = *now
+	next.Interfaces[1].Rx, next.Interfaces[1].Tx = 1, 3
+	legacy, err := st.RequestNetworkBilling(ctx, server.ID, policy.Revision, agentproto.LegacyNetworkBilling())
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := &agentproto.NetworkBillingSwitch{ID: strings.Repeat("f", 32), PreviousRevision: policy.Revision, Next: legacy, TS: *now, Legacy: sw.Legacy, Snapshot: &next}
+	result, err := ing.Ingest(ctx, server, agentproto.Heartbeat{NetworkBillingSwitch: boundary})
+	if err == nil || result.NetworkBillingAck != "" || result.ServerUp != 0 || result.ServerDown != 0 {
+		t.Fatal("overflow committed or exposed a settlement", result, err)
+	}
+	view, err := st.NetworkBilling(ctx, server.ID)
+	if err != nil || view.Current.Revision != policy.Revision {
+		t.Fatal("failed cutover changed active policy", view, err)
+	}
+	var rx, tx, sequence int64
+	if err := st.DB().QueryRow("SELECT rx,tx,sequence FROM network_billing_baselines WHERE server_id=? AND interface_id=?", server.ID, ids[1]).Scan(&rx, &tx, &sequence); err != nil || rx != 0 || tx != 0 || sequence != 2 {
+		t.Fatal("failed sample advanced the interface baseline", rx, tx, sequence, err)
+	}
+	if rx, tx, err := st.SumTraffic(ctx, store.SubjectServer, server.ID, *now, *now); err != nil || rx != 0 || tx != 0 {
+		t.Fatal("failed sample consumed the new period", rx, tx, err)
+	}
+	samples, err := st.ListSamples(ctx, server.ID, nil, now.AddDate(0, -1, 0))
+	if err != nil || len(samples) != 2 {
+		t.Fatal("invalid cumulative sample persisted", len(samples), err)
+	}
+}
+
+func TestLegacyReplaySeedsRequestedBillingWithoutDuplicatingSamples(t *testing.T) {
+	ctx := context.Background()
+	st, ing, server, _, _, now := accurateLedgerFixture(t, 0, 0)
+	id := strings.Repeat("a", 32)
+	snapshot := &agentproto.NetworkSnapshot{Version: 1, CollectorID: strings.Repeat("b", 32), BootID: "boot", Sequence: 1, SampledAt: *now, Status: "ok", Interfaces: []agentproto.NetworkInterface{{ID: id, Generation: strings.Repeat("c", 32), Name: "eth0", Index: 2, Kind: "physical", CountersValid: true, Rx: 500, Tx: 600}}}
+	hb := agentproto.Heartbeat{TS: *now, Epoch: "boot", Metrics: agentproto.Metrics{NetRx: 100, NetTx: 200, Network: snapshot}}
+	if _, err := ing.Ingest(ctx, server, hb); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := st.RequestNetworkBilling(ctx, server.ID, 0, agentproto.NetworkBillingPolicy{Mode: "interfaces", InterfaceIDs: []string{id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ing.Ingest(ctx, server, hb); err != nil {
+		t.Fatal(err)
+	}
+	sw := &agentproto.NetworkBillingSwitch{ID: strings.Repeat("d", 32), Next: policy, TS: *now, Legacy: agentproto.LegacyNetworkCounters{Epoch: "boot", Rx: 100, Tx: 200}, Snapshot: snapshot}
+	for repeat := 0; repeat < 2; repeat++ {
+		result, err := ing.Ingest(ctx, server, agentproto.Heartbeat{NetworkBillingSwitch: sw})
+		if err != nil || result.NetworkBillingAck != sw.ID {
+			t.Fatal("unchanged boundary rejected", result, err)
+		}
+	}
+	next := *snapshot
+	next.Interfaces = append([]agentproto.NetworkInterface(nil), snapshot.Interfaces...)
+	next.Sequence++
+	next.Interfaces[0].Rx, next.Interfaces[0].Tx = 510, 620
+	hb.TS = now.Add(time.Second)
+	hb.NetworkBillingRevision = policy.Revision
+	hb.Metrics.Network = &next
+	if _, err = ing.Ingest(ctx, server, hb); err != nil {
+		t.Fatal(err)
+	}
+	requireAccurateTotals(t, st, store.SubjectServer, server.ID, *now, 10, 20)
+	samples, err := st.ListSamples(ctx, server.ID, nil, now.Add(-time.Hour))
+	if err != nil || len(samples) != 2 || samples[len(samples)-1].RxBytes != 110 || samples[len(samples)-1].TxBytes != 220 {
+		t.Fatal("replay changed chart baseline or duplicated samples", samples, err)
+	}
+}
 
 func TestNetworkBillingCutoverReplayMissingAndReturnToLegacy(t *testing.T) {
 	ctx := context.Background()

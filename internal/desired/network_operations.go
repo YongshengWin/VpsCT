@@ -17,6 +17,21 @@ func (b *Builder) ReconcileNetworkOperations(ctx context.Context) error {
 	if err := b.reconcileTransits(ctx); err != nil {
 		return err
 	}
+	routes, err := b.Store.AccessRoutes(ctx, 0)
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if route.Stage != "retired" {
+			// One failed route must not starve unrelated network publications.
+			if err := b.Store.ReconcileAccessRoute(ctx, route.ID); err != nil {
+				_ = b.Store.AccessRouteReconcileFailed(ctx, route.ID)
+			}
+		}
+	}
 	operations, err := b.Store.PendingNetworkPublications(ctx)
 	if err != nil {
 		return err

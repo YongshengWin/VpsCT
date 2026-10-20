@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/networkguard"
 	"ctlvps/internal/secureupdate"
 )
@@ -289,6 +290,10 @@ func refreshResources(ctx context.Context, token string, snapshot *agentproto.Ne
 		local, localErr := secureupdate.LoadPolicy()
 		for _, b := range p.Network.Bindings {
 			resource := b.Resource()
+			if b.Forward != nil && b.Forward.MaxUDPSessions > 0 && p.Network.UDPVersion != networkconfig.ForwardUDPVersion {
+				delete(ready, resource)
+				bad[resource] = "UDP 健康保护需要重新应用当前配置"
+			}
 			if resource.Kind == "forward" && p.AdmissionStopped {
 				delete(ready, resource)
 				bad[resource] = "连接预算已恢复，等待共享进程重新应用"

@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-labelledby="title desc">
+  <title id="title">VpsCT — 多台 VPS，一个控制台。</title>
+  <desc id="desc">橙色 VpsCT 标志，以及由一个控制端连接多台服务器的示意图。</desc>
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#fffaf5"/><stop offset="1" stop-color="#fff0e5"/></linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#edcdb8" opacity=".5"/></pattern>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%"><feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#a74c17" flood-opacity=".07"/></filter>
+  </defs>
+  <rect width="1280" height="320" rx="24" fill="url(#surface)"/>
+  <rect x="680" width="600" height="320" rx="24" fill="url(#dots)"/>
+  <g transform="translate(64 54)">
+    <rect width="62" height="62" rx="18" fill="#F26E21"/>
+    <path d="M17 20 L31 46 L45 20" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="49" cy="14" r="4.5" fill="#fff" fill-opacity=".85"/>
+  </g>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans CJK SC','Microsoft YaHei',sans-serif">
+    <text x="145" y="102" font-size="54" font-weight="750" letter-spacing="-2" fill="#24272c">Vps<tspan fill="#ed6b22">CT</tspan></text>
+    <text x="64" y="182" font-size="36" font-weight="650" fill="#24272c">多台 VPS，一个控制台。</text>
+    <text x="65" y="226" font-size="19" fill="#7b746f">部署节点 · 组织线路 · 管理订阅 · 分享资源</text>
+    <text x="65" y="276" font-size="12" font-weight="600" letter-spacing="2" fill="#a76e48">SELF-HOSTED / DOCKER / API + SKILL</text>
+    <path d="M892 160 H946 V77 H994 M946 160 H994 M946 160 V243 H994" fill="none" stroke="#efb28b" stroke-width="2"/>
+    <g filter="url(#shadow)">
+      <rect x="724" y="111" width="170" height="98" rx="18" fill="#fff" stroke="#efc9ad"/>
+      <rect x="994" y="45" width="214" height="64" rx="14" fill="#fff" stroke="#f0d9c8"/>
+      <rect x="994" y="128" width="214" height="64" rx="14" fill="#fff" stroke="#f0d9c8"/>
+      <rect x="994" y="211" width="214" height="64" rx="14" fill="#fff" stroke="#f0d9c8"/>
+    </g>
+    <rect x="746" y="133" width="26" height="20" rx="4" fill="#fff0e5" stroke="#ed7a34"/>
+    <path d="M754 158 H764 M759 154 V158" stroke="#ed7a34" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="785" y="151" font-size="16" font-weight="650" fill="#34312e">控制端</text>
+    <text x="746" y="183" font-size="12" fill="#9b8f85">Web 面板 + API</text>
+    <g fill="#34312e" font-size="15" font-weight="600">
+      <text x="1044" y="83">服务器 A</text><text x="1044" y="166">服务器 B</text><text x="1044" y="249">服务器 C</text>
+    </g>
+    <g fill="#19a078"><circle cx="1023" cy="77" r="5"/><circle cx="1023" cy="160" r="5"/><circle cx="1023" cy="243" r="5"/></g>
+    <g font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="10" fill="#b2a89f"><text x="1161" y="81">VPS</text><text x="1161" y="164">VPS</text><text x="1161" y="247">VPS</text></g>
+  </g>
+</svg>

@@ -165,7 +165,7 @@ func (r *bindingRuntime) replace(ctx context.Context, bindings []networkguard.Bi
 		return nil
 	}
 	if r.plan != nil && r.renewDNS != nil {
-		next := networkguard.Plan{Token: r.plan.Token, Bindings: bindings}
+		next := networkguard.Plan{Token: r.plan.Token, Bindings: bindings, UDPVersion: r.plan.UDPVersion}
 		if r.plan.SamePaths(next) && !reflect.DeepEqual(r.plan.Bindings, bindings) {
 			if err := r.renewDNS(ctx, next); err != nil {
 				return err
@@ -360,6 +360,9 @@ func (r *bindingRuntime) prepare(ctx context.Context, ds *agentproto.DesiredStat
 		} else {
 			resolved, err = netinventory.ResolveBinding(n.Network.Policy, n.Network.Direct, snapshot, ds.IPv4Only, time.Now())
 		}
+		if err == nil && n.Network.HasTransport() && n.Protocol == "vless" {
+			resolved.Handshake, err = r.resolveRealityHandshake(dnsContext, n, snapshot, ds.IPv4Only)
+		}
 		if err != nil {
 			if n.Network.HasTransport() {
 				tx.staged[nodeResource(n.NodeID)] = pendingBinding(tx.staged[nodeResource(n.NodeID)])
@@ -398,6 +401,14 @@ func (r *bindingRuntime) prepare(ctx context.Context, ds *agentproto.DesiredStat
 }
 
 func sameResolvedPath(a, b networkconfig.Resolved) bool {
+	if a.Handshake != nil {
+		pin := a.Handshake.WithoutDNSLifetime()
+		a.Handshake = &pin
+	}
+	if b.Handshake != nil {
+		pin := b.Handshake.WithoutDNSLifetime()
+		b.Handshake = &pin
+	}
 	if a.SOCKS5 != nil {
 		pin := a.SOCKS5.WithoutDNSLifetime()
 		a.SOCKS5 = &pin
@@ -516,6 +527,12 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 		}
 	}
 	for _, f := range ds.Forwards {
+		if f.Config.Network != "tcp" {
+			if !f.Blocked && ds.ForwardUDPVersion != networkconfig.ForwardUDPVersion {
+				return errors.New("UDP 固定转发缺少会话管理版本")
+			}
+			a.State.ForwardUDPVersion = networkconfig.ForwardUDPVersion
+		}
 		if f.HasTransport() {
 			a.State.ForwardTransportVersion = 1
 		}

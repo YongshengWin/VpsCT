@@ -109,6 +109,12 @@ func (s *Store) setNodeNetwork(ctx context.Context, q querier, nodeID, expected 
 	if err != nil {
 		return empty, err
 	}
+	n.Network = policy
+	if n.Enabled && !n.Revoked {
+		if err := s.validateNATNode(ctx, q, n); err != nil {
+			return empty, err
+		}
+	}
 	var profileID, profileRevision any
 	if policy != nil && policy.EgressProfileID != 0 {
 		p, err := scanEgress(q.QueryRowContext(ctx, `SELECT `+egressCols+` FROM egress_profiles WHERE id=? AND server_id=?`, policy.EgressProfileID, *n.ServerID))

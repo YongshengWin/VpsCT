@@ -123,11 +123,19 @@ func echo() {
 		go func() {
 			b := make([]byte, 2048)
 			for {
-				_, a, e := u.ReadFrom(b)
+				n, a, e := u.ReadFrom(b)
 				if e != nil {
 					return
 				}
 				_, _ = u.WriteTo([]byte(a.(*net.UDPAddr).IP.String()), a)
+				if string(b[:n]) == "push\n" {
+					go func(peer net.Addr) {
+						for i := 0; i < 14; i++ {
+							time.Sleep(400 * time.Millisecond)
+							_, _ = u.WriteTo([]byte(peer.(*net.UDPAddr).IP.String()), peer)
+						}
+					}(a)
+				}
 			}
 		}()
 	}

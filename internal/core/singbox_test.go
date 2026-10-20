@@ -191,6 +191,17 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || !changed {
 		t.Fatal("first apply", changed, err)
 	}
+	if err := driver.FinishActivation(ctx, true); err != nil {
+		t.Fatal("first activation commit", err)
+	}
+	if !driver.RetainedReady(ctx, ds, nodes, nil) {
+		t.Fatal("unchanged admitted nodes cannot retain their running service")
+	}
+	retainedNodes := append([]agentproto.NodeSpec(nil), nodes...)
+	retainedNodes[0].ListenPort++
+	if driver.RetainedReady(ctx, ds, retainedNodes, nil) {
+		t.Fatal("new endpoint reused old service admission")
+	}
 	time.Sleep(300 * time.Millisecond)
 	if !sd.IsActive(ctx, singboxUnit) {
 		t.Fatal("shared service exited")
@@ -201,6 +212,9 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	}
 	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || changed {
 		t.Fatal("idempotent apply restarted", changed, err)
+	}
+	if err := driver.FinishActivation(ctx, true); err != nil {
+		t.Fatal("idempotent activation commit", err)
 	}
 	nodes[0].Params["method"] = "invalid-fixture-cipher"
 	if _, err = driver.Apply(ctx, ds, nodes); err == nil {
@@ -237,11 +251,17 @@ func TestSharedServiceLifecycle(t *testing.T) {
 	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || !changed {
 		t.Fatal("durable activation missed", changed, err)
 	}
+	if err := driver.FinishActivation(ctx, true); err != nil {
+		t.Fatal("durable activation commit", err)
+	}
 	if activationPending(driver.bin()) {
 		t.Fatal("successful activation marker retained")
 	}
 	if changed, err := driver.Apply(ctx, ds, nodes); err != nil || changed {
 		t.Fatal("activation repeated", changed, err)
+	}
+	if err := driver.FinishActivation(ctx, true); err != nil {
+		t.Fatal("final activation commit", err)
 	}
 }
 

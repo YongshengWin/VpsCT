@@ -7,14 +7,19 @@ import (
 	"ctlvps/internal/auth"
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
+	"ctlvps/internal/maintenance"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/nft"
 	"ctlvps/internal/share"
 	"ctlvps/internal/store"
+	"ctlvps/internal/subscription"
+	"ctlvps/internal/traffic"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http/httptest"
 	"os"
+	"time"
 )
 
 // Qualify actual public subscription output against real agent-created inbounds.
@@ -106,6 +111,7 @@ func testSubscriptionClients(ctx context.Context, st *store.Store, d *desired.Bu
 			fmt.Println("PASS public", source.kind, "template -> official client ->", protocol, "TCP/UDP/server-first")
 		}
 	}
+	qualifyShareAccounting(ctx, st, shares, sh.ID, shareToken, apiServer)
 	must(shares.Pause(ctx, sh.ID))
 	response, e := apiServer.Client().Get(apiServer.URL + "/s/" + shareToken + "/singbox")
 	must(e)
@@ -122,4 +128,78 @@ func testSubscriptionClients(ctx context.Context, st *store.Store, d *desired.Bu
 	}
 	_ = os.Remove("/tmp/subscription-runtime.json")
 	fmt.Println("PASS paused share excludes dedicated nodes")
+}
+
+// Freeze real kernel counters after the official clients have stopped. The
+// agent still polls, so compare its committed ledger with an independent nft
+// reading instead of inferring metering from a successful traffic probe.
+func qualifyShareAccounting(ctx context.Context, st *store.Store, shares *share.Manager, shareID int64, token string, apiServer *httptest.Server) {
+	release, err := maintenance.NewManager().ConfigurationLock()
+	must(err)
+	defer release()
+	run("systemctl", "stop", "ctlvps-singbox.service")
+	defer run("systemctl", "start", "ctlvps-singbox.service")
+	nodes, err := st.ListNodes(ctx, store.NodeFilter{ShareID: &shareID})
+	must(err)
+	meter := nft.New()
+	var inbound, outbound int64
+	eventually("real seven-protocol node and share ledgers equal frozen kernel counters", func() bool {
+		counters, e := meter.ReadNodes(ctx)
+		must(e)
+		byID := map[int64][2]int64{}
+		for _, c := range counters {
+			byID[c.NodeID] = [2]int64{c.Rx, c.Tx}
+		}
+		current, e := st.GetShare(ctx, shareID)
+		must(e)
+		start := traffic.PeriodStart(time.Now().UTC(), current.ResetDay)
+		var rx, tx int64
+		for _, n := range nodes {
+			counter := byID[n.ID]
+			if counter[0] <= 0 || counter[1] <= 0 {
+				return false
+			}
+			up, down, e := st.SumTraffic(ctx, store.SubjectNode, n.ID, start, time.Now().UTC())
+			must(e)
+			if up != counter[0] || down != counter[1] {
+				return false
+			}
+			rx, tx = rx+up, tx+down
+		}
+		if current.UsedUpload != rx || current.UsedDownload != tx {
+			return false
+		}
+		shareUp, shareDown, e := st.SumTraffic(ctx, store.SubjectShare, shareID, start, time.Now().UTC())
+		must(e)
+		if shareUp != rx || shareDown != tx {
+			return false
+		}
+		inbound, outbound = rx, tx
+		return true
+	})
+	fmt.Println("PASS seven-protocol kernel counters == node ledgers == share raw directions")
+	for _, mode := range []string{domain.BillingDual, domain.BillingUp, domain.BillingDown, domain.BillingMax} {
+		current, e := st.GetShare(ctx, shareID)
+		must(e)
+		current.BillingMode = mode
+		current.QuotaBytes = domain.Total(inbound, outbound) + 1024
+		must(shares.Update(ctx, &current))
+		current, e = st.GetShare(ctx, shareID)
+		must(e)
+		u := shares.UsageOf(current)
+		want := domain.QuotaBilled(mode, inbound, outbound)
+		if current.UsedUpload != inbound || current.UsedDownload != outbound || u.Total != domain.Total(inbound, outbound) || u.Used != want || u.Billed != want || u.Remaining != current.QuotaBytes-want {
+			panic("share mode changed raw counters or disagreed with quota formula")
+		}
+		response, e := apiServer.Client().Get(apiServer.URL + "/s/" + token + "/singbox")
+		must(e)
+		_, e = io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		must(e)
+		userinfo, ok := subscription.ParseUserinfo(response.Header.Get("Subscription-Userinfo"))
+		if response.StatusCode != 200 || !ok || domain.Total(userinfo.Upload, userinfo.Download) != want || userinfo.Remaining() != u.Remaining {
+			panic("share subscription usage disagreed with actual metering and quota")
+		}
+		fmt.Println("PASS actual share metering ->", mode, "quota / remaining / subscription userinfo")
+	}
 }

@@ -105,7 +105,7 @@ func TestEgressAPIVersionsDependenciesAndRuntimeReceipts(t *testing.T) {
 		t.Fatal("disabled publication lost block or pinned resolver", err)
 	}
 	opPath := "/api/v1/network/operations/" + op.ID
-	c.do("POST", "/api/agent/v1/apply-report", agentproto.ApplyReport{Revision: op.DesiredRevision, Hash: strings.Repeat("f", 64), Status: "applied"}, 204)
+	c.do("POST", "/api/agent/v1/apply-report", agentproto.ApplyReport{Revision: op.DesiredRevision, Hash: strings.Repeat("f", 64), Status: "applied"}, 400)
 	if c.do("GET", opPath, nil, 200)["status"] != "waiting_agent" {
 		t.Fatal("unrelated receipt completed revocation")
 	}

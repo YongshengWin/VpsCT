@@ -13,8 +13,8 @@ export function LogoMark({ className, size = 32, shadow }: { className?: string;
       viewBox="0 0 64 64"
       role="img"
       aria-label="VpsCT"
-      // drop-shadow follows the tile's rounded shape (box-shadow would not)
-      className={cn("shrink-0 overflow-visible", shadow && "[filter:drop-shadow(0_8px_14px_hsl(var(--primary)/0.4))]", className)}
+      // drop-shadow-sm follows the tile's rounded shape (box-shadow would not)
+      className={cn("shrink-0 overflow-visible", shadow && "filter-[drop-shadow(0_8px_14px_hsl(var(--primary)/0.4))]", className)}
     >
       <rect width="64" height="64" rx="18" fill="hsl(var(--primary))" />
       <path d="M18 21 L32 47 L46 21" fill="none" stroke="#fff" strokeWidth="8" strokeLinecap="round" strokeLinejoin="round" />

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"ctlvps/internal/networkconfig"
@@ -27,7 +28,7 @@ func TestNetworkContractContainer(t *testing.T) {
 		if r.Header.Get("X-Unrelated-Header") != "" {
 			t.Error("arbitrary header escaped the isolated transport allowlist")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader), "forward": r.Header.Get(networkconfig.ForwardHeader), "udp": r.Header.Get(networkconfig.ForwardUDPHeader)})
 	}))
 	defer srv.Close()
 	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
@@ -51,6 +52,10 @@ func TestNetworkContractContainer(t *testing.T) {
 		req.Header.Set(networkconfig.BindingHeader, tc.version)
 		req.Header.Set(networkconfig.EgressHeader, tc.egress)
 		req.Header.Set(networkconfig.SSHHeader, tc.egress)
+		req.Header.Set(networkconfig.ForwardHeader, tc.version)
+		if tc.version == "1" {
+			req.Header.Set(networkconfig.ForwardUDPHeader, "2")
+		}
 		req.Header.Set("X-Unrelated-Header", "must-not-forward")
 		resp, err := (Transport{Public: tc.public, PrivateOrigin: tc.public}).RoundTrip(req)
 		if err != nil {
@@ -59,7 +64,7 @@ func TestNetworkContractContainer(t *testing.T) {
 		var got map[string]string
 		err = json.NewDecoder(resp.Body).Decode(&got)
 		resp.Body.Close()
-		if err != nil || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress {
+		if err != nil || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress || got["forward"] != tc.want || got["udp"] != strings.ReplaceAll(tc.want, "1", "2") {
 			t.Fatal("isolated worker lost or invented parent capability", got, tc, err)
 		}
 	}
@@ -72,6 +77,17 @@ func TestNetworkContractContainer(t *testing.T) {
 	req.Header.Set(networkconfig.EgressHeader, "2")
 	if _, err := (Transport{}).RoundTrip(req); err == nil {
 		t.Fatal("unknown egress version accepted")
+	}
+	req.Header.Set(networkconfig.EgressHeader, "1")
+	req.Header.Set(networkconfig.ForwardHeader, "1")
+	req.Header.Set(networkconfig.ForwardUDPHeader, "3")
+	if _, err := (Transport{}).RoundTrip(req); err == nil {
+		t.Fatal("unknown UDP forwarding version accepted")
+	}
+	req.Header.Set(networkconfig.ForwardUDPHeader, "2")
+	req.Header.Del(networkconfig.ForwardHeader)
+	if _, err := (Transport{}).RoundTrip(req); err == nil {
+		t.Fatal("UDP capability accepted without forwarding capability")
 	}
 	req.Header.Del(networkconfig.BindingHeader)
 	req.Header.Set(networkconfig.EgressHeader, "1")

@@ -20,6 +20,8 @@ import (
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/nft"
+	"ctlvps/internal/udpsession"
+	"golang.org/x/sys/unix"
 )
 
 type forwardReply struct {
@@ -73,6 +75,9 @@ func forwardFixtureEntry() bool {
 			}
 		}
 		select {}
+	case "udp-load":
+		udpLoad()
+		return true
 	case "forward-client":
 		dialer := net.Dialer{Timeout: 600 * time.Millisecond}
 		if os.Args[4] != "" {
@@ -118,10 +123,41 @@ func forwardFixtureEntry() bool {
 		s := bufio.NewScanner(os.Stdin)
 		for s.Scan() {
 			c.SetDeadline(time.Now().Add(600 * time.Millisecond))
+			if s.Text() == "empty-send" {
+				raw, e := c.(*net.UDPConn).SyscallConn()
+				err = e
+				if err == nil {
+					err = raw.Control(func(fd uintptr) { e = unix.Sendto(int(fd), nil, 0, nil) })
+					if err == nil {
+						err = e
+					}
+				}
+				if err != nil {
+					must(enc.Encode(forwardReply{Error: err.Error()}))
+				} else {
+					must(enc.Encode(forwardReply{Value: "sent"}))
+				}
+				continue
+			}
+			if s.Text() == "drain" {
+				b := make([]byte, 2048)
+				for {
+					c.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+					if _, err = c.Read(b); err != nil {
+						break
+					}
+				}
+				must(enc.Encode(forwardReply{Value: "drained"}))
+				continue
+			}
 			if s.Text() == "halfclose" {
 				err = c.(*net.TCPConn).CloseWrite()
+			} else if s.Text() == "empty" {
+				_, err = c.Write(nil)
+			} else if s.Text() == "receive" {
+				err = nil
 			} else {
-				_, err = io.WriteString(c, "probe\n")
+				_, err = io.WriteString(c, s.Text()+"\n")
 			}
 			if err != nil {
 				must(enc.Encode(forwardReply{Error: err.Error()}))
@@ -181,6 +217,35 @@ func forwardBlocked(r forwardReply) {
 	}
 }
 
+// Inspect the kernel socket table before sending another packet. A changed
+// source port alone is not a reliable expiry proof: a new socket may reuse it.
+func forwardUDPSocketPresent(peer string) bool {
+	address, _, _ := strings.Cut(peer, "/")
+	_, portText, err := net.SplitHostPort(address)
+	must(err)
+	port, err := strconv.Atoi(portText)
+	must(err)
+	found := false
+	for _, path := range []string{"/proc/net/udp", "/proc/net/udp6"} {
+		body, err := os.ReadFile(path)
+		must(err)
+		for _, line := range strings.Split(string(body), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 8 || fields[7] != "65534" {
+				continue
+			}
+			_, localPort, ok := strings.Cut(fields[1], ":")
+			if !ok {
+				continue
+			}
+			value, err := strconv.ParseUint(localPort, 16, 16)
+			must(err)
+			found = found || int(value) == port
+		}
+	}
+	return found
+}
+
 func forwardFixtureConfig(targetPort int) map[string]any {
 	var inbounds, outbounds, routes []any
 	for i := 1; i <= 3; i++ {
@@ -195,9 +260,17 @@ func forwardFixtureConfig(targetPort int) map[string]any {
 		outbounds = append(outbounds, map[string]any{"type": "direct", "tag": tag + "-out", "bind_interface": iface, "routing_mark": mark})
 		// Set both advertised timeout surfaces. The experiment below must still
 		// prove actual expiry; accepting either field is insufficient evidence.
-		routes = append(routes, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": tag + "-out", "udp_timeout": "2s"})
+		route := map[string]any{"inbound": []string{tag}, "action": "route", "outbound": tag + "-out", "udp_timeout": "2s"}
+		if os.Getenv("CTLVPS_FORWARD_CONNECTED_UDP") == "1" {
+			route["udp_connect"] = true
+		}
+		routes = append(routes, route)
 	}
-	return map[string]any{"log": map[string]any{"level": "error"}, "inbounds": inbounds, "outbounds": outbounds, "route": map[string]any{"rules": routes}}
+	cfg := map[string]any{"log": map[string]any{"level": "error"}, "inbounds": inbounds, "outbounds": outbounds, "route": map[string]any{"rules": routes}}
+	if os.Getenv("CTLVPS_FORWARD_REAPER") == "1" {
+		cfg["experimental"] = map[string]any{"clash_api": map[string]any{"external_controller": "127.0.0.1:0", "secret": strings.Repeat("f", 64)}}
+	}
+	return cfg
 }
 
 // Limits stay in stable rules while ACL sets change. Recreating these anonymous
@@ -282,6 +355,22 @@ func testPortForward(ctx context.Context, exe string) {
 	nftInput(nodeRules)
 	stop := launchProduction(ctx, exe, "forward-prototype", "", forwardFixtureConfig(18081))
 	defer func() { stop() }()
+	var reap *udpsession.Reaper
+	var api *udpsession.API
+	if os.Getenv("CTLVPS_FORWARD_REAPER") == "1" {
+		body, e := json.Marshal(forwardFixtureConfig(18081))
+		must(e)
+		cfg, e := udpsession.ParseConfig(body)
+		must(e)
+		time.Sleep(250 * time.Millisecond)
+		address, e := udpsession.Discover(productionPID, cfg.ListenPorts)
+		must(e)
+		api, e = udpsession.NewAPI(address, cfg.Secret)
+		must(e)
+		reap = &udpsession.Reaper{}
+		// Invoke exactly the production sweep within each idle observation below.
+		_ = api
+	}
 	time.Sleep(250 * time.Millisecond)
 
 	c := newForwardClient(ctx, exe, "tcp", "192.0.2.1:21011", "")
@@ -362,10 +451,35 @@ func testPortForward(ctx context.Context, exe string) {
 	udp3 := newForwardClient(ctx, exe, "udp", addresses[0], "")
 	forwardBlocked(udp3.request("probe"))
 	beforeIdle := forwardOK(held[1].request("probe"), prefixes[0])
+	if reap != nil {
+		body, e := json.Marshal(forwardFixtureConfig(18081))
+		must(e)
+		cfg, e := udpsession.ParseConfig(body)
+		must(e)
+		live, e := udpsession.Live(ctx)
+		must(e)
+		must(reap.Sweep(ctx, api, cfg, live, time.Now()))
+	}
+	if !forwardUDPSocketPresent(beforeIdle) {
+		panic("UDP expiry fixture could not identify the live outbound socket")
+	}
 	time.Sleep(5 * time.Second)
-	afterIdle := forwardOK(held[1].request("probe"), prefixes[0])
-	if beforeIdle == afterIdle {
-		failures = append(failures, "UDP mapping did not expire after 5s with inbound and route timeout 2s")
+	if reap != nil {
+		body, e := json.Marshal(forwardFixtureConfig(18081))
+		must(e)
+		cfg, e := udpsession.ParseConfig(body)
+		must(e)
+		for i := 0; i < 2; i++ {
+			live, e := udpsession.Live(ctx)
+			must(e)
+			must(reap.Sweep(ctx, api, cfg, live, time.Now()))
+			time.Sleep(600 * time.Millisecond)
+		}
+	}
+	retained := forwardUDPSocketPresent(beforeIdle)
+	forwardOK(held[1].request("probe"), prefixes[0])
+	if retained {
+		failures = append(failures, "UDP outbound socket retained after 5s with inbound and route timeout 2s")
 		fmt.Println("FAIL forward UDP idle mapping expiry")
 	} else {
 		fmt.Println("PASS forward UDP idle mapping expiry")

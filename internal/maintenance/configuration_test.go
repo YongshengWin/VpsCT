@@ -111,3 +111,27 @@ func TestControllerMaintenanceDoesNotReserveAgentConfiguration(t *testing.T) {
 	}
 	release()
 }
+
+func TestStartupLockAllowsRefreshButKeepsConfigurationBlockedByMaintenance(t *testing.T) {
+	m := &Manager{Dir: t.TempDir()}
+	id := NewID()
+	if err := os.Mkdir(m.path(id, ""), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(m.path(id, "status.json"), Job{Request: Request{ID: id, Role: "agent", Action: "update"}, Status: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	release, err := m.WaitStartupConfigurationLock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.ConfigurationLock(); !errors.Is(err, ErrBusy) {
+		t.Fatal("configuration admitted during upgrade", err)
+	}
+	release()
+	if _, err := m.ConfigurationLock(); !errors.Is(err, ErrBusy) {
+		t.Fatal("job admission lost after startup", err)
+	}
+}
