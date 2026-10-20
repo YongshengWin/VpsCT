@@ -191,6 +191,9 @@ func (a *API) startAgentMaintenance(w http.ResponseWriter, r *http.Request) erro
 	_ = json.Unmarshal(ag.Metrics, &m)
 	sha := ""
 	if in.Action == "update" {
+		if normalizeAgentArch(m.Arch) == "" {
+			return httpx.E(409, "unsupported_platform", "当前仅支持 Linux AMD64；ARM 安装和升级支持已暂停")
+		}
 		if in.Version != a.Config.Version {
 			return httpx.Conflict("控制端提供的版本已变化，请刷新页面后重试")
 		}

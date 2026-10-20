@@ -1,6 +1,8 @@
 package api
 
 import (
+	"ctlvps/internal/agentproto"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,5 +31,13 @@ func TestWithdrawnARMDistributionIsUnavailable(t *testing.T) {
 	c.do("GET", "/dl/agent/linux-arm64", nil, 404)
 	if _, ok := c.api.agentBinaryMeta("arm64"); ok {
 		t.Fatal("withdrawn ARM binary offered as update")
+	}
+}
+
+func TestARMUpdateInfoPreservesReportedArchitecture(t *testing.T) {
+	c := newTestAPI(t)
+	info := c.api.agentUpdateInfo(httptest.NewRequest("GET", "https://panel.example.com/", nil), &agentproto.Metrics{Arch: "arm64"}, &agentproto.Diagnostics{BinarySHA256: "fixture", SecurityVersion: 1, SecurityPolicy: true})
+	if info.Arch != "arm64" || info.Supported || info.Outdated {
+		t.Fatalf("unsupported hardware must remain observable without offering updates: %+v", info)
 	}
 }

@@ -112,12 +112,15 @@ func (a *API) agentUpdateInfo(r *http.Request, m *agentproto.Metrics, d *agentpr
 	base := a.baseURL(r)
 	info := &AgentUpdateInfo{Command: officialAgentCommand(base, "", true)}
 	if m != nil {
-		info.Arch = normalizeAgentArch(m.Arch)
+		info.Arch = strings.ToLower(strings.TrimSpace(m.Arch))
+		if supported := normalizeAgentArch(info.Arch); supported != "" {
+			info.Arch = supported
+		}
 	}
 	if d != nil {
 		info.Current = d.BinarySHA256
 	}
-	info.Supported = info.Current != "" && d != nil && d.SecurityVersion >= 1 && d.SecurityPolicy
+	info.Supported = normalizeAgentArch(info.Arch) != "" && info.Current != "" && d != nil && d.SecurityVersion >= 1 && d.SecurityPolicy
 	if meta, ok := a.agentBinaryMeta(info.Arch); ok {
 		info.Latest = meta.SHA256
 		info.Outdated = info.Supported && !strings.EqualFold(info.Current, meta.SHA256)
