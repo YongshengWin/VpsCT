@@ -54,18 +54,30 @@ docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" 
  -e "MITA_TEST_TRANSPORT=${MITA_TEST_TRANSPORT:-}" \
  -e "MIERU_TEST_CLIENT=${MIERU_TEST_CLIENT:-}" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" --mount "type=bind,src=$fixture/coord,dst=/coord" "$image" >/dev/null
+# docker exec can place the harness in the container's cgroup root. A v2
+# domain with internal processes cannot enable memory for its children. Move
+# only this disposable harness beside PID 1 before systemd starts budgeted units.
+fixture_exec() {
+ docker exec "$1" sh -ec '
+  if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+   echo "$$" > /sys/fs/cgroup/init.scope/cgroup.procs
+   echo +memory > /sys/fs/cgroup/cgroup.subtree_control
+  fi
+  exec "$@"
+ ' fixture "${@:2}"
+}
 # Wait for boot-time tmpfiles cleanup before creating fixture CA/temp files.
 # Degraded is expected in a container; an unfinished boot or timeout is not.
 bash scripts/wait-systemd-container.sh "$container" >/dev/null
 if [[ "$network_case" == forward-stress ]]; then
- docker exec "$container" timeout 15s /fixtures/integration memory-preflight
+ fixture_exec "$container" timeout 15s /fixtures/integration memory-preflight
 fi
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
  bash scripts/wait-systemd-container.sh "$landing_container" >/dev/null
- docker exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
+ fixture_exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &
 fi
 if [[ "$network_case" != native-subscriptions && "$network_case" != subscriptions && "$network_case" != forward-private && "$network_case" != forward-dns && "$network_case" != forward-socks && "$network_case" != forward-ssh && "$network_case" != forward-wireguard && "$network_case" != forward-udp && "$network_case" != reality && "$network_case" != listen && "$network_case" != protocols && "$network_case" != transit && "$network_case" != transit-ss2022 && "$network_case" != forward && "$network_case" != ssh && "$network_case" != wireguard && "$network_case" != mita && "$network_case" != wgaccess ]]; then docker exec "$container" /fixtures/transport.test -test.run '^TestNetworkContractContainer$' -test.v; fi
-if ! docker exec "$container" timeout 1400s /fixtures/integration; then
+if ! fixture_exec "$container" timeout 1400s /fixtures/integration; then
  if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then cat "$fixture/landing.log"; docker exec "$landing_container" journalctl --no-pager -n 60 -u ctlvps-agent.service -u ctlvps-singbox.service; fi
  docker exec "$container" journalctl --no-pager -n 100 -u ctlvps-agent.service -u ctlvps-singbox.service -u ctlvps-proxy-guard.service -u 'ctlvps-mita@*.service'
  exit 1
