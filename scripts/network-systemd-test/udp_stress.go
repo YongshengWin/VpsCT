@@ -61,6 +61,18 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 	must(cmd.Start())
 	defer func() { in.Close(); cmd.Process.Kill(); cmd.Wait() }()
 	decoder := json.NewDecoder(out)
+	diagnostics := func(label string) {
+		if a, err := st.GetAgentByServer(ctx, serverID); err == nil {
+			var d agentproto.Diagnostics
+			_ = json.Unmarshal(a.Diagnostics, &d)
+			fmt.Printf("UDP stress %s: manager=%+v proxy_rss=%dKiB\n", label, d.ForwardUDP, processRSS(pid)/1024)
+		}
+		for _, file := range []string{"/proc/net/snmp", "/sys/fs/cgroup/ctlvps-proxies.slice/memory.current", "/sys/fs/cgroup/ctlvps-proxies.slice/memory.events"} {
+			if body, err := os.ReadFile(file); err == nil {
+				fmt.Printf("UDP stress %s: %s: %s\n", label, file, body)
+			}
+		}
+	}
 	var result struct {
 		Ready, Active, Failed int
 		Millis                int64
@@ -74,6 +86,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		must(e)
 		must(decoder.Decode(&result))
 		if result.Failed != 0 {
+			diagnostics("request failure")
 			panic(fmt.Sprintf("UDP stress lost %d/%d requests (round %dms)", result.Failed, n, result.Millis))
 		}
 	}
@@ -88,7 +101,9 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		original[c.ID] = true
 	}
 	startRSS, peakRSS := processRSS(pid), processRSS(pid)
+	diagnostics("capacity reached")
 	begin := time.Now()
+	lastProgress := begin
 	rounds := 0
 	for time.Since(begin) < time.Duration(seconds)*time.Second {
 		round(8192)
@@ -111,10 +126,12 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 		rss := processRSS(pid)
 		peakRSS = max(peakRSS, rss)
 		if rss > 384<<20 {
-			panic("stress proxy RSS exceeded384MiB budget")
+			diagnostics("memory failure")
+			panic(fmt.Sprintf("stress proxy RSS exceeded384MiB budget: start=%dKiB peak=%dKiB round=%dms", startRSS/1024, peakRSS/1024, result.Millis))
 		}
-		if rounds%30 == 0 {
+		if time.Since(lastProgress) >= 15*time.Second {
 			fmt.Printf("UDP stress progress: elapsed=%ds sessions=%d round=%dms proxy_rss=%dKiB\n", int(time.Since(begin).Seconds()), len(items), result.Millis, rss/1024)
+			lastProgress = time.Now()
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

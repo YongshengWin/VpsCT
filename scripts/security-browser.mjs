@@ -98,14 +98,21 @@ try{
  console.log('PASS apply diagnostics: five stable errors, details, light/dark mobile layout, offline and recovery precedence.');
  // Release smoke: exercise the new network navigation against real empty API state.
  await page.goto(origin+'/servers/'+after.servers[0].id+'?tab=routes');
- await page.getByRole('heading',{name:'网站会看到哪台 VPS 的地址？'}).waitFor();
- await page.getByRole('button',{name:/网卡与流量/}).click();
+ await page.getByRole('heading',{name:'转发线路',exact:true}).waitFor();
+ const sections=page.getByRole('navigation',{name:'页面分区'});
+ await sections.getByRole('button',{name:'网卡与流量',exact:true}).click();
  await page.getByText('等待多网卡数据',{exact:true}).waitFor();
- await page.getByRole('button',{name:'← 返回节点线路'}).click();
- await page.getByRole('button',{name:/连接已有代理/}).click();
- await page.getByText('还没有接入其他代理',{exact:true}).waitFor();
- await page.getByRole('button',{name:'← 返回节点线路'}).click();
- await page.getByRole('button',{name:/转发固定端口/}).click();
+ await sections.getByRole('button',{name:'节点线路',exact:true}).click();
+ const routes=page.getByRole('navigation',{name:'线路功能'});
+ await routes.getByRole('button',{name:/节点出口/}).click();
+ await page.getByRole('heading',{name:'为已有节点更换出口'}).waitFor();
+ await routes.locator('button[aria-current="page"]').filter({hasText:'节点出口'}).waitFor();
+ await page.getByRole('combobox',{name:'出口方式',exact:true}).click();
+ await page.getByRole('option',{name:'已有代理或本机网卡 · 手动配置出口',exact:true}).waitFor();
+ await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
+ await page.getByText('还没有配置出口',{exact:true}).waitFor();
+ await routes.getByRole('button',{name:/单段转发/}).click();
+ await routes.locator('button[aria-current="page"]').filter({hasText:'单段转发'}).waitFor();
  await page.getByRole('button',{name:'添加转发',exact:true}).click();
  const forwardDialog=page.getByRole('dialog');
  await forwardDialog.getByRole('combobox').first().click();
@@ -132,15 +139,15 @@ try{
  udpServer.diagnostics.forward_udp.code='udp_guard_unavailable';await page.reload();await page.getByText(/代理运行状态还需查看服务器诊断/).waitFor();
  udpServer.diagnostics.forward_udp.state='healthy';udpServer.diagnostics.forward_udp.code='';
  await page.reload();await page.getByText('UDP 会话管理正常',{exact:true}).waitFor();
- await page.getByText(/本次 agent 运行累计清理 400 个/).waitFor();
+ await page.getByText('整机活跃 UDP 会话 12 个',{exact:true}).waitFor();
  udpServer.agent_status='offline';await page.reload();await page.getByText('UDP 状态待确认',{exact:true}).waitFor();
  await page.unroute(udpURL);await page.unroute(udpForwardsURL);
  await page.setViewportSize({width:390,height:844});
  await page.goto(origin+'/servers/'+after.servers[0].id+'?tab=routes');
- await page.getByRole('heading',{name:'网站会看到哪台 VPS 的地址？'}).waitFor();
+ await page.getByRole('heading',{name:'转发线路',exact:true}).waitFor();
  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),'network page overflows mobile viewport');
  await page.screenshot({path:'/tmp/ctlvps-network-mobile.png',fullPage:true,animations:'disabled'});
  assert.equal(violations.length,0);
  console.log('PASS release network navigation, empty inventory/egress, UDP/both forwarding controls and 390px layout.');
  await page.screenshot({path:'/tmp/ctlvps-security-browser.png',fullPage:true});console.log('PASS Chromium: UI setup/create, Secure HttpOnly host cookie, same-site/cross-site attacks, CSRF and CSP; no unauthorized mutation.');
-}finally{await browser?.close();child?.kill();await new Promise(r=>front?front.close(r):r());fs.rmSync(dir,{recursive:true,force:true});}
+}finally{await browser?.close();child?.kill();front?.closeAllConnections();await new Promise(r=>front?front.close(r):r());fs.rmSync(dir,{recursive:true,force:true});}
