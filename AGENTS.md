@@ -32,7 +32,7 @@
 
 前端改完要 `cd web && npm run typecheck && npm run build`，再编 Linux `ctlvpsd` 才进生产二进制。
 
-本地：一个终端 `make dev-web`，一个 `make dev`。验证：`make check` 或 `bash scripts/check.sh`。
+本地：一个终端 `make dev-web`，一个 `make dev`。验证：`make check` 或 `bash scripts/check.sh`。CI 采用 PR 并行矩阵，`checks` 汇总全部门禁；不要以跳过测试来提速。标签发布只能复用与标签源码树完全一致且未过期的成功 CI 证据，并继续验收正式附件，详见 `docs/releasing.md` 第 6 节。
 
 ## 3. 容易搞混
 

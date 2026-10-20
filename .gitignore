@@ -32,3 +32,6 @@ setup-token
 # Python build / validation cache
 __pycache__/
 *.pyc
+
+# Disposable shared CI inputs and structured test logs
+.ci/

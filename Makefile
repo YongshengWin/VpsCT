@@ -7,7 +7,7 @@ BIN     := bin
 SECURITY_EPOCH ?= 1
 REPOSITORY ?= $(GITHUB_REPOSITORY)
 
-.PHONY: all web server agent agents build dev dev-web test vet check lint clean docker release
+.PHONY: all web server agent agents build dev dev-web test vet check lint clean docker release release-binaries
 
 all: build
 
@@ -33,6 +33,10 @@ build: web
 
 ## release: linux/amd64 server binaries plus agents
 release: web
+	$(MAKE) release-binaries
+
+## release-binaries: package an already built frontend (CI artifact producer)
+release-binaries:
 	$(MAKE) agents
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvpsd-linux-amd64 ./cmd/ctlvpsd
 	for arch in amd64; do CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-verify-linux-$$arch ./cmd/ctlvps-verify; CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-sign-linux-$$arch ./cmd/ctlvps-sign; done

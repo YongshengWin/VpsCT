@@ -4,12 +4,23 @@ on:
     tags: ['v*']
 permissions:
   contents: read
+  actions: read
 jobs:
-  checks:
-    uses: ./.github/workflows/ci.yml
-  package:
-    needs: checks
+  verify-ci:
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Require successful CI for the exact release source tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/verify-release-ci.py
+  package:
+    needs: verify-ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -22,12 +33,17 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: '24'
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: web/package-lock.json
       - name: Build versioned packages
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: make release VERSION="$RELEASE_VERSION" REPOSITORY="$RELEASE_REPOSITORY"
+      - name: Fresh security audit before publication
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+          cd web && npm audit --audit-level=high
       - name: Verify the final packaged web upgrade
         env:
           GH_TOKEN: ${{ github.token }}

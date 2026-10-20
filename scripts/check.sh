@@ -21,9 +21,17 @@ test_parallelism=${CTLVPS_TEST_PARALLELISM:-}
 # Keep the Go default unless the caller selects bounded package concurrency.
 if [[ -n "$test_parallelism" ]]; then
   [[ "$test_parallelism" =~ ^[1-9][0-9]*$ ]] || { echo 'CTLVPS_TEST_PARALLELISM must be a positive integer' >&2; exit 1; }
-  go test -p "$test_parallelism" ./... -count=1 -timeout=5m
+  if [[ ${CTLVPS_TEST_PROGRESS:-0} == 1 ]]; then
+    python3 scripts/ci-go-test.py -p "$test_parallelism" ./... -count=1 -timeout=5m
+  else
+    go test -p "$test_parallelism" ./... -count=1 -timeout=5m
+  fi
 else
-  go test ./... -count=1 -timeout=5m
+  if [[ ${CTLVPS_TEST_PROGRESS:-0} == 1 ]]; then
+    python3 scripts/ci-go-test.py ./... -count=1 -timeout=5m
+  else
+    go test ./... -count=1 -timeout=5m
+  fi
 fi
 
 echo "==> go build (with embedded web)"
