@@ -42,7 +42,10 @@ fi
   touch "$PREVIOUS/VERIFIED-SHA256"
   printf '#!/bin/sh\nexit 0\n' > "$PREVIOUS/ctlvpsd"
   chmod 0755 "$PREVIOUS/ctlvpsd"
-  printf '#!/bin/sh\n[ "$1" = check-recovery ]\n' > "$WORK/backup-tool"
+  cat > "$WORK/backup-tool" <<'FIXTURE'
+#!/bin/sh
+[ "$1" = check-recovery ]
+FIXTURE
   chmod 0755 "$WORK/backup-tool"
   printf 'keep failed data\n' > "$INSTALL_DIR/data/marker"
   if restore_previous; then printf 'invalid recovery unexpectedly succeeded\n' >&2; exit 1; fi

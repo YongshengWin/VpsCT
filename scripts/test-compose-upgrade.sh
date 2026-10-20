@@ -4,7 +4,8 @@ set -eu
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 image=${CTLVPS_COMPOSE_TEST_IMAGE:-ctlvps-container-test:local}
 work=$(mktemp -d)
-export COMPOSE_PROJECT_NAME="ctlvps-compose-test-$(basename "$work" | tr "[:upper:]." "[:lower:]-")"
+COMPOSE_PROJECT_NAME="ctlvps-compose-test-$(basename "$work" | tr "[:upper:]." "[:lower:]-")"
+export COMPOSE_PROJECT_NAME
 bad_image="ctlvps-compose-bad:$COMPOSE_PROJECT_NAME"
 export CTLVPS_IMAGE="$image"
 export CTLVPS_SITE_URL=https://panel.example.test
@@ -35,7 +36,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 compose up -d --no-build --pull never
 cid=$(compose ps -q ctlvpsd)
-for attempt in $(seq 1 60); do
+for _attempt in $(seq 1 60); do
   if docker exec "$cid" wget -qO- 'http://127.0.0.1:8080/healthz?ready=1' >/dev/null 2>&1; then break; fi
   sleep 1
 done

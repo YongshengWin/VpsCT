@@ -47,7 +47,7 @@ bash uninstall.sh --help >/dev/null
   # GNU rm's mount guard is checked by safe_path above; use the portable rm
   # only inside this test root so the assertion also runs on macOS.
   rm() {
-    local target=${@: -1}
+    local target=${!#}
     [[ "$target" == "$ROOT/"* ]] || return 1
     command rm -rf -- "$target"
   }
@@ -181,7 +181,7 @@ EOF
     esac
   }
   rm() {
-    local target=${@: -1}
+    local target=${!#}
     [[ "$target" == "$ROOT/"* ]] || return 1
     command rm -rf -- "$target"
   }
@@ -195,7 +195,10 @@ EOF
   command rm "$ROOT/reject-service"
   # A script modified after planning is reverified before rc-service sees it.
   plan > /dev/null
-  printf '#!/bin/sh\ntouch "$VPSCT_TEST_ROOT/bad-script-ran"\n' > "$ROOT/etc/init.d/ctlvps-proxy-guard"
+  cat > "$ROOT/etc/init.d/ctlvps-proxy-guard" <<'FIXTURE'
+#!/bin/sh
+touch "$VPSCT_TEST_ROOT/bad-script-ran"
+FIXTURE
   if (execute_plan) > /dev/null 2>&1; then printf 'Late modified OpenRC service accepted\n' >&2; exit 1; fi
   [[ "$(cat "$ROOT/service-actions")" == $'ctlvps-agent stop\nctlvps-agent status' ]]
   [[ ! -e "$ROOT/bad-script-ran" && ! -e "$ROOT/nft-actions" && -f "$ROOT/usr/local/bin/ctlvps-agent" ]]
