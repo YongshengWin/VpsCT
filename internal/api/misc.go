@@ -427,7 +427,7 @@ func (a *API) meta(w http.ResponseWriter, r *http.Request) error {
 // downloadAgent serves prebuilt agent binaries for the install script.
 func (a *API) downloadAgent(w http.ResponseWriter, r *http.Request) error {
 	platform := r.PathValue("platform")
-	if platform != "linux-amd64" && platform != "linux-arm64" {
+	if platform != "linux-amd64" {
 		return httpx.ErrNotFound
 	}
 	p := a.findAgentBinary(platform)
