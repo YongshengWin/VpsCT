@@ -30,7 +30,7 @@ echo "==> go build (with embedded web)"
 check_dir=$(mktemp -d)
 trap 'rm -rf "$check_dir"' EXIT
 CGO_ENABLED=0 go build -o "$check_dir/ctlvpsd" ./cmd/ctlvpsd
-for arch in amd64 arm64; do
+for arch in amd64; do
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvpsd-linux-$arch" ./cmd/ctlvpsd
   CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$check_dir/ctlvps-agent-linux-$arch" ./cmd/ctlvps-agent
 done

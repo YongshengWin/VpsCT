@@ -1,5 +1,7 @@
 # 安装、升级与恢复
 
+当前控制端、Docker 和被控 agent 仅支持 Linux AMD64（x86_64）。ARM 支持暂停，历史独立 ARM Release 附件已撤下，待真实机器验证后恢复。历史 AMD64 包保持原始内容及摘要，不因撤下 ARM 附件重新打包。
+
 v0.1.3 默认使用官方 HTTPS 下载与 SHA256 校验，无需准备发布签名密钥、信任根或验证器。可选自定义签名部署见[安全迁移说明](security-migration.md)。
 [返回 README](../README.md)
 
@@ -21,7 +23,7 @@ v0.1.3 默认使用官方 HTTPS 下载与 SHA256 校验，无需准备发布签�
 
 ### 2.1 检查环境并下载脚本
 
-安装器要求 Debian / Ubuntu、正在运行的 systemd、root 权限，以及 Linux amd64 / arm64。服务器需能访问 GitHub Release 和系统软件源；首次安装要求本机 8080 端口空闲。
+安装器要求 Debian / Ubuntu、正在运行的 systemd、root 权限，以及 Linux amd64。服务器需能访问 GitHub Release 和系统软件源；首次安装要求本机 8080 端口空闲。
 
 先下载最新官方安装器，再选择 HTTPS 配置方式：
 
@@ -265,7 +267,7 @@ Alpine/OpenRC 被控端使用 `rc-service ctlvps-agent status` 查看状态；ag
 
 ### 4.7 内核版本与升级确认
 
-VpsCT 只使用官方 sing-box 发行包，不构建或分发修改版。网卡绑定配置支持官方 1.12.14 起的 1.12.x、1.13.x、1.14.x 稳定系列，系列内补丁升级不再锁死单个版本；SS-2022 出口和托管 SS-2022 要求官方 1.14.1 或兼容的 1.14.x。跨入尚未适配的新系列或预发布版本时，有网络资源的配置会拒绝切换。上述范围表示配置兼容策略，不代表每个版本及架构均完成流量验收；当前实际网络基线为 ARM64 官方 1.14.1，AMD64 运行矩阵仍需验收。
+VpsCT 只使用官方 sing-box 发行包，不构建或分发修改版。网卡绑定配置支持官方 1.12.14 起的 1.12.x、1.13.x、1.14.x 稳定系列，系列内补丁升级不再锁死单个版本；SS-2022 出口和托管 SS-2022 要求官方 1.14.1 或兼容的 1.14.x。跨入尚未适配的新系列或预发布版本时，有网络资源的配置会拒绝切换。上述范围表示配置兼容策略，不代表每个版本及架构均完成流量验收；旧 ARM64 容器结果仅保留为历史记录；当前发行以官方 1.14.1 的原生 AMD64 CI 验收为准。
 
 到「设置 → 内核版本」选择并保存官方版本，等待 agent 上报安装版本和配置回执。新安装默认锁定官方 sing-box 1.14.1；已有数据库升级时，显式版本选择保持不变，未设置或留空的旧默认值固定保存为 1.12.14。迁移在启动时以事务执行，重复启动不会重新选择版本；读取旧设置失败时停止迁移，不以新默认值覆盖。主动选择默认版本并保存，也会记录当次具体版本，不会因浏览页面、创建草稿或后续升级面板而自动跟随最新内核。Linux 默认发行包需要兼容的 glibc 运行环境；Alpine 必须选择官方 musl 包，当前固定基线为 1.14.1。不能把 glibc 包直接当成 Alpine 静态二进制执行，也不使用自编译内核解决兼容问题。
 
@@ -322,13 +324,13 @@ NAT 适配没有额外的常驻转发进程，使用现有 agent 和内核 nftab
 
 ### 4.9 Alpine/OpenRC 与小内存 VPS
 
-Alpine 原生支持范围是**被控 agent**，控制端原生安装器仍要求 Debian/Ubuntu 和 systemd；控制端可通过第 3.2 节的 Docker Compose 运行。OpenRC 基线为 Alpine Linux 3.23、Linux amd64/arm64、官方 sing-box 1.14.1 musl 发行包。安装需要 root、可写的 cgroup v2 内存与进程控制器，以及 nftables、bubblewrap、setpriv 和 OpenRC。容器或受限虚拟机缺少这些能力时会明确拒绝启动；不能关闭隔离来绕过检查。可在 VPS 本机执行 `ctlvps-agent openrc-check` 检查环境。
+Alpine 原生支持范围是**被控 agent**，控制端原生安装器仍要求 Debian/Ubuntu 和 systemd；控制端可通过第 3.2 节的 Docker Compose 运行。OpenRC 基线为 Alpine Linux 3.23、Linux amd64、官方 sing-box 1.14.1 musl 发行包。安装需要 root、可写的 cgroup v2 内存与进程控制器，以及 nftables、bubblewrap、setpriv 和 OpenRC。容器或受限虚拟机缺少这些能力时会明确拒绝启动；不能关闭隔离来绕过检查。可在 VPS 本机执行 `ctlvps-agent openrc-check` 检查环境。
 
 Alpine 3.21 的 util-linux `setpriv` 通常位于 `/usr/bin/setpriv`，而 `/bin/setpriv` 是 BusyBox 链接；agent 优先使用受保护的 util-linux 实体文件，不接受 BusyBox 链接作为权限下降工具。LXC 中 cgroup 根目录可写不代表控制器能启用：根目录仍有 init/getty 等进程时，内存控制器可能返回 `device or resource busy`。应由本机 OpenRC 配置准备独立的 init 叶子组，并在 agent 启动前启用 `memory`、`pids`，保留容器父级限制；不能删除限制或放宽隔离来绕过启动错误。
 
 可部署 sing-box 和 mieru 节点。sing-box 沿用 nft 节点计量、配额阻断、NAT 端口转换和独立网络保护。代理以专用非 root 账号运行，保持固定 capabilities、seccomp、只读文件系统与 namespace 隔离，并由 cgroup 限制内存和进程。OpenRC 停服会终止整个受管 cgroup，代理子进程不会在停服后继续访问网络。诊断中的服务管理器检查适用于 systemd 和 OpenRC；为兼容现有 agent API，`systemd` 诊断字段表示服务管理器可用性。
 
-**mieru 使用独立 cgroup-skb BPF 计量，Snell 仍不支持 OpenRC。** 每个 mieru 节点使用独立父 cgroup 与非 root 服务实例，计量覆盖客户端和目标站点的完整双向进程流量，服务及 agent 重启不清零；不与 nft 监听端口计量相加。需要内核支持 cgroup-skb BPF、BPF link 与可挂载的 bpffs；agent 在固定的 `/sys/fs/bpf/ctlvps-meters` 保存 root 专属计量对象，能力不足时拒绝部署，不关闭隔离或改用不完整计量。BPF link 需要兼容的较新 Linux 内核，以本机实际能力检查为准。已有未迁移或未结算的 systemd 进程计量、Snell/mieru 计量身份或快照时，应先在原 systemd 环境完成结算和退役；不要删除状态文件来跳过结算。Alpine 原生 mieru 计量会记录独立能力版本，阻止回退到仅支持 sing-box 的 agent；未结算的原生 BPF 计量同样不能直接切换到 systemd。当前实际 mieru 运行基线为 ARM64 官方 mita/mieru 3.37.0，AMD64 尚需运行验收。
+**mieru 使用独立 cgroup-skb BPF 计量，Snell 仍不支持 OpenRC。** 每个 mieru 节点使用独立父 cgroup 与非 root 服务实例，计量覆盖客户端和目标站点的完整双向进程流量，服务及 agent 重启不清零；不与 nft 监听端口计量相加。需要内核支持 cgroup-skb BPF、BPF link 与可挂载的 bpffs；agent 在固定的 `/sys/fs/bpf/ctlvps-meters` 保存 root 专属计量对象，能力不足时拒绝部署，不关闭隔离或改用不完整计量。BPF link 需要兼容的较新 Linux 内核，以本机实际能力检查为准。已有未迁移或未结算的 systemd 进程计量、Snell/mieru 计量身份或快照时，应先在原 systemd 环境完成结算和退役；不要删除状态文件来跳过结算。Alpine 原生 mieru 计量会记录独立能力版本，阻止回退到仅支持 sing-box 的 agent；未结算的原生 BPF 计量同样不能直接切换到 systemd。当前官方 mita/mieru 3.37.0 的 AMD64 运行验收以发布 CI 为准，旧 ARM64 容器记录不代表当前支持。
 
 OpenRC 支持默认安装的 **agent 网页升级与卸载**，控制端原生网页维护仍需 systemd，Compose 使用宿主机升级脚本。维护进程运行在 agent/proxy 服务树外的独立 cgroup，agent 停止、替换或卸载后仍可完成操作并回报。升级验证官方发行校验、候选能力、OpenRC 启动就绪及运行文件 SHA256；失败恢复旧程序和对应服务脚本。维护 worker 硬内存上限为 192 MiB、进程上限为 128，独立监督进程另限 64 MiB/64 进程；监督器在 45 分钟超时或 worker 退出时清理任务子进程，并沿用任务持久化和管理员二次认证。旧 agent 需要先通过控制端同步或终端更新获得此能力；未发布的新源码不代表旧发行附件已支持。终端更新和独立卸载器仍可使用。agent 的普通同步更新和有界安装 worker 仍受本机安全策略控制。使用 ACME 时，域名以及公网挑战端口必须实际到达该 VPS；NAT 商家的端口映射由用户确认，填写节点公网端口不会自动提供 ACME 挑战入口。
 
@@ -378,7 +380,7 @@ sh compose-upgrade.sh upgrade
 
 脚本先构建镜像，再用不访问数据库的临时容器比对实际环境和挂载；变化时在停服前拒绝。自动流程仅接受 UID 10001、默认监听与数据路径，以及 `/data`、`/keys` 两个可写命名卷；绑定目录或其他自定义布局按第 6.2 节手动处理。脚本只操作本机 Docker 引擎的 `ctlvpsd` 服务，不停止 agent，也不从远端获取源码或镜像。
 
-通过预检查后停服，完整备份两个卷（含数据库 WAL、密钥及初始化状态），记录旧镜像、解析后的 Compose 配置与校验清单。新镜像启动后，以容器内直连的就绪接口验证数据读取与双架构 agent 文件；未就绪会先停止新容器，保留失败数据，再恢复配套旧镜像、数据库和密钥。自动回退成功返回退出码 `20`，仍表示本次升级失败；回退失败返回非零并保留现场。
+通过预检查后停服，完整备份两个卷（含数据库 WAL、密钥及初始化状态），记录旧镜像、解析后的 Compose 配置与校验清单。新镜像启动后，以容器内直连的就绪接口验证数据读取与AMD64 agent 文件；未就绪会先停止新容器，保留失败数据，再恢复配套旧镜像、数据库和密钥。自动回退成功返回退出码 `20`，仍表示本次升级失败；回退失败返回非零并保留现场。
 
 恢复点保存在 `deploy/backups/时间-进程号/`，权限受 `umask 077` 保护，其中配置和数据均含敏感信息。旧镜像有独立 `ctlvps-rollback:*` 标签，并保留一个不运行的 `ctlvps-compose-backup-*` 容器固定卷引用。恢复前不要删除这些对象或运行镜像/卷清理。备份目前不自动轮换；升级成功并完成公网、订阅与 agent 验证后，再按实际保留周期清理。
 

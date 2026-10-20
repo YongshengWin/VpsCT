@@ -20,7 +20,7 @@ info() { printf '==> %s\n' "$*"; }
 
 usage() {
   cat <<'EOF'
-VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64 / arm64）
+VpsCT 控制端安装器（Debian / Ubuntu，systemd，amd64）
 
 首次安装并配置 Caddy HTTPS：
   sudo bash install.sh --domain panel.example.com
@@ -167,6 +167,11 @@ restore_previous() {
 
 check_environment() {
   [[ "$(uname -s)" == Linux ]] || die '仅支持 Linux'
+  case "$(uname -m)" in
+    x86_64|amd64) ARCH=amd64 ;;
+    aarch64|arm64) die "ARM 支持已暂停；当前仅支持 Linux AMD64" ;;
+    *) die '不支持的 CPU 架构' ;;
+  esac
   [[ "$(id -u)" == 0 ]] || die '请使用 root 或 sudo 运行'
   command -v systemctl >/dev/null || die '需要 systemd'
   [[ -d /run/systemd/system ]] || die 'systemd 必须正在运行'
@@ -175,11 +180,6 @@ check_environment() {
   # shellcheck disable=SC1091
   distro=$(. /etc/os-release; printf '%s' "${ID:-}")
   case "$distro" in debian|ubuntu) ;; *) die '首版支持 Debian / Ubuntu；其他系统请手动部署' ;; esac
-  case "$(uname -m)" in
-    x86_64|amd64) ARCH=amd64 ;;
-    aarch64|arm64) ARCH=arm64 ;;
-    *) die '不支持的 CPU 架构' ;;
-  esac
   command -v flock >/dev/null || die '缺少 flock，请安装 util-linux'
   exec 9>/run/lock/ctlvps-install.lock
   flock -n 9 || die '已有另一个安装器正在运行'
@@ -356,7 +356,7 @@ main() {
   tar --extract --gzip --file "$WORK/$asset" --directory "$WORK/package" --no-same-owner --no-same-permissions
   printf "%s\n" "$expected" > "$WORK/package/VERIFIED-SHA256"
   local file
-  for file in ctlvpsd agents/ctlvps-agent-linux-amd64 agents/ctlvps-agent-linux-arm64 ctlvpsd.service VERSION REPOSITORY; do
+  for file in ctlvpsd agents/ctlvps-agent-linux-amd64 ctlvpsd.service VERSION REPOSITORY; do
     [[ -f "$WORK/package/$file" && ! -L "$WORK/package/$file" ]] || die "发行包缺少常规文件：$file"
   done
   [[ "$(cat "$WORK/package/VERSION")" == "$VERSION" && "$(cat "$WORK/package/REPOSITORY")" == "$REPOSITORY" ]] || die '发行包版本或仓库不匹配'

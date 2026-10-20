@@ -25,7 +25,7 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 		{ID: "server_enrollment", Title: "接入 VPS", Steps: []agentWorkflowStep{
 			step("复用已有服务器，避免重复创建", "GET", "/api/v1/servers"),
 			step("仅缺少记录时创建", "POST", "/api/v1/servers"),
-			step("生成临时安装命令；执行需要目标主机授权", "POST", "/api/v1/servers/{id}/enroll-token"),
+			step("确认 Linux AMD64 后生成临时安装命令；执行需要目标主机授权", "POST", "/api/v1/servers/{id}/enroll-token"),
 			step("安装后核对 agent_status 和实际能力", "GET", "/api/v1/servers/{id}"),
 		}, Completion: "目标 agent_status=online，能力满足请求；生成安装命令不算安装完成。", Recovery: "先查询是否已接入；安装令牌不得写入日志或回显。"},
 		{ID: "deploy_node", Title: "部署代理节点", Steps: []agentWorkflowStep{

@@ -127,11 +127,11 @@
   },
   "agentBinaryCandidates": {
     "query_parameters": [],
-    "source": "internal/api/agentbin.go:40"
+    "source": "internal/api/agentbin.go:38"
   },
   "agentBinaryMeta": {
     "query_parameters": [],
-    "source": "internal/api/agentbin.go:63"
+    "source": "internal/api/agentbin.go:61"
   },
   "agentCapabilities": {
     "query_parameters": [],
@@ -1487,7 +1487,7 @@
   },
   "agentReportedSHA": {
     "query_parameters": [],
-    "source": "internal/api/agentbin.go:112"
+    "source": "internal/api/agentbin.go:110"
   },
   "agentRoute": {
     "query_parameters": [],
@@ -1539,7 +1539,7 @@
   },
   "agentUpdateSpec": {
     "query_parameters": [],
-    "source": "internal/api/agentbin.go:99"
+    "source": "internal/api/agentbin.go:97"
   },
   "agentWorkflows": {
     "query_parameters": [],
@@ -3537,7 +3537,7 @@
   },
   "findAgentBinary": {
     "query_parameters": [],
-    "source": "internal/api/agentbin.go:54"
+    "source": "internal/api/agentbin.go:52"
   },
   "finishLogin": {
     "query_parameters": [],

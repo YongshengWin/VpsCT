@@ -68,9 +68,9 @@ func (a *API) checkControllerReadiness(ctx context.Context) error {
 			}
 		}
 	}
-	// Installers provide both architectures, even on a single-architecture host.
+	// Only the supported AMD64 agent distribution is required.
 	if a.Config.AgentBinDir != "" {
-		for _, arch := range []string{"amd64", "arm64"} {
+		for _, arch := range []string{"amd64"} {
 			path := a.findAgentBinary("linux-" + arch)
 			info, err := os.Stat(path)
 			if err != nil {

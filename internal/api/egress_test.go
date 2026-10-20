@@ -46,7 +46,7 @@ func TestEgressAPIVersionsDependenciesAndRuntimeReceipts(t *testing.T) {
 	nid := int64(c.do("POST", base+"/nodes", map[string]any{"protocol": "ss", "port": 21001}, 201)["id"].(float64))
 	npath := fmt.Sprintf("/api/v1/nodes/%d/network", nid)
 	hb := agentproto.Heartbeat{TS: time.Now().UTC(), Epoch: "boot", Diagnostics: agentproto.Diagnostics{NetworkBindingVersion: 1, NetworkConfigureAllowed: true, SecurityVersion: 1, SecurityPolicy: true, Nftables: true, Systemd: true,
-		Cores: []agentproto.CoreStatus{{Name: "sing-box", Version: domain.DefaultSingBoxVersion, Installed: true}}}, Metrics: agentproto.Metrics{Arch: "arm64", Network: &agentproto.NetworkSnapshot{
+		Cores: []agentproto.CoreStatus{{Name: "sing-box", Version: domain.DefaultSingBoxVersion, Installed: true}}}, Metrics: agentproto.Metrics{Arch: "amd64", Network: &agentproto.NetworkSnapshot{
 		Version: 1, CollectorID: strings.Repeat("b", 32), BootID: "boot", Sequence: 1, SampledAt: time.Now().UTC(), Status: "ok", Interfaces: []agentproto.NetworkInterface{{ID: direct.InterfaceID, Generation: strings.Repeat("c", 32), Name: "wan0", Index: 2, Kind: "physical", Up: true, Carrier: true, Addresses: []string{"192.0.2.1/24"}, UsableAddresses: []string{"192.0.2.1/24"}}}}}}
 	c.do("POST", "/api/agent/v1/heartbeat", hb, 200)
 	policy := networkconfig.Node{ListenMode: "all", AdvertiseMode: "inherit", OnUnavailable: "block", EgressProfileID: pid, EgressRevision: 1}

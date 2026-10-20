@@ -1,5 +1,7 @@
 # 1. AI agent 接口
 
+当前发行支持仅为 Linux AMD64（x86_64），适用于控制端、Docker 与被控 agent。ARM 不提供安装、升级或分发附件；待真实机器验证后再恢复。
+
 VpsCT 使用开发者 API key，让 AI agent 通过现有 `/api/v1/` 业务接口管理产品功能。面板与 agent 共用权限、字段校验、审计及异步任务机制。仓库提供 [VpsCT skill](../skills/vpsct/SKILL.md)、标准库 [Python 客户端](../skills/vpsct/scripts/vpsct.py) 和 [常用请求示例](../skills/vpsct/references/api.md)。
 
 这里的 AI agent 与 VPS 上的 `ctlvps-agent` 是两种客户端：前者使用开发者 key 调用管理接口；后者通过专用 `/api/agent/v1/` 协议主动连接控制端。开发者 key 不能作为 VPS enroll token 或 agent token 使用。

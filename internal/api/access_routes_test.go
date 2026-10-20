@@ -38,7 +38,7 @@ func accessRouteAPIFixture(t *testing.T) (*client, store.AccessRouteRequest, map
 				Cores: []agentproto.CoreStatus{{Name: "sing-box", Version: domain.DefaultSingBoxVersion, Installed: true}},
 			},
 			Metrics: agentproto.Metrics{
-				Arch: "arm64",
+				Arch: "amd64",
 				Network: &agentproto.NetworkSnapshot{
 					Version: 1, CollectorID: strings.Repeat("b", 32), BootID: "fixture", Sequence: 1, SampledAt: time.Now().UTC(), Status: "ok",
 					Interfaces: []agentproto.NetworkInterface{{

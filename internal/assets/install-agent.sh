@@ -38,6 +38,13 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "must run as root" >&2
   exit 1
 fi
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ARCH=amd64 ;;
+  aarch64|arm64) echo "ARM 支持已暂停；当前仅支持 Linux AMD64" >&2; exit 1 ;;
+  *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
+esac
+
 INIT=''
 if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
   INIT=systemd
@@ -61,12 +68,7 @@ install -d -m 0755 /run/lock
 exec 9>/run/lock/ctlvps-install.lock
 flock -n 9 || { echo "another installation or maintenance task is running" >&2; exit 1; }
 
-ARCH="$(uname -m)"
-case "$ARCH" in
-  x86_64|amd64) ARCH=amd64 ;;
-  aarch64|arm64) ARCH=arm64 ;;
-  *) echo "unsupported architecture: $ARCH" >&2; exit 1 ;;
-esac
+
 
 # Download a complete release from the fixed publisher. The controller supplies
 # enrollment/configuration only; it cannot choose executable bytes or checksums.

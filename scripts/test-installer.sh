@@ -52,3 +52,11 @@ FIXTURE
   [[ -f "$INSTALL_DIR/data/marker" ]]
 )
 printf 'Installer argument checks passed\n'
+
+# Withdrawn ARM hosts must fail before root/service checks or any mutation.
+if (
+  uname() { if [[ "$1" == -s ]]; then echo Linux; else echo aarch64; fi; }
+  check_environment
+) > /dev/null 2>&1; then
+  printf 'ARM architecture unexpectedly accepted\n' >&2; exit 1
+fi

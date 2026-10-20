@@ -321,7 +321,7 @@ export const manualTopics: ManualTopic[] = [
                 "items": [
                   "使用管理员账户登录面板。",
                   "可以在目标 VPS 上以 root 执行安装命令。",
-                  "目标 VPS 能访问控制端站点；系统、架构和隔离能力满足安装器预检。"
+                  "目标 VPS 为 Linux AMD64（x86_64），能访问控制端站点，且满足系统与隔离能力预检；ARM 支持暂停。"
                 ]
               }
             ]

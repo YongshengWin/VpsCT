@@ -173,9 +173,9 @@
 
 | 安装方式 | 使用条件 | 执行入口 | 完成判定 |
 |---|---|---|---|
-| 原生控制端 | Debian/Ubuntu、systemd、Linux amd64/arm64 | 可信 Release 的 install.sh；源码脚本须明确 repo/version | ctlvpsd 服务正常、本机深度就绪检查、HTTPS 页面及登录正常 |
-| Docker 控制端 | 可用的本机 Docker Engine、Compose v2；包括 Alpine/OpenRC 宿主机 | 可信源码的 deploy/docker-compose.yml | 容器 running/healthy、重启计数稳定、卷持久化、HTTPS 正常 |
-| 被控 VPS | 支持的 Linux/架构及系统隔离能力 | 服务器 API 生成的短期安装命令，在明确授权的目标主机执行 | agent_status=online、能力满足请求、后续节点实际已应用 |
+| 原生控制端 | Debian/Ubuntu、systemd、Linux amd64 | 可信 Release 的 install.sh；源码脚本须明确 repo/version | ctlvpsd 服务正常、本机深度就绪检查、HTTPS 页面及登录正常 |
+| Docker 控制端 | Linux AMD64、可用的本机 Docker Engine、Compose v2；包括 Alpine/OpenRC 宿主机 | 可信源码的 deploy/docker-compose.yml | 容器 running/healthy、重启计数稳定、卷持久化、HTTPS 正常 |
+| 被控 VPS | Linux AMD64 及系统隔离能力 | 服务器 API 生成的短期安装命令，在明确授权的目标主机执行 | agent_status=online、能力满足请求、后续节点实际已应用 |
 
 第一台控制端尚未运行时从用户指定的可信仓库/发行包读取这份 Skill；不能假定已有 API。不要硬编码个人面板域名、机器清单、GitHub owner 或 latest 版本。
 

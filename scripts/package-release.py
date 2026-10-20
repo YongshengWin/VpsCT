@@ -27,7 +27,7 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*', args.repository):
         parser.error('repository must be OWNER/REPO')
     required = [*ROOT_DOCUMENTS, 'third_party/manifest.json', 'docs/operations.md', 'uninstall.sh']
-    required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64', 'arm64')]
+    required += [f'bin/{name}-linux-{arch}' for name in ('ctlvpsd', 'ctlvps-agent') for arch in ('amd64',)]
     for name in required:
         if not (ROOT / name).is_file():
             parser.error(f'missing release input: {name}')
@@ -42,7 +42,7 @@ def main():
     (out / 'uninstall.sh').chmod(0o755)
     agent_installer = (ROOT / 'internal/assets/install-agent.sh').read_text().replace("RELEASE_VERSION='__VERSION__'", f"RELEASE_VERSION='{args.version}'")
     (out / 'install-agent.sh').write_text(agent_installer)
-    for arch in ('amd64', 'arm64'):
+    for arch in ('amd64',):
         with tempfile.TemporaryDirectory() as tmp:
             package = pathlib.Path(tmp)
             shutil.copy2(ROOT / f'bin/ctlvpsd-linux-{arch}', package / 'ctlvpsd')
@@ -50,7 +50,7 @@ def main():
             shutil.copy2(out / 'install.sh', package / 'install.sh')
             shutil.copy2(out / 'install-agent.sh', package / 'install-agent.sh')
             (package / 'agents').mkdir()
-            for agent_arch in ('amd64', 'arm64'):
+            for agent_arch in ('amd64',):
                 name = f'ctlvps-agent-linux-{agent_arch}'
                 shutil.copy2(ROOT / 'bin' / name, package / 'agents' / name)
             shutil.copy2(ROOT / 'deploy/ctlvpsd.service', package / 'ctlvpsd.service')
@@ -73,7 +73,7 @@ def main():
             with tarfile.open(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'w:gz') as archive:
                 for path in sorted(package.iterdir()):
                     archive.add(path, arcname=path.name, filter=metadata)
-    for arch in ('amd64','arm64'):
+    for arch in ('amd64',):
         shutil.copy2(ROOT / f'bin/ctlvps-agent-linux-{arch}', out / f'ctlvps-agent-linux-{arch}')
         shutil.copy2(ROOT / f'bin/ctlvps-verify-linux-{arch}', out / f'ctlvps-verify-linux-{arch}')
     for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
@@ -84,7 +84,7 @@ def main():
             'product': 'VpsCT', 'component': component, 'version': version,
             'arch': arch, 'epoch': args.security_epoch}})
     signed(out / 'install.sh', 'installer', args.version, 'all')
-    for arch in ('amd64', 'arm64'):
+    for arch in ('amd64',):
         signed(out / f'ctlvps-{args.version}-linux-{arch}.tar.gz', 'controller', args.version, arch)
         signed(out / f'ctlvps-agent-linux-{arch}', 'agent', args.version, arch)
         signed(out / f'ctlvps-verify-linux-{arch}', 'verifier', args.version, arch)

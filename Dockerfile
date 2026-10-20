@@ -12,6 +12,7 @@ FROM golang:1.26.9-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=
 WORKDIR /src
+RUN test "$(uname -m)" = x86_64 || { echo "VpsCT currently supports Linux AMD64 only" >&2; exit 1; }
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
@@ -19,8 +20,7 @@ COPY . .
 COPY --from=web /src/web/dist ./web/dist
 ENV CGO_ENABLED=0
 RUN go build -trimpath -ldflags "-s -w -X ctlvps/internal/buildinfo.Version=${VERSION} -X ctlvps/internal/buildinfo.Commit=${COMMIT}" -o /out/ctlvpsd ./cmd/ctlvpsd \
- && GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X ctlvps/internal/buildinfo.Version=${VERSION}" -o /out/agents/ctlvps-agent-linux-amd64 ./cmd/ctlvps-agent \
- && GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X ctlvps/internal/buildinfo.Version=${VERSION}" -o /out/agents/ctlvps-agent-linux-arm64 ./cmd/ctlvps-agent
+ && GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X ctlvps/internal/buildinfo.Version=${VERSION}" -o /out/agents/ctlvps-agent-linux-amd64 ./cmd/ctlvps-agent
 
 # ---- runtime ----
 FROM alpine:3.23

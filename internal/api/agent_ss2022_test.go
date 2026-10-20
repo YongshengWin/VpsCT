@@ -111,7 +111,7 @@ func TestAgentSS2022EgressPreviewCreateUpdateAndReceipts(t *testing.T) {
 		Diagnostics: agentproto.Diagnostics{NetworkBindingVersion: agentproto.NetworkBindingVersion, NetworkEgressVersion: agentproto.NetworkEgressVersion,
 			NetworkTransportVersion: agentproto.NetworkTransportVersion, NetworkConfigureAllowed: true, SecurityVersion: 1, SecurityPolicy: true, Nftables: true, Systemd: true,
 			Cores: []agentproto.CoreStatus{{Name: "sing-box", Version: "1.13.3", Installed: true}}},
-		Metrics: agentproto.Metrics{Arch: "arm64", Network: &agentproto.NetworkSnapshot{Version: 1, CollectorID: strings.Repeat("a", 32), BootID: "ss2022-fixture-boot",
+		Metrics: agentproto.Metrics{Arch: "amd64", Network: &agentproto.NetworkSnapshot{Version: 1, CollectorID: strings.Repeat("a", 32), BootID: "ss2022-fixture-boot",
 			Sequence: 1, SampledAt: time.Now().UTC(), Status: "ok", Interfaces: []agentproto.NetworkInterface{{ID: strings.Repeat("b", 32), Generation: strings.Repeat("c", 32),
 				Name: "wan0", Index: 2, Kind: "physical", Up: true, Carrier: true, Addresses: []string{"192.0.2.1/24"}, UsableAddresses: []string{"192.0.2.1/24"}}}}}}
 	if err := c.api.Store.SetSetting(ctx, domain.SettingSingBoxVersion, "1.13.3"); err != nil {

@@ -4,9 +4,11 @@
 
 一句话：一台控制端管很多台 VPS。在面板里加服务器、部署节点、做订阅和分享。回复用**简体中文**。
 
+当前仅支持 Linux AMD64（x86_64）的控制端、Docker 与 agent；ARM 暂停发行和安装，待真实机器验证后恢复。历史验证记录中的 ARM 结果不构成当前支持承诺。
+
 ## 1. 两块怎么装
 
-**控制端支持 Release 安装器。** 根目录 `install.sh` 安装预编译控制端、双架构 agent 分发文件和 systemd，可选 Caddy HTTPS；`--update` 停服备份后升级。源码构建用 `make build`，发行附件用 `make release VERSION=vX.Y.Z REPOSITORY=OWNER/VpsCT`，其中 OWNER 是实际 GitHub 用户或组织。也可 `cd deploy && docker compose up -d --build`。第一次创建管理员必须使用数据目录的 `setup-token`，不能重新开放无令牌初始化。
+**控制端支持 Release 安装器。** 根目录 `install.sh` 安装预编译控制端、AMD64 agent 分发文件和 systemd，可选 Caddy HTTPS；`--update` 停服备份后升级。源码构建用 `make build`，发行附件用 `make release VERSION=vX.Y.Z REPOSITORY=OWNER/VpsCT`，其中 OWNER 是实际 GitHub 用户或组织。也可 `cd deploy && docker compose up -d --build`。第一次创建管理员必须使用数据目录的 `setup-token`，不能重新开放无令牌初始化。
 
 **被控 VPS 使用独立的一键脚本。** 面板「服务器 → 添加 → 生成安装命令」，在那台机器上 root 执行。脚本会 enroll，安装 systemd 或 Alpine/OpenRC 服务。当前源码的 Alpine 被控端支持官方 musl sing-box、具备 cgroup-skb BPF/bpffs 的官方 mieru，以及 agent 网页维护；需要可写 cgroup v2 和完整隔离能力，Snell 不支持 OpenRC，控制端仍需要 systemd。源码支持不等于旧发行附件已支持，架构与验证范围见 `docs/operations.md` 和 `docs/github-issue-validation.md`。agent **只出不进**，VPS 不用开管理端口。节点不是再装一次，是面板里点部署，agent 自己收敛受支持内核。
 

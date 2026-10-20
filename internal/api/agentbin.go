@@ -30,8 +30,6 @@ func normalizeAgentArch(arch string) string {
 	switch strings.ToLower(strings.TrimSpace(arch)) {
 	case "amd64", "x86_64", "x64":
 		return "amd64"
-	case "arm64", "aarch64":
-		return "arm64"
 	default:
 		return ""
 	}

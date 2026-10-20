@@ -262,3 +262,20 @@ esac
 		})
 	}
 }
+
+// Reject withdrawn ARM installations before service detection, package installs,
+// enrollment or downloads, including when the caller has root privileges.
+func TestAgentInstallerRejectsARMBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"id": "#!/bin/sh\necho 0\n", "uname": "#!/bin/sh\necho aarch64\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("bash", "-c", string(InstallAgent), "installer", "--server", "https://panel.example.com", "--token", "fixture-token")
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	output, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "ARM 支持已暂停") {
+		t.Fatalf("expected explicit ARM refusal, err=%v output=%s", err, output)
+	}
+}

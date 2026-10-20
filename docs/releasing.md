@@ -49,9 +49,9 @@ make release VERSION=v0.1.7 REPOSITORY=YongshengWin/VpsCT
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
 | `install-agent.sh` | 固定发行版本的 agent 安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.7-linux-amd64.tar.gz`、`ctlvps-v0.1.7-linux-arm64.tar.gz` | 对应架构控制端及校验器、双架构 agent、安装脚本、服务配置、说明文档与许可文件 |
-| `ctlvps-agent-linux-amd64`、`ctlvps-agent-linux-arm64` | agent 独立分发文件 |
-| `ctlvps-verify-linux-amd64`、`ctlvps-verify-linux-arm64` | 安装及恢复使用的对应架构校验器 |
+| `ctlvps-v0.1.7-linux-amd64.tar.gz` | 对应架构控制端及校验器、AMD64 agent、安装脚本、服务配置、说明文档与许可文件 |
+| `ctlvps-agent-linux-amd64` | agent 独立分发文件 |
+| `ctlvps-verify-linux-amd64` | 安装及恢复使用的对应架构校验器 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
 | `SHA256SUMS` | 下载文件的校验清单 |
 
@@ -105,7 +105,7 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.7 \
 
 1. 标签对应正确提交，变更记录和兼容说明完整。
 2. 安装脚本中的仓库、版本与草稿一致。
-3. 双架构附件、许可文件及校验清单齐全，归档内的文档链接可用。
+3. AMD64 附件、许可文件及校验清单齐全，归档内的文档链接可用。
 4. 最终附件的安装、真实历史网页升级和恢复验收记录已填写，附版本、提交、架构及校验清单，未覆盖的范围明确列出；不能只以源码单元测试或交叉编译成功替代附件验收。
 
 草稿尚不能作为普通用户的公开下载入口。工作流遇到已有 Release 会跳过创建，不自动覆盖附件；若失败时已留下草稿，先检查附件再决定补传或重建。

@@ -41,7 +41,7 @@ func TestControllerReadinessChecksDistributionWithoutChangingLiveness(t *testing
 	c.api.Config.AgentBinDir = dir
 	c.do("GET", "/healthz", nil, 200)
 	c.do("GET", "/healthz?ready=1", nil, 503)
-	for _, arch := range []string{"amd64", "arm64"} {
+	for _, arch := range []string{"amd64"} {
 		if err := os.WriteFile(filepath.Join(dir, "ctlvps-agent-linux-"+arch), []byte("fixture"), 0755); err != nil {
 			t.Fatal(err)
 		}

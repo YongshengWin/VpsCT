@@ -26,18 +26,16 @@ agent:
 ## agents: cross-compile static linux agents served at /dl/agent/{platform}
 agents:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvps-agent-linux-amd64 ./cmd/ctlvps-agent
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvps-agent-linux-arm64 ./cmd/ctlvps-agent
 
 ## build: web + server + linux agents
 build: web
 	$(MAKE) server agents
 
-## release: linux/amd64 + linux/arm64 server binaries plus agents
+## release: linux/amd64 server binaries plus agents
 release: web
 	$(MAKE) agents
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvpsd-linux-amd64 ./cmd/ctlvpsd
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN)/ctlvpsd-linux-arm64 ./cmd/ctlvpsd
-	for arch in amd64 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-verify-linux-$$arch ./cmd/ctlvps-verify; CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-sign-linux-$$arch ./cmd/ctlvps-sign; done
+	for arch in amd64; do CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-verify-linux-$$arch ./cmd/ctlvps-verify; CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build $(GOFLAGS) -o $(BIN)/ctlvps-sign-linux-$$arch ./cmd/ctlvps-sign; done
 	python3 scripts/package-release.py --version "$(VERSION)" --repository "$(REPOSITORY)" --security-epoch "$(SECURITY_EPOCH)"
 
 ## dev: run the API with hot-reloading SPA proxied from Vite (run `make dev-web` in another shell)

@@ -146,7 +146,7 @@ func (a *API) agentCapabilities(w http.ResponseWriter, r *http.Request) error {
 		"limits":     map[string]any{"requests_per_minute_per_key": 240, "requests_per_minute_per_ip": 240, "max_request_bytes": 4 << 20},
 		"operations": operations,
 		"workflows":  agentWorkflows(operations),
-		"deployment": map[string]any{"reference_url": "/api/v1/agent/reference", "reference_section": "2. 部署与恢复", "modes": []string{"native-systemd", "docker-compose"}, "requires_host_authorization": true, "bootstrap_requires_setup_token": true, "api_key_creation": "session_only", "docker_maintenance": "host_compose_script"},
+		"deployment": map[string]any{"reference_url": "/api/v1/agent/reference", "reference_section": "2. 部署与恢复", "supported_platforms": []string{"linux/amd64"}, "modes": []string{"native-systemd", "docker-compose"}, "requires_host_authorization": true, "bootstrap_requires_setup_token": true, "api_key_creation": "session_only", "docker_maintenance": "host_compose_script"},
 		"notes": []string{
 			"API key 继承账户角色及资源权限；read 为 GET/HEAD，其他方法需要 write。",
 			"只读响应可能包含节点凭据和订阅链接，请仅向授权用户显示。",

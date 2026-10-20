@@ -8,7 +8,7 @@ mkdir -p "$destination"
 catalog=$(mktemp)
 trap 'rm -f -- "$catalog"' EXIT
 gh api "repos/YongshengWin/VpsCT/releases/tags/$version" > "$catalog"
-for name in install.sh install-agent.sh uninstall.sh SHA256SUMS "ctlvps-$version-linux-amd64.tar.gz" "ctlvps-$version-linux-arm64.tar.gz" ctlvps-agent-linux-amd64 ctlvps-agent-linux-arm64 ctlvps-verify-linux-amd64 ctlvps-verify-linux-arm64; do
+for name in install.sh install-agent.sh uninstall.sh SHA256SUMS "ctlvps-$version-linux-amd64.tar.gz" ctlvps-agent-linux-amd64 ctlvps-verify-linux-amd64; do
  curl -fLsS --connect-timeout 15 --max-time 180 --proto '=https' --proto-redir '=https' "https://github.com/YongshengWin/VpsCT/releases/download/$version/$name" -o "$destination/$name"
 done
 python3 - "$catalog" "$destination" <<'PY'
