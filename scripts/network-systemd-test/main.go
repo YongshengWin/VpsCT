@@ -188,6 +188,10 @@ func main() {
 	if _, err := os.Stat("/.dockerenv"); err != nil {
 		panic("container required")
 	}
+	if len(os.Args) == 2 && os.Args[1] == "memory-preflight" {
+		memoryPreflight()
+		return
+	}
 	if len(os.Args) == 2 && os.Args[1] == "ssh-peer" {
 		sshFixturePeer()
 		return

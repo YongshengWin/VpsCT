@@ -157,3 +157,5 @@ gh run list --workflow ci.yml
 ```
 
 确认该提交的 CI 全部成功并生成证据后，重跑失败的标签工作流。测试失败先修复；只有确认是网络或 runner 等外部故障时才重跑相应任务，不通过删除检查或反复随机重试制造绿灯。工作流和测试工具改动先执行 `python3 scripts/test-ci-tools.py`、ShellCheck 与 actionlint。
+
+日常 PR 的 UDP 持续负载为 60 秒，仍验证 8192 会话、活跃映射、闲置回收、重新填满与内存门槛。发布 PR 加上 `release-candidate` 标签后自动重跑完整 600 秒；手动 CI 也可选择 600 秒。CI 证据记录实际档位，Release 校验拒绝 60 秒、缺失档位或跳过压测的证据。环境预检失败不会通过自动重试被掩盖。

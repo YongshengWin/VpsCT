@@ -1,7 +1,16 @@
 name: CI
 on:
   pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'UDP soak: 60s daily regression; 600s release acceptance'
+        type: choice
+        options: ['60', '600']
+        default: '600'
+env:
+  UDP_STRESS_SECONDS: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_seconds || contains(github.event.pull_request.labels.*.name, 'release-candidate') && '600' || '60' }}
 permissions:
   contents: read
   actions: read
@@ -156,7 +165,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/ci-env
-      - name: Full ten-minute UDP soak (runs alongside other tests)
+      - name: UDP soak (60s daily; 600s release candidate)
         run: bash scripts/ci-scenarios.sh soak udp
   upgrade:
     needs: source

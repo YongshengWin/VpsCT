@@ -53,23 +53,22 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 	// never enabled the memory controller. Require the actual kernel limit.
 	cgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
 	must(err)
-	memoryGroup := ""
-	for _, line := range strings.Split(string(cgroup), "\n") {
-		if path, ok := strings.CutPrefix(line, "0::"); ok {
-			memoryGroup = filepath.Join("/sys/fs/cgroup", strings.TrimPrefix(path, "/"))
-		}
-	}
-	if memoryGroup == "" {
-		panic("stress fixture requires cgroup v2 memory enforcement")
-	}
-	limit, err := os.ReadFile(filepath.Join(memoryGroup, "memory.max"))
+	mounts, err := os.ReadFile("/proc/self/mountinfo")
+	must(err)
+	memoryGroup, legacy, err := memoryCgroupPath(string(cgroup), string(mounts))
 	if err != nil {
-		panic(fmt.Sprintf("stress memory controller unavailable; container must enable Docker memory limits: %v", err))
+		panic(fmt.Sprintf("stress memory controller resolution: %v; membership=%s mounts=%s", err, cgroup, mounts))
 	}
+	limitFile, eventFile := "memory.max", "memory.events"
+	if legacy {
+		limitFile, eventFile = "memory.limit_in_bytes", "memory.oom_control"
+	}
+	limit, err := os.ReadFile(filepath.Join(memoryGroup, limitFile))
+	must(err)
 	if strings.TrimSpace(string(limit)) != "268435456" {
-		panic("stress fixture proxy memory.max must enforce the product's 256MiB budget: " + string(limit))
+		panic("stress fixture proxy kernel limit must enforce 256MiB: " + string(limit))
 	}
-	fmt.Printf("UDP stress kernel budget verified: %s memory.max=%s", memoryGroup, limit)
+	fmt.Printf("UDP stress kernel budget verified: %s %s=%s", memoryGroup, limitFile, limit)
 	runtimeEnv, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
 	must(err)
 	thpBound := false
@@ -184,7 +183,7 @@ func testUDPStress(ctx context.Context, st *store.Store, serverID int64) {
 			diagnostics("memory failure")
 			panic(fmt.Sprintf("stress proxy RSS exceeded384MiB budget: start=%dKiB peak=%dKiB round=%dms", startRSS/1024, peakRSS/1024, result.Millis))
 		}
-		memoryEvents, err := os.ReadFile(filepath.Join(memoryGroup, "memory.events"))
+		memoryEvents, err := os.ReadFile(filepath.Join(memoryGroup, eventFile))
 		must(err)
 		for _, line := range strings.Split(string(memoryEvents), "\n") {
 			if value, ok := strings.CutPrefix(line, "oom_kill "); ok && value != "0" {

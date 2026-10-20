@@ -57,6 +57,9 @@ docker run -d --platform "linux/$arch" --name "$container" "${network_args[@]}" 
 # Wait for boot-time tmpfiles cleanup before creating fixture CA/temp files.
 # Degraded is expected in a container; an unfinished boot or timeout is not.
 bash scripts/wait-systemd-container.sh "$container" >/dev/null
+if [[ "$network_case" == forward-stress ]]; then
+ docker exec "$container" timeout 15s /fixtures/integration memory-preflight
+fi
 if [[ "$network_case" == transit || "$network_case" == transit-ss2022 ]]; then
  bash scripts/wait-systemd-container.sh "$landing_container" >/dev/null
  docker exec "$landing_container" timeout 600s /fixtures/integration transit-landing > "$fixture/landing.log" 2>&1 &

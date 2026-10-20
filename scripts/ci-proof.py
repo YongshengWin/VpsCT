@@ -29,7 +29,7 @@ def context():
             "source_tree": tree(), "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
 
-def validate(proof, repository, run_id, source_tree, source_head, now=None):
+def validate(proof, repository, run_id, source_tree, source_head, now=None, require_full=True):
     if proof.get("schema") != 1 or proof.get("repository") != repository or proof.get("run_id") != run_id:
         raise ValueError("CI evidence identity mismatch")
     if proof.get("source_tree") != source_tree or proof.get("source_head") != source_head:
@@ -39,6 +39,9 @@ def validate(proof, repository, run_id, source_tree, source_head, now=None):
     results = proof.get("results", {})
     if set(results) != REQUIRED or any(result != "success" for result in results.values()):
         raise ValueError("CI evidence is missing a successful required gate")
+    duration = proof.get("soak_seconds")
+    if duration not in (60, 600) or (require_full and duration != 600):
+        raise ValueError("release evidence requires the complete 600-second UDP soak")
     age = (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(proof["created_at"])
     if age.total_seconds() < -600 or age > dt.timedelta(days=7):
         raise ValueError("CI evidence is stale or future-dated")
@@ -86,11 +89,12 @@ def main():
         proof["sha256"] = digest(archive)
         filename = "ci-build.json"
     else:
+        proof["soak_seconds"] = int(os.environ["UDP_STRESS_SECONDS"])
         results = json.loads(os.environ["CI_RESULTS"])
         proof["results"] = {key: value["result"] for key, value in results.items()}
         if results["source"]["outputs"]["tree"] != proof["source_tree"]:
             raise ValueError("final checkout differs from the tested build")
-        validate(proof, proof["repository"], proof["run_id"], proof["source_tree"], proof["source_head"])
+        validate(proof, proof["repository"], proof["run_id"], proof["source_tree"], proof["source_head"], require_full=False)
         filename = "ci-evidence.json"
     (args.directory / filename).write_text(json.dumps(proof, indent=2) + "\n")
 

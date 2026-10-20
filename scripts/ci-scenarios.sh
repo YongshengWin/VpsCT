@@ -39,7 +39,8 @@ case "$category" in
    network/managed) cases=(transit-ss2022 forward subscriptions);;
    network/direct|network/ssh|network/wireguard) cases=("$scenario"); export NETWORK_TEST_CLIENT=shadowsocks-rust;;
    network/udp) cases=(forward-udp forward-both forward-udp6 forward-socks-udp forward-wireguard-udp);;
-   soak/udp) cases=(forward-stress); export UDP_STRESS_SECONDS=600;;
+   soak/udp) cases=(forward-stress); export UDP_STRESS_SECONDS=${UDP_STRESS_SECONDS:-600}
+    case "$UDP_STRESS_SECONDS" in 60|600) ;; *) echo "unsupported CI soak duration" >&2; exit 2;; esac;;
    *) exit 2;;
   esac
   needed=(sing-box)

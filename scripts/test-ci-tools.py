@@ -30,7 +30,7 @@ fixtures = load("fetch-network-test-fixtures")
 class EvidenceTests(unittest.TestCase):
     def valid(self):
         return {"schema": 1, "repository": "example/VpsCT", "run_id": 12,
-                "source_tree": "a" * 40, "source_head": "b" * 40,
+                "source_tree": "a" * 40, "source_head": "b" * 40, "soak_seconds": 600,
                 "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
                 "results": {name: "success" for name in proof.REQUIRED}}
 
@@ -39,6 +39,13 @@ class EvidenceTests(unittest.TestCase):
 
     def test_exact_success(self):
         self.check(self.valid())
+
+    def test_daily_soak_cannot_authorize_release(self):
+        data = self.valid(); data["soak_seconds"] = 60
+        with self.assertRaises(ValueError): self.check(data)
+        proof.validate(data, "example/VpsCT", 12, "a" * 40, "b" * 40, require_full=False)
+        del data["soak_seconds"]
+        with self.assertRaises(ValueError): self.check(data)
 
     def test_identity_and_source_rejection(self):
         for key, value in [("repository", "other/VpsCT"), ("run_id", 13),
@@ -142,7 +149,7 @@ case "$n" in 1) echo 'Failed to connect to bus' >&2; exit 1;; 2) echo starting; 
             fake = scripts / "test-network-systemd-container.sh"
             fake.write_text('printf "%s|%s|%s\\n" "$NETWORK_SYSTEMD_CASE" "${NETWORK_TEST_CLIENT:-sing-box}" "${UDP_STRESS_SECONDS:-}" >> "$CI_FIXTURE_LOG"\nexit "${CI_FIXTURE_EXIT:-0}"\n')
             log = root / "calls"
-            environment = {**os.environ, "CI_FIXTURE_LOG": str(log)}
+            environment = {**os.environ, "CI_FIXTURE_LOG": str(log), "UDP_STRESS_SECONDS": "600"}
             for category, scenario in [("network", x) for x in ("managed", "direct", "ssh", "wireguard", "udp")] + [("soak", "udp")]:
                 subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), category, scenario], env=environment,
                                check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -151,6 +158,12 @@ case "$n" in 1) echo 'Failed to connect to bus' >&2; exit 1;; 2) echo starting; 
                 "forward-udp", "forward-both", "forward-udp6", "forward-socks-udp", "forward-wireguard-udp", "forward-stress"])
             self.assertEqual(lines[-1][2], "600")
             self.assertTrue(all(x[1] == "shadowsocks-rust" for x in lines[3:6]))
+            subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "soak", "udp"],
+                env={**environment, "UDP_STRESS_SECONDS": "60"}, check=True, capture_output=True)
+            self.assertEqual(log.read_text().splitlines()[-1].split("|")[2], "60")
+            invalid = subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "soak", "udp"],
+                env={**environment, "UDP_STRESS_SECONDS": "1"}, capture_output=True)
+            self.assertEqual(invalid.returncode, 2)
             failed = subprocess.run(["bash", str(scripts / "ci-scenarios.sh"), "network", "direct"],
                 env={**environment, "CI_FIXTURE_EXIT": "7"}, capture_output=True, text=True)
             self.assertEqual(failed.returncode, 7)
