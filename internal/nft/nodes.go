@@ -196,6 +196,25 @@ func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
 					return e
 				}
 			}
+			if _, ok := r["not"]; ok {
+				// FIB_RULE_INVERT (iproute2 JSON: "not": null) matches the
+				// complement of the fwmark class. With any mask bit set that
+				// complement also swallows VpsCT marks (id bits 0-23 are
+				// free), so treat it as a conflict. A zero mask matches every
+				// packet and its complement matches none.
+				if mask != 0 {
+					return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+				}
+				continue
+			}
+			// A rule whose mask tests none of the prefix bits never routes on
+			// the VpsCT mark namespace (bits 24-31). tailscaled's
+			// "fwmark 0x80000/0xff0000" rules fall here: the old
+			// (mark^prefix)&mask&MarkMask==0 test degenerated to constant
+			// zero for them and rejected every apply (issue #57).
+			if mask&MarkMask == 0 {
+				continue
+			}
 			for _, prefix := range prefixes {
 				if (mark^prefix)&mask&MarkMask == 0 {
 					return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
