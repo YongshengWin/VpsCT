@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/natconfig"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/provision"
 	"ctlvps/internal/store"
 	"ctlvps/internal/traffic"
@@ -156,6 +158,7 @@ type serverInput struct {
 	Name                         string          `json:"name"`
 	Region                       string          `json:"region"`
 	PublicHost                   string          `json:"public_host"`
+	PublicHostIPv6               *string         `json:"public_host_ipv6,omitempty"`
 	Tags                         []string        `json:"tags"`
 	Notes                        string          `json:"notes"`
 	QuotaBytes                   int64           `json:"quota_bytes"`
@@ -180,6 +183,16 @@ func (in serverInput) apply(s *domain.Server) error {
 	s.Name = strings.TrimSpace(in.Name)
 	s.Region = strings.ToUpper(strings.TrimSpace(in.Region))
 	s.PublicHost = strings.TrimSpace(in.PublicHost)
+	if in.PublicHostIPv6 != nil {
+		s.PublicHostIPv6 = strings.TrimSpace(*in.PublicHostIPv6)
+		if s.PublicHostIPv6 != "" {
+			host, err := networkconfig.NormalizeIPv6Host(s.PublicHostIPv6)
+			if err != nil {
+				return httpx.E(http.StatusBadRequest, "ipv6_endpoint_invalid", err.Error())
+			}
+			s.PublicHostIPv6 = host
+		}
+	}
 	s.Tags = in.Tags
 	s.Notes = in.Notes
 	if in.QuotaBytes < 0 {
@@ -279,6 +292,9 @@ func (a *API) createServer(w http.ResponseWriter, r *http.Request) error {
 		}
 		cfg = &c
 	}
+	if err := a.validateServerIPv6Change(r.Context(), s, ""); err != nil {
+		return err
+	}
 	if err := a.Store.CreateServerWithNATAndCalibration(r.Context(), &s, cfg, calibrated, traffic.PeriodStart(a.Traffic.Now(), s.QuotaResetDay), directions...); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			return httpx.Conflict("服务器名称已存在")
@@ -327,6 +343,7 @@ func (a *API) updateServer(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	prevMode := s.CoreMode
+	prevIPv6Host := s.PublicHostIPv6
 	prevBilling, prevQuota, prevResetDay := s.QuotaBilling, s.QuotaBytes, s.QuotaResetDay
 	var oldUsage *traffic.ServerUsage
 	if in.QuotaCalibratedUsageBytes != nil || in.QuotaCalibratedInboundBytes != nil || in.QuotaCalibratedOutboundBytes != nil {
@@ -344,7 +361,13 @@ func (a *API) updateServer(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.validateServerIPv6Change(r.Context(), s, prevIPv6Host); err != nil {
+		return err
+	}
 	if err := a.Store.UpdateServerWithCalibration(r.Context(), &s, calibrated, traffic.PeriodStart(a.Traffic.Now(), s.QuotaResetDay), directions...); err != nil {
+		if errors.Is(err, store.ErrIPv6IngressInUse) {
+			return httpx.E(http.StatusConflict, "ipv6_endpoint_in_use", err.Error())
+		}
 		return natAPIError(err)
 	}
 	if prevMode != s.CoreMode {
@@ -638,19 +661,24 @@ func (a *API) serverRepublish(w http.ResponseWriter, r *http.Request) error {
 }
 
 type deployInput struct {
-	Protocol       string   `json:"protocol"`
-	Name           string   `json:"name"`
-	Port           int      `json:"port"`
-	SNI            string   `json:"sni"`
-	Domain         string   `json:"domain"`
-	Obfs           bool     `json:"obfs"`
-	SnellVersion   int      `json:"snell_version"`
-	SSMethod       string   `json:"ss_method"`
-	SSNetwork      string   `json:"ss_network"`
-	MieruTransport string   `json:"mieru_transport"`
-	CertID         string   `json:"cert_id"`
-	CertMode       string   `json:"cert_mode"`
-	Tags           []string `json:"tags"`
+	IngressFamily  string              `json:"ingress_family,omitempty"`
+	Network        *networkconfig.Node `json:"network,omitempty"`
+	AdvertiseHost  string              `json:"advertise_host,omitempty"`
+	OperationID    string              `json:"operation_id,omitempty"`
+	ExpectedIPv6   string              `json:"expected_ipv6,omitempty"`
+	Protocol       string              `json:"protocol"`
+	Name           string              `json:"name"`
+	Port           int                 `json:"port"`
+	SNI            string              `json:"sni"`
+	Domain         string              `json:"domain"`
+	Obfs           bool                `json:"obfs"`
+	SnellVersion   int                 `json:"snell_version"`
+	SSMethod       string              `json:"ss_method"`
+	SSNetwork      string              `json:"ss_network"`
+	MieruTransport string              `json:"mieru_transport"`
+	CertID         string              `json:"cert_id"`
+	CertMode       string              `json:"cert_mode"`
+	Tags           []string            `json:"tags"`
 }
 
 func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
@@ -665,6 +693,12 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	var in deployInput
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
+	}
+	if in.IngressFamily == "ipv6" {
+		return a.deployIPv6Node(w, r, s, in)
+	}
+	if in.IngressFamily != "" && in.IngressFamily != "default" || in.Network != nil || in.AdvertiseHost != "" || in.ExpectedIPv6 != "" || in.OperationID != "" {
+		return httpx.BadRequest("此部署入口的初始网络参数只适用于仅 IPv6 节点")
 	}
 	used, err := a.Store.UsedListenPorts(r.Context(), id)
 	if err != nil {

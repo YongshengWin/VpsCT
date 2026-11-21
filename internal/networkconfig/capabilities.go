@@ -21,6 +21,8 @@ type ExecutableCapabilities struct {
 	Mita                int `json:"mita"`
 	Schema              int `json:"schema"`
 	NetworkBinding      int `json:"network_binding"`
+	IPv6Ingress         int `json:"ipv6_ingress,omitempty"`
+	NetworkIngress      int `json:"network_ingress"`
 	NetworkEgress       int `json:"network_egress"`
 	NetworkSSH          int `json:"network_ssh"`
 	NetworkWireGuard    int `json:"network_wireguard"`
@@ -35,5 +37,5 @@ type ExecutableCapabilities struct {
 }
 
 func CurrentCapabilities() ExecutableCapabilities {
-	return ExecutableCapabilities{OpenRCMieru: 1, OpenRCMaintenance: 1, OpenRC: 1, NAT: NATVersion, Schema: 1, Mita: MitaVersion, NetworkBinding: BindingVersion, NetworkEgress: EgressVersion, NetworkSSH: SSHVersion, NetworkWireGuard: WireGuardVersion, NetworkForward: ForwardVersion, NetworkBilling: BillingVersion, ListenBinding: 1, ForwardDNS: 1, ForwardPrivate: 1, ForwardTransport: 1, ForwardUDP: 1, ForwardUDPIsolation: 1}
+	return ExecutableCapabilities{OpenRCMieru: 1, OpenRCMaintenance: 1, OpenRC: 1, NAT: NATVersion, Schema: 1, NetworkBinding: BindingVersion, NetworkIngress: IngressVersion, IPv6Ingress: IPv6IngressVersion, NetworkEgress: EgressVersion, NetworkSSH: SSHVersion, NetworkWireGuard: WireGuardVersion, NetworkForward: ForwardVersion, NetworkBilling: BillingVersion, ListenBinding: 1, ForwardDNS: 1, ForwardPrivate: 1, ForwardTransport: 1, ForwardUDP: 1, ForwardUDPIsolation: 1}
 }

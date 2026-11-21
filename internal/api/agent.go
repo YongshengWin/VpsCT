@@ -251,6 +251,11 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 		resp.NetworkBillingVersion = agentproto.NetworkBillingVersion
 		resp.NetworkBillingCurrent, resp.NetworkBillingRequested = &billing.Current, &billing.Requested
 	}
+	if pending, e := a.Store.HasUnpublishedIPv6Deployments(ctx, ac.Server.ID); e == nil && pending {
+		if _, _, e := a.Desired.Publish(ctx, ac.Server.ID); e != nil {
+			a.Logger.Warn("retry IPv6 deployment publication", "server_id", ac.Server.ID, "err", e)
+		}
+	}
 	if ds, err := a.Store.LatestDesiredState(ctx, ac.Server.ID); err == nil {
 		resp.DesiredRevision, resp.DesiredHash = ds.Revision, ds.Hash
 		if d, err := desired.Load(ds); err == nil {
@@ -479,6 +484,12 @@ func (a *API) agentDesired(w http.ResponseWriter, r *http.Request) error {
 	}
 	if version > 0 && r.Header.Get(agentproto.NetworkBindingHeader) != fmt.Sprint(version) {
 		return httpx.E(409, "agent_upgrade_required", "此服务器已启用网络绑定，需要支持该配置版本的 agent；请先升级")
+	}
+	if ds.IPv6IngressVersion > 0 && r.Header.Get(networkconfig.IPv6IngressHeader) != fmt.Sprint(ds.IPv6IngressVersion) {
+		return httpx.E(409, "agent_upgrade_required", "仅 IPv6 节点需要支持该入口策略的 agent")
+	}
+	if ds.NetworkIngressVersion > 0 && r.Header.Get(agentproto.NetworkIngressHeader) != fmt.Sprint(ds.NetworkIngressVersion) {
+		return httpx.E(409, "agent_upgrade_required", "此服务器已启用入口来源策略，需要支持该配置版本的 agent；请先升级")
 	}
 	if egressVersion > 0 && r.Header.Get(agentproto.NetworkEgressHeader) != fmt.Sprint(egressVersion) {
 		return httpx.E(409, "agent_upgrade_required", "此服务器已启用中转出口，需要支持该配置版本的 agent；请先升级")

@@ -1,6 +1,9 @@
 name: VpsCT CI environment
 description: Restore tool caches and the verified build from this workflow run.
 inputs:
+  go:
+    description: Install Go and restore its build and module caches
+    default: 'true'
   bundle:
     description: Restore the source job build artifact
     default: 'true'
@@ -11,6 +14,7 @@ runs:
   using: composite
   steps:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+      if: inputs.go == 'true'
       with:
         go-version-file: go.mod
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7

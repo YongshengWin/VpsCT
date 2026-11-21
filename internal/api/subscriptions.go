@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/store"
 	"ctlvps/internal/subscription"
 	"ctlvps/internal/traffic"
 )
@@ -61,9 +64,25 @@ func (a *API) subView(r *http.Request, s domain.Subscription, full bool) Subscri
 	return v
 }
 
-func (a *API) canSeeSubscription(u *domain.User, s domain.Subscription) bool {
+func (a *API) canSeeSubscription(ctx context.Context, u *domain.User, s domain.Subscription) bool {
 	if isAdmin(u) {
 		return true
+	}
+	// A share is the authority for its subscription's ownership. Its cached
+	// owner fields can lag a transfer, an unbind or a failed update.
+	if s.Kind == domain.SubShare {
+		if s.ShareID == nil || u == nil {
+			return false
+		}
+		sh, err := a.Store.GetShare(ctx, *s.ShareID)
+		if err != nil || sh.UserID == nil || *sh.UserID != u.ID {
+			return false
+		}
+		shares, err := a.Store.ListShares(ctx, &u.ID)
+		return err == nil && len(shares) > 0 && shares[0].ID == sh.ID
+	}
+	if u == nil {
+		return false
 	}
 	if s.OwnerUserID == u.ID {
 		return true
@@ -84,7 +103,7 @@ func (a *API) listSubscriptions(w http.ResponseWriter, r *http.Request) error {
 	}
 	out := []SubscriptionView{}
 	for _, s := range list {
-		if !a.canSeeSubscription(u, s) {
+		if !a.canSeeSubscription(r.Context(), u, s) {
 			continue
 		}
 		if k := r.URL.Query().Get("kind"); k != "" && string(s.Kind) != k {
@@ -272,7 +291,7 @@ func (a *API) getSubscription(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeSubscription(userFrom(r.Context()), s) {
+	if !a.canSeeSubscription(r.Context(), userFrom(r.Context()), s) {
 		return httpx.ErrForbidden
 	}
 	httpx.OK(w, a.subView(r, s, true))
@@ -365,7 +384,7 @@ func (a *API) renderSubscription(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeSubscription(userFrom(r.Context()), s) {
+	if !a.canSeeSubscription(r.Context(), userFrom(r.Context()), s) {
 		return httpx.ErrForbidden
 	}
 	format := r.URL.Query().Get("format")
@@ -473,7 +492,7 @@ func (in templateInput) apply(t *domain.RuleTemplate) error {
 		t.Variables = in.Variables
 	}
 	// validate syntax by rendering an empty bundle
-	b := &subscription.Bundle{Name: "check", Template: t}
+	b := &subscription.Bundle{Name: "check", Template: t, ValidationOnly: true}
 	if _, err := subscription.RenderBundle(b, t.Kind); err != nil {
 		return httpx.BadRequest("模板无法渲染: " + err.Error())
 	}
@@ -502,6 +521,9 @@ func (a *API) updateTemplate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.requireSystemTemplateForDelegatedManager(r, id); err != nil {
+		return err
+	}
 	t, err := a.Store.GetTemplate(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
@@ -527,11 +549,28 @@ func (a *API) deleteTemplate(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.requireSystemTemplateForDelegatedManager(r, id); err != nil {
+		return err
+	}
 	if err := a.Store.DeleteTemplate(r.Context(), id); err != nil {
 		return err
 	}
 	a.audit(r, "template.delete", strconv.FormatInt(id, 10), nil)
 	httpx.NoContent(w)
+	return nil
+}
+
+func (a *API) requireSystemTemplateForDelegatedManager(r *http.Request, id int64) error {
+	if isAdmin(userFrom(r.Context())) {
+		return nil
+	}
+	_, err := a.Store.PersonalTemplateOwner(r.Context(), id)
+	if err == nil {
+		return httpx.ErrForbidden
+	}
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
 	return nil
 }
 

@@ -24,6 +24,10 @@ type Proxy struct {
 	Server string
 	Port   int
 	Params map[string]any
+	// Region metadata is used only during subscription generation and is never
+	// serialized into client proxy parameters.
+	Region       string
+	RegionSource string
 }
 
 // FromDomain unpacks a domain.Node.

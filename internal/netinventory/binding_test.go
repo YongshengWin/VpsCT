@@ -135,3 +135,32 @@ func TestBindingRespectsServerIPv4Policy(t *testing.T) {
 		t.Fatal("IPv6 resolver accepted on IPv4-only server")
 	}
 }
+
+func TestPublicIPv6BindingTracksRotationWithoutWildcardFallback(t *testing.T) {
+	_, _, snapshot := bindingFixture()
+	first := "2606:4700:100::12/64"
+	next := "2606:4700:100::13/64"
+	iface := &snapshot.Interfaces[0]
+	policy := networkconfig.Node{IngressFamily: "ipv6", ListenMode: "public_ipv6", ListenInterfaceID: iface.ID, AdvertiseMode: "inherit_ipv6", OnUnavailable: "block"}
+	iface.Addresses = []string{first, next}
+	iface.UsableAddresses = iface.Addresses
+	iface.TemporaryIPv6 = []string{next}
+	out, err := ResolveBinding(policy, nil, snapshot, true, snapshot.SampledAt)
+	if err != nil || out.ListenAddress != "2606:4700:100::12" {
+		t.Fatalf("did not select stable IPv6 with IPv4-only egress: %v, %v", out.ListenAddress, err)
+	}
+	iface.UsableAddresses = nil
+	if _, err := ResolveBinding(policy, nil, snapshot, false, snapshot.SampledAt); err == nil {
+		t.Fatal("must fail when the IPv6 listener disappears")
+	}
+	iface.TemporaryIPv6 = nil
+	iface.UsableAddresses = []string{next}
+	out, err = ResolveBinding(policy, nil, snapshot, false, snapshot.SampledAt)
+	if err != nil || out.ListenAddress != "2606:4700:100::13" {
+		t.Fatalf("did not select the replacement public IPv6: %v, %v", out.ListenAddress, err)
+	}
+	iface.UsableAddresses = []string{first, next}
+	if _, err := ResolveBinding(policy, nil, snapshot, false, snapshot.SampledAt); err == nil {
+		t.Fatal("must request an explicit address when multiple stable addresses exist")
+	}
+}

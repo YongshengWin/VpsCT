@@ -39,6 +39,9 @@ func validateNodeNetwork(n agentproto.NodeSpec, ds *agentproto.DesiredState) err
 	if n.RuntimeNetwork == nil {
 		return errors.New("节点网络尚未由本机解析")
 	}
+	if n.Network.Policy.IngressFamily == "ipv6" && !networkconfig.IsPublicIPv6(n.RuntimeNetwork.ListenAddress) {
+		return errors.New("仅 IPv6 节点缺少已核验的公网 IPv6 监听")
+	}
 	var direct *networkconfig.Direct
 	if n.RuntimeNetwork.Direct != nil {
 		direct = &n.RuntimeNetwork.Direct.Config

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Download, ExternalLink, KeyRound, Plus, Trash2 } from "lucide-react";
-import { del, get, post } from "@/lib/api";
+import { del, get, post, put } from "@/lib/api";
 import type { User } from "@/lib/types";
 import { fmtDate } from "@/lib/utils";
 import { skillInstallCommand, type SkillClient } from "@/lib/agent-install";
@@ -13,6 +13,7 @@ interface DeveloperAPIKey {
   name: string;
   token_hint: string;
   scopes: ("read" | "write")[];
+  operations: string[] | null;
   created_at: string;
   expires_at?: string | null;
   last_used_at?: string | null;
@@ -32,6 +33,7 @@ export function APIKeysCard({ user }: { user: User }) {
   const toast = useToast();
   const [creating, setCreating] = React.useState(false);
   const [revoking, setRevoking] = React.useState<DeveloperAPIKey | null>(null);
+  const [editing, setEditing] = React.useState<DeveloperAPIKey | null>(null);
   const keys = useQuery({ queryKey: keyQuery, queryFn: () => get<{ list: DeveloperAPIKey[] }>("/api/v1/api-keys") });
   const revoke = useMutation({
     mutationFn: (id: number) => del(`/api/v1/api-keys/${id}`),
@@ -63,10 +65,10 @@ export function APIKeysCard({ user }: { user: User }) {
                 <div key={key.id} className="rounded-xl border p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2"><span className="break-all font-medium">{key.name}</span><Badge variant={key.scopes.includes("write") ? "secondary" : "outline"}>{key.scopes.includes("write") ? "读写" : "只读"}</Badge><Badge variant={status === "可使用" ? "success" : "outline"}>{status}</Badge></div>
+                      <div className="flex flex-wrap items-center gap-2"><span className="break-all font-medium">{key.name}</span><Badge variant={key.scopes.includes("write") ? "secondary" : "outline"}>{key.scopes.includes("write") ? "读写" : "只读"}</Badge><Badge variant={status === "可使用" ? "success" : "outline"}>{status}</Badge><Badge variant="outline">{key.operations == null ? "全部获授权功能" : `${key.operations.length} 项功能`}</Badge></div>
                       <p className="mono mt-1 break-all text-xs text-muted-foreground">{key.token_hint}</p>
                     </div>
-                    {!key.revoked_at && <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setRevoking(key)}><Trash2 className="h-4 w-4" /> 撤销</Button>}
+                    {!key.revoked_at && <div className="flex gap-1"><Button variant="outline" size="sm" onClick={() => setEditing(key)}>调整功能</Button><Button variant="ghost" size="sm" className="text-destructive" onClick={() => setRevoking(key)}><Trash2 className="h-4 w-4" /> 撤销</Button></div>}
                   </div>
                   <dl className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
                     <div><dt className="mb-1">创建时间</dt><dd>{fmtDate(key.created_at)}</dd></div>
@@ -80,6 +82,7 @@ export function APIKeysCard({ user }: { user: User }) {
         )}
       </div>
       {creating && <CreateAPIKeyDialog user={user} onClose={() => setCreating(false)} onCreated={() => { void qc.invalidateQueries({ queryKey: keyQuery }); }} />}
+      {editing && <EditKeyOperationsDialog user={user} apiKey={editing} onClose={() => setEditing(null)} onSaved={() => { void qc.invalidateQueries({ queryKey: keyQuery }); }} />}
       {revoking && <Dialog open title={`撤销 API key · ${revoking.name}`} description="撤销后，使用这个 key 的 agent 和脚本将立即失去访问权限。" onClose={() => { if (!revoke.isPending) setRevoking(null); }} footer={<><Button variant="outline" disabled={revoke.isPending} onClick={() => setRevoking(null)}>取消</Button><Button variant="destructive" loading={revoke.isPending} onClick={() => revoke.mutate(revoking.id)}>撤销</Button></>}><p className="mono break-all text-sm text-muted-foreground">{revoking.token_hint}</p></Dialog>}
     </Card>
   );
@@ -114,7 +117,7 @@ export function AgentConnectionCard() {
   return (
     <Card className="p-5 sm:p-6">
       <h2 className="font-semibold">接入 AI agent</h2>
-      <p className="mt-1 text-sm leading-6 text-muted-foreground">在运行 agent 的电脑上执行安装命令，安装与当前面板版本一致的 Skill。需要 macOS / Linux、curl 和 Python 3.9 或更新版本。</p>
+      <p className="mt-1 text-sm leading-6 text-muted-foreground">在运行 agent 的电脑上执行安装命令，安装与当前面板版本一致的 Skill。Skill 会读取当前 key 的能力清单，操作范围随账户权限和 key 权限变化。需要 macOS / Linux、curl 和 Python 3.9 或更新版本。</p>
       <div className="mt-4 rounded-xl border bg-muted/30 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="flex items-center gap-2 text-sm">安装到<Select className="w-36" aria-label="Skill 安装目标" value={client} onChange={(e) => { setClient(e.target.value as SkillClient); setInstallCopied(false); }}><option value="codex">Codex</option><option value="claude">Claude Code</option></Select></label>
@@ -143,6 +146,7 @@ function CreateAPIKeyDialog({ user, onClose, onCreated }: { user: User; onClose:
   const toast = useToast();
   const [name, setName] = React.useState("");
   const [permission, setPermission] = React.useState("read");
+  const [operations, setOperations] = React.useState<string[] | null>(null);
   const [days, setDays] = React.useState("30");
   const [password, setPassword] = React.useState("");
   const [code, setCode] = React.useState("");
@@ -165,6 +169,7 @@ function CreateAPIKeyDialog({ user, onClose, onCreated }: { user: User; onClose:
       const result = await post<{ api_key: DeveloperAPIKey; key: string }>("/api/v1/api-keys", {
         name: name.trim(),
         scopes: permission === "write" ? ["read", "write"] : ["read"],
+        operations,
         ...(days !== "never" ? { expires_at: new Date(Date.now() + Number(days) * 86400000).toISOString() } : {}),
         password,
         ...(user.totp_enabled ? { code: code.trim() } : {}),
@@ -197,10 +202,58 @@ function CreateAPIKeyDialog({ user, onClose, onCreated }: { user: User; onClose:
             <Field label="权限" hint="读写 key 也受当前账户权限约束。"><Select aria-label="API key 权限" value={permission} onChange={(e) => setPermission(e.target.value)} disabled={busy}><option value="read">只读</option><option value="write">读写</option></Select></Field>
             <Field label="有效期"><Select aria-label="API key 有效期" value={days} onChange={(e) => setDays(e.target.value)} disabled={busy}><option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option><option value="365">365 天</option><option value="never">永不过期</option></Select></Field>
           </div>
+          <OperationPicker value={operations} onChange={setOperations} />
           <Field label="当前密码"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required disabled={busy} /></Field>
           {user.totp_enabled && <Field label="验证码或恢复码"><Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="123456 或 xxxx-xxxx" className="mono" autoComplete="one-time-code" required disabled={busy} /></Field>}
         </form>
       )}
     </Dialog>
   );
+}
+
+interface AgentOperation {
+  operation_id: string; method: string; path: string; group: string;
+  available: boolean; session_only: boolean;
+}
+const groupLabels: Record<string, string> = { "share-pages": "分享详情", shares: "分享", templates: "分享可用模板", me: "个人模板", servers: "服务器", nodes: "节点", subscriptions: "订阅", users: "用户", settings: "设置", events: "实时事件", agent: "AI 接入" };
+
+function OperationPicker({ value, onChange }: { value: string[] | null; onChange: (value: string[] | null) => void }) {
+  const q = useQuery({ queryKey: ["agent-operations"], queryFn: () => get<{ operations: AgentOperation[] }>("/api/v1/agent/capabilities") });
+  const [search, setSearch] = React.useState("");
+  const items = (q.data?.operations ?? []).filter(op => op.available && !op.session_only && !op.path.startsWith("/api/v1/agent/"));
+  const groups = [...new Set(items.map(op => op.group))].sort();
+  return <div className="space-y-2">
+    <Field label="允许使用的功能" hint="实际权限取账户权限、读写范围和功能选择的交集；选择全部时，未来新增的获授权功能也可用。能力发现仍需只读权限。">
+      <Select aria-label="功能范围" value={value === null ? "all" : "custom"} onChange={e => onChange(e.target.value === "all" ? null : [])}>
+        <option value="all">全部获授权功能</option><option value="custom">选择具体功能</option>
+      </Select>
+    </Field>
+    {value !== null && <div className="rounded-xl border p-3 space-y-3">
+      <Input aria-label="搜索功能" placeholder="搜索模块或接口" value={search} onChange={e => setSearch(e.target.value)} />
+      {q.isPending ? <Spinner /> : q.isError ? <p className="text-sm text-destructive">功能清单加载失败，请重试。</p> : <div className="max-h-64 overflow-y-auto space-y-2">
+        {groups.map(group => {
+          const all = items.filter(op => op.group === group);
+          const shown = all.filter(op => `${groupLabels[group] ?? group} ${op.method} ${op.path}`.toLowerCase().includes(search.toLowerCase()));
+          if (!shown.length) return null;
+          const checked = all.every(op => value.includes(op.operation_id));
+          return <details key={group} className="rounded-lg border p-2"><summary className="cursor-pointer text-sm font-medium">{groupLabels[group] ?? group}（{all.filter(op => value.includes(op.operation_id)).length}/{all.length}）</summary>
+            <label className="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked ? [...new Set([...value, ...all.map(op => op.operation_id)])] : value.filter(id => !all.some(op => op.operation_id === id)))} />全选此模块</label>
+            {shown.map(op => <label key={op.operation_id} className="mt-2 flex items-start gap-2 text-xs"><input type="checkbox" checked={value.includes(op.operation_id)} onChange={e => onChange(e.target.checked ? [...value, op.operation_id] : value.filter(id => id !== op.operation_id))} /><span className="break-all"><strong>{op.method}</strong> {op.path}</span></label>)}
+          </details>;
+        })}
+      </div>}
+      <p className="text-xs text-muted-foreground">已选择 {value.length} 项；留空时只能访问能力发现接口。权限变动后请重新核对选择。</p>
+    </div>}
+  </div>;
+}
+
+function EditKeyOperationsDialog({ user, apiKey, onClose, onSaved }: { user: User; apiKey: DeveloperAPIKey; onClose: () => void; onSaved: () => void }) {
+  const toast = useToast();
+  const [operations, setOperations] = React.useState<string[] | null>(apiKey.operations ?? null);
+  const [password, setPassword] = React.useState("");
+  const [code, setCode] = React.useState("");
+  const save = useMutation({ mutationFn: () => put(`/api/v1/api-keys/${apiKey.id}/operations`, { operations, password, code }), onSuccess: () => { onSaved(); toast.success("API key 功能已更新"); onClose(); }, onError: e => { setCode(""); toast.fromError(e); } });
+  return <Dialog open title={`调整功能：${apiKey.name}`} description="更改立即生效；不会扩大账户或 key 的读写权限。" onClose={onClose} footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={!password} loading={save.isPending} onClick={() => save.mutate()}>保存功能</Button></>}>
+    <div className="space-y-4"><OperationPicker value={operations} onChange={setOperations} /><Field label="当前密码"><Input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" /></Field>{user.totp_enabled && <Field label="两步验证码"><Input value={code} onChange={e => setCode(e.target.value)} autoComplete="one-time-code" /></Field>}</div>
+  </Dialog>;
 }

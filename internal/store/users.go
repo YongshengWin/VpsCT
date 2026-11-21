@@ -69,6 +69,9 @@ func (s *Store) CreateInitialAdmin(ctx context.Context, u *domain.User) error {
 	u.ID, err = res.LastInsertId()
 	u.Role, u.Enabled = domain.RoleAdmin, true
 	u.CreatedAt, u.UpdatedAt = now, now
+	if _, ownerErr := s.db.ExecContext(ctx, `INSERT INTO controller_owner(singleton,user_id) VALUES(1,?) ON CONFLICT(singleton) DO NOTHING`, u.ID); ownerErr != nil {
+		return ownerErr
+	}
 	return err
 }
 
@@ -90,8 +93,12 @@ func (s *Store) CreateUser(ctx context.Context, u *domain.User) error {
 
 // UpdateUser persists every mutable field (profile, credentials, 2FA state).
 func (s *Store) UpdateUser(ctx context.Context, u *domain.User) error {
+	return s.updateUser(ctx, s.db, u)
+}
+
+func (s *Store) updateUser(ctx context.Context, q querier, u *domain.User) error {
 	now := s.Now()
-	res, err := s.db.ExecContext(ctx, `UPDATE users SET security_version=security_version+CASE WHEN password_hash!=? OR role!=? OR enabled!=? OR totp_enabled!=? THEN 1 ELSE 0 END, username=?, nickname=?, password_hash=?, role=?, enabled=?, avatar=?, totp_secret=?, totp_enabled=?, totp_last_step=?, recovery_codes=?, updated_at=? WHERE id=? AND updated_at=?`,
+	res, err := q.ExecContext(ctx, `UPDATE users SET security_version=security_version+CASE WHEN password_hash!=? OR role!=? OR enabled!=? OR totp_enabled!=? THEN 1 ELSE 0 END, username=?, nickname=?, password_hash=?, role=?, enabled=?, avatar=?, totp_secret=?, totp_enabled=?, totp_last_step=?, recovery_codes=?, updated_at=? WHERE id=? AND updated_at=?`,
 		u.PasswordHash, u.Role, b2i(u.Enabled), b2i(u.TOTPEnabled), u.Username, u.Nickname, u.PasswordHash, u.Role, b2i(u.Enabled), u.Avatar, s.seal("users.totp_secret", u.TOTPSecret), b2i(u.TOTPEnabled), u.TOTPLastStep, recoveryJSON(u.RecoveryCodes), fmtTime(now), u.ID, fmtTime(u.UpdatedAt))
 	if err != nil {
 		return err
@@ -105,6 +112,29 @@ func (s *Store) UpdateUser(ctx context.Context, u *domain.User) error {
 	}
 	u.UpdatedAt = now
 	return err
+}
+
+// UpdateManagedUser serializes account administration with owner transfer and
+// checks the caller's current administrator identity inside the write lock.
+func (s *Store) UpdateManagedUser(ctx context.Context, actor domain.User, target *domain.User, forbidOwner bool) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE users SET security_version=security_version WHERE id=? AND enabled=1 AND role='admin' AND security_version=?`, actor.ID, actor.SecurityVersion)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n != 1 {
+			return ErrPermissionDenied
+		}
+		var ownerID int64
+		if err := tx.QueryRowContext(ctx, `SELECT user_id FROM controller_owner WHERE singleton=1`).Scan(&ownerID); err != nil {
+			return err
+		}
+		if target.ID == ownerID && (forbidOwner || actor.ID != ownerID) {
+			return ErrPermissionDenied
+		}
+		return s.updateUser(ctx, tx, target)
+	})
 }
 
 // TouchLogin records a successful login without bumping updated_at (which

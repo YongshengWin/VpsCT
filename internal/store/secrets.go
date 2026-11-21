@@ -175,6 +175,45 @@ func (s *Store) migrateSecrets() error {
 			}
 		}
 	}
+	// Version snapshots use the original template column labels. The version
+	// trigger can capture legacy plaintext while migrateSecrets updates an old
+	// template, so migrate these snapshots after all template columns.
+	for _, col := range []string{"content", "variables"} {
+		rows, err := tx.Query("SELECT id," + col + " FROM rule_template_versions")
+		if err != nil {
+			return err
+		}
+		type item struct {
+			id    int64
+			value string
+		}
+		var pending []item
+		for rows.Next() {
+			var v item
+			if err := rows.Scan(&v.id, &v.value); err != nil {
+				rows.Close()
+				return err
+			}
+			if _, err := s.decrypt("rule_templates."+col, v.value); err != nil {
+				rows.Close()
+				return err
+			}
+			if v.value != "" && !strings.HasPrefix(v.value, secretPrefix) {
+				pending = append(pending, v)
+				s.migratedSecrets = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		for _, v := range pending {
+			if _, err := tx.Exec("UPDATE rule_template_versions SET "+col+"=? WHERE id=?", s.seal("rule_templates."+col, v.value), v.id); err != nil {
+				return err
+			}
+		}
+	}
 	rows, e := tx.Query("SELECT id,short_code FROM subscriptions WHERE short_code_hash='' AND short_code!=''")
 	if e != nil {
 		return e

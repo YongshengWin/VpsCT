@@ -5,6 +5,7 @@ package agentnet
 import (
 	"encoding/json"
 	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,12 +25,19 @@ func TestNetworkContractContainer(t *testing.T) {
 	if _, err := os.Stat("/.dockerenv"); err != nil || os.Geteuid() != 0 {
 		t.Fatal("container root required")
 	}
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Unrelated-Header") != "" {
 			t.Error("arbitrary header escaped the isolated transport allowlist")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader), "forward": r.Header.Get(networkconfig.ForwardHeader), "udp": r.Header.Get(networkconfig.ForwardUDPHeader)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader), "forward": r.Header.Get(networkconfig.ForwardHeader), "udp": r.Header.Get(networkconfig.ForwardUDPHeader), "ipv6": r.Header.Get(networkconfig.IPv6IngressHeader)})
 	}))
+	srv.Listener.Close()
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Fatal("fixture requires IPv6 loopback", err)
+	}
+	srv.Listener = listener
+	srv.StartTLS()
 	defer srv.Close()
 	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
 	if err := os.WriteFile("/usr/local/share/ca-certificates/ctlvps-network-contract-fixture.crt", cert, 0644); err != nil {
@@ -39,18 +47,20 @@ func TestNetworkContractContainer(t *testing.T) {
 		t.Fatalf("fixture CA: %v %s", err, out)
 	}
 	for _, tc := range []struct {
-		method, path, version, want, egress, wantEgress string
-		public                                          bool
+		method, path, version, want, egress, wantEgress, ipv6, wantIPv6 string
+		public                                                          bool
 	}{
-		{"GET", "/api/agent/v1/desired", "1", "1", "1", "1", false},
-		{"GET", "/api/agent/v1/desired", "1", "1", "", "", false},
-		{"GET", "/api/agent/v1/desired", "", "", "", "", false},
-		{"POST", "/api/agent/v1/heartbeat", "1", "", "1", "", false},
-		{"GET", "/dl/fixture", "1", "", "1", "", true},
+		{"GET", "/api/agent/v1/desired", "1", "1", "1", "1", "1", "1", false},
+		{"GET", "/api/agent/v1/desired", "1", "1", "", "", "", "", false},
+		{"GET", "/api/agent/v1/desired", "", "", "", "", "", "", false},
+		{"POST", "/api/agent/v1/heartbeat", "1", "", "1", "", "1", "", false},
+		{"GET", "/dl/fixture", "1", "", "1", "", "1", "", true},
 	} {
 		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, nil)
 		req.Header.Set(networkconfig.BindingHeader, tc.version)
 		req.Header.Set(networkconfig.EgressHeader, tc.egress)
+		req.Header.Set(networkconfig.IngressHeader, tc.version)
+		req.Header.Set(networkconfig.IPv6IngressHeader, tc.ipv6)
 		req.Header.Set(networkconfig.SSHHeader, tc.egress)
 		req.Header.Set(networkconfig.ForwardHeader, tc.version)
 		if tc.version == "1" {
@@ -64,7 +74,7 @@ func TestNetworkContractContainer(t *testing.T) {
 		var got map[string]string
 		err = json.NewDecoder(resp.Body).Decode(&got)
 		resp.Body.Close()
-		if err != nil || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress || got["forward"] != tc.want || got["udp"] != strings.ReplaceAll(tc.want, "1", "2") {
+		if err != nil || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress || got["forward"] != tc.want || got["udp"] != strings.ReplaceAll(tc.want, "1", "2") || got["ipv6"] != tc.wantIPv6 {
 			t.Fatal("isolated worker lost or invented parent capability", got, tc, err)
 		}
 	}
@@ -93,5 +103,12 @@ func TestNetworkContractContainer(t *testing.T) {
 	req.Header.Set(networkconfig.EgressHeader, "1")
 	if _, err := (Transport{}).RoundTrip(req); err == nil {
 		t.Fatal("egress capability accepted without binding capability")
+	}
+	req.Header.Set(networkconfig.BindingHeader, "1")
+	req.Header.Del(networkconfig.EgressHeader)
+	req.Header.Del(networkconfig.ForwardUDPHeader)
+	req.Header.Set(networkconfig.IPv6IngressHeader, "1")
+	if _, err := (Transport{}).RoundTrip(req); err == nil || !strings.Contains(err.Error(), "unsupported IPv6 ingress request version") {
+		t.Fatal("IPv6 capability accepted without ingress capability", err)
 	}
 }

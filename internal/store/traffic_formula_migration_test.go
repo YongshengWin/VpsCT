@@ -14,7 +14,12 @@ func TestTrafficFormulaMigrationPreservesEffectiveShareBilling(t *testing.T) {
 	historicalCreateServer(t, old, &srv)
 	for _, mode := range []string{"dual", "sum", "up", "down", "max"} {
 		sh := domain.Share{Name: mode, BillingMode: mode, UsedUpload: 100, UsedDownload: 50}
-		if err := old.CreateShare(ctx, &sh); err != nil {
+		// Insert the historical shape directly; current CreateShare requires a
+		// public identifier that did not exist in this schema version.
+		now := old.Now()
+		sh.PeriodStart = now
+		args := append(shareArgs(&sh), fmtTime(now), fmtTime(now))
+		if _, err := old.db.ExecContext(ctx, `INSERT INTO shares(name,user_id,targets,extra_node_ids,quota_bytes,billing_mode,reset_day,expires_at,status,template_id,connlog_enabled,notes,subscription_id,period_start,used_upload,used_download,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...); err != nil {
 			t.Fatal(err)
 		}
 	}

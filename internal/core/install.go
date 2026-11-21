@@ -337,8 +337,21 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	}
 	defer os.Remove(data.Name())
 	defer data.Close()
-	if _, err = agentnet.DownloadTo(ctx, url, 200<<20, false, data); err != nil {
-		return err
+	useOffline := false
+	if name == "sing-box" && runtime.GOOS == "linux" {
+		var offlineSum string
+		useOffline, offlineSum, err = copyOfflineSingBox(offlineCoreDir, filepath.Base(url), wantChecksum, data)
+		if err != nil {
+			return err
+		}
+		if useOffline && policy.ChecksumOnly {
+			wantChecksum = offlineSum
+		}
+	}
+	if !useOffline {
+		if _, err = agentnet.DownloadTo(ctx, url, 200<<20, false, data); err != nil {
+			return err
+		}
 	}
 	if !policy.ChecksumOnly || wantChecksum != "" {
 		got, e := FileDigest(data)

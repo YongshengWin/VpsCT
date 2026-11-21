@@ -75,6 +75,17 @@ export function useIsAdmin() {
   return useAuth().user?.role === "admin";
 }
 
+interface PermissionGrant { permission: string; effective: boolean; scope: { kind: string; ids?: number[] } }
+
+export function useProductPermissions() {
+  const { user } = useAuth();
+  const query = useQuery({ queryKey: ["my-permissions", user?.id], queryFn: () => get<{ full_admin: boolean; grants: PermissionGrant[] }>("/api/v1/me/permissions"), enabled: !!user && user.role !== "admin" });
+  return {
+    loading: !!user && user.role !== "admin" && query.isLoading,
+    can: (permission: string) => user?.role === "admin" || !!query.data?.grants.some(g => g.effective && g.permission === permission && g.scope.kind === "all"),
+  };
+}
+
 // ---- theme ----
 // Implemented as a global store in lib/theme.ts; re-exported here so existing
 // `import { useTheme } from "@/lib/auth"` call sites keep working.

@@ -14,6 +14,7 @@ import (
 	"ctlvps/internal/auth"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/maintenance"
+	"ctlvps/internal/store"
 )
 
 func issueTestAPIKey(t *testing.T, c *client, userID int64, scopes ...string) (string, domain.APIKey) {
@@ -28,6 +29,17 @@ func issueTestAPIKey(t *testing.T, c *client, userID int64, scopes ...string) (s
 		t.Fatal(err)
 	}
 	return plain, k
+}
+
+// Exercise ordinary-user business permissions through a browser session.
+func issueTestMemberSession(t *testing.T, c *client, userID int64, _ ...string) (string, domain.APIKey) {
+	t.Helper()
+	token := auth.RandomToken(32)
+	now := c.api.Store.Now()
+	if err := c.api.Store.CreateSession(context.Background(), store.Session{ID: auth.HashToken(token), UserID: userID, CreatedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	return "session-test:" + token, domain.APIKey{}
 }
 
 // Uses no browser headers or cookies unless the test explicitly supplies them.
@@ -48,7 +60,12 @@ func keyRequest(t *testing.T, c *client, method, path, key string, body any, hea
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
-	if key != "" {
+	if strings.HasPrefix(key, "session-test:") {
+		token := strings.TrimPrefix(key, "session-test:")
+		r.AddCookie(&http.Cookie{Name: c.api.sessionName(), Value: token})
+		r.Header.Set("Origin", c.srv.URL)
+		r.Header.Set("X-CSRF-Token", c.api.csrfToken(token))
+	} else if key != "" {
 		r.Header.Set("Authorization", "Bearer "+key)
 	}
 	for name, value := range headers {
@@ -171,13 +188,8 @@ func TestAPIKeyMemberPermissionsAndExpiry(t *testing.T) {
 	c := setupAPIKeyTest(t)
 	created := c.do("POST", "/api/v1/users", map[string]any{"username": "member", "password": "password123", "role": "user"}, 201)
 	key, _ := issueTestAPIKey(t, c, int64(created["id"].(float64)), "read", "write")
-	keyRequest(t, c, "GET", "/api/v1/dashboard", key, nil, nil, 200)
-	keyRequest(t, c, "GET", "/api/v1/servers", key, nil, nil, 403)
-	keyRequest(t, c, "POST", "/api/v1/nodes", key, map[string]any{}, nil, 403)
-	_, raw := keyRequest(t, c, "GET", "/api/v1/subscriptions", key, nil, nil, 200)
-	if strings.TrimSpace(string(raw)) != "[]" {
-		t.Fatalf("member resources leaked: %s", raw)
-	}
+	keyRequest(t, c, "GET", "/api/v1/dashboard", key, nil, nil, 401)
+	keyRequest(t, c, "POST", "/api/v1/nodes", key, map[string]any{}, nil, 401)
 	adminKey, k := issueTestAPIKey(t, c, 1, "read")
 	if err := c.api.Store.RevokeAPIKey(context.Background(), 1, k.ID); err != nil {
 		t.Fatal(err)

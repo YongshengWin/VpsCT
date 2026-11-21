@@ -22,6 +22,7 @@ type Rendered struct {
 }
 
 var allMarker = regexp.MustCompile(`^\{\{\s*all(?:\|(.*?))?\s*\}\}$|^__ALL(?:_PROXIES)?__$`)
+var regionMarker = regexp.MustCompile(`^\{\{\s*region:([A-Z]{2}|UNKNOWN)\s*\}\}$`)
 
 // expandAllMarkers replaces {{all}} / {{all|regex}} tokens with generated node names.
 func expandAllMarkers(items, allNames []string) []string {
@@ -86,6 +87,7 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 	setMapKey(root, "proxies", proxyNodes)
 
 	allNames := b.AllProxyNames()
+	omittedGroups := map[string]bool{}
 	if len(b.Groups) > 0 {
 		groupsNode := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, g := range b.Groups {
@@ -93,7 +95,27 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 		}
 		setMapKey(root, "proxy-groups", groupsNode)
 	} else if gn := getMapKey(root, "proxy-groups"); gn != nil && gn.Kind == yaml.SequenceNode {
-		expandGroupMarkers(gn, allNames)
+		var err error
+		otherRegions, err := buildOtherRegionGroups(root, gn, b)
+		if err != nil {
+			return nil, err
+		}
+		omittedGroups, err = expandMihomoGroupMarkers(gn, b, otherRegions)
+		if err != nil {
+			return nil, err
+		}
+		if rules := getMapKey(root, "rules"); rules != nil && rules.Kind == yaml.SequenceNode && len(b.Rules) == 0 {
+			for _, rule := range rules.Content {
+				parts := strings.Split(rule.Value, ",")
+				i := len(parts) - 1
+				if i > 0 && strings.EqualFold(strings.TrimSpace(parts[i]), "no-resolve") {
+					i--
+				}
+				if i >= 0 && omittedGroups[strings.TrimSpace(parts[i])] {
+					return nil, fmt.Errorf("规则引用没有匹配节点的分组 %q，请选择其他策略", strings.TrimSpace(parts[i]))
+				}
+			}
+		}
 	} else {
 		groupsNode := &yaml.Node{Kind: yaml.SequenceNode}
 		def := domain.ProxyGroup{Name: "PROXY", Type: "select", Proxies: append([]string{}, allNames...)}
@@ -103,7 +125,18 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 		groupsNode.Content = append(groupsNode.Content, groupMapNode(def))
 		setMapKey(root, "proxy-groups", groupsNode)
 	}
+	deleteMapKey(root, "x-vpsct-other-regions")
 	if len(b.Rules) > 0 {
+		for _, rule := range b.Rules {
+			parts := strings.Split(rule, ",")
+			i := len(parts) - 1
+			if i > 0 && strings.EqualFold(strings.TrimSpace(parts[i]), "no-resolve") {
+				i--
+			}
+			if i >= 0 && omittedGroups[strings.TrimSpace(parts[i])] {
+				return nil, fmt.Errorf("规则引用没有匹配节点的分组 %q，请选择其他策略", strings.TrimSpace(parts[i]))
+			}
+		}
 		rulesNode := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, r := range b.Rules {
 			rulesNode.Content = append(rulesNode.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: r})
@@ -201,23 +234,101 @@ func mihomoCompatibleBundle(b *Bundle) (*Bundle, map[string]bool) {
 	return &out, omitted
 }
 
-func expandGroupMarkers(groups *yaml.Node, allNames []string) {
+// Built-in templates may opt into groups for additional explicitly known
+// regions. Generate them from subscription nodes, not from a global list.
+func buildOtherRegionGroups(root, groups *yaml.Node, b *Bundle) ([]string, error) {
+	setting := getMapKey(root, "x-vpsct-other-regions")
+	if setting == nil || setting.Value != "true" {
+		return nil, nil
+	}
+	declared, names := map[string]bool{}, map[string]bool{}
+	for _, group := range groups.Content {
+		if name := getMapKey(group, "name"); name != nil {
+			names[name.Value] = true
+		}
+		if members := getMapKey(group, "proxies"); members != nil {
+			for _, member := range members.Content {
+				if m := regionMarker.FindStringSubmatch(strings.TrimSpace(member.Value)); m != nil {
+					declared[m[1]] = true
+				}
+			}
+		}
+	}
+	codes := map[string]bool{}
+	for _, p := range b.Proxies {
+		if code := proxyRegion(p); code != "" && !declared[code] {
+			codes[code] = true
+		}
+	}
+	for _, c := range b.Chains {
+		if code := proxyRegion(c.Proxy); code != "" && !declared[code] {
+			codes[code] = true
+		}
+	}
+	ordered := make([]string, 0, len(codes))
+	for code := range codes {
+		ordered = append(ordered, code)
+	}
+	sort.Strings(ordered)
+	result := make([]string, 0, len(ordered))
+	for _, code := range ordered {
+		name := "🌍 " + code
+		if names[name] {
+			return nil, fmt.Errorf("自动地区组名称 %q 已被占用", name)
+		}
+		g := domain.ProxyGroup{Name: name, Type: "url-test", URL: "http://cp.cloudflare.com/generate_204", Interval: 300, Proxies: []string{"{{region:" + code + "}}"}}
+		groups.Content = append(groups.Content, groupMapNode(g))
+		result = append(result, name)
+	}
+	return result, nil
+}
+
+func expandMihomoGroupMarkers(groups *yaml.Node, b *Bundle, otherRegions []string) (map[string]bool, error) {
+	allNames := b.AllProxyNames()
+	regions := map[string]string{}
+	for _, p := range b.Proxies {
+		regions[p.Name] = proxyRegion(p)
+	}
+	for _, c := range b.Chains {
+		regions[c.Proxy.Name] = proxyRegion(c.Proxy)
+	}
+	removed := map[string]bool{}
+	keptGroups := make([]*yaml.Node, 0, len(groups.Content))
 	for _, g := range groups.Content {
 		if g.Kind != yaml.MappingNode {
+			keptGroups = append(keptGroups, g)
 			continue
 		}
 		list := getMapKey(g, "proxies")
 		if list == nil || list.Kind != yaml.SequenceNode {
+			keptGroups = append(keptGroups, g)
 			continue
 		}
 		var expanded []*yaml.Node
-		hasMarker := false
+		hasMarker, filtered := false, false
 		for _, item := range list.Content {
 			if item.Kind != yaml.ScalarNode {
 				expanded = append(expanded, item)
 				continue
 			}
-			m := allMarker.FindStringSubmatch(strings.TrimSpace(item.Value))
+			value := strings.TrimSpace(item.Value)
+			if value == "{{other-regions}}" {
+				hasMarker, filtered = true, true
+				for _, name := range otherRegions {
+					expanded = append(expanded, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name})
+				}
+				continue
+			}
+			if region := regionMarker.FindStringSubmatch(value); region != nil {
+				hasMarker, filtered = true, true
+				for _, n := range allNames {
+					if regions[n] == region[1] || region[1] == "UNKNOWN" && regions[n] == "" {
+						expanded = append(expanded, &yaml.Node{Kind: yaml.ScalarNode, Value: n})
+					}
+				}
+				continue
+			}
+			m := allMarker.FindStringSubmatch(value)
 			if m == nil {
 				expanded = append(expanded, item)
 				continue
@@ -225,7 +336,12 @@ func expandGroupMarkers(groups *yaml.Node, allNames []string) {
 			hasMarker = true
 			var re *regexp.Regexp
 			if len(m) > 1 && m[1] != "" {
-				re, _ = regexp.Compile(m[1])
+				filtered = true
+				var err error
+				re, err = regexp.Compile(m[1])
+				if err != nil {
+					return nil, fmt.Errorf("代理组节点筛选正则无效: %w", err)
+				}
 			}
 			for _, n := range allNames {
 				if re != nil && !re.MatchString(n) {
@@ -235,16 +351,47 @@ func expandGroupMarkers(groups *yaml.Node, allNames []string) {
 			}
 		}
 		if len(expanded) == 0 {
-			if hasMarker && len(allNames) > 0 {
-				for _, name := range allNames {
-					expanded = append(expanded, &yaml.Node{Kind: yaml.ScalarNode, Value: name})
+			if filtered {
+				if b.ValidationOnly && len(allNames) == 0 {
+					// Syntax-only checks cannot know which regions the future
+					// subscription will contain. Use a non-routable placeholder
+					// solely for this disposable render.
+					list.Content = []*yaml.Node{{Kind: yaml.ScalarNode, Tag: "!!str", Value: "REJECT"}}
+					keptGroups = append(keptGroups, g)
+					continue
 				}
-			} else {
+				if name := getMapKey(g, "name"); name != nil {
+					removed[name.Value] = true
+				}
+				continue
+			}
+			// Preserve the established empty-subscription behavior for unfiltered
+			// groups; never widen a filtered group to unrelated nodes.
+			if hasMarker {
 				expanded = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
 			}
 		}
 		list.Content = expanded
+		keptGroups = append(keptGroups, g)
 	}
+	groups.Content = keptGroups
+	for _, group := range keptGroups {
+		members := getMapKey(group, "proxies")
+		if members == nil || members.Kind != yaml.SequenceNode {
+			continue
+		}
+		kept := members.Content[:0]
+		for _, member := range members.Content {
+			if !removed[member.Value] {
+				kept = append(kept, member)
+			}
+		}
+		if len(kept) == 0 && len(members.Content) > 0 {
+			return nil, fmt.Errorf("代理组依赖的地区组没有匹配节点，请配置明确的备用策略")
+		}
+		members.Content = kept
+	}
+	return removed, nil
 }
 
 var proxyKeyOrder = []string{"name", "type", "server", "port", "ports"}

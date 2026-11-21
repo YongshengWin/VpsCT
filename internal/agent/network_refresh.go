@@ -12,6 +12,7 @@ import (
 	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/agentwork"
+	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/safehttp"
 	"golang.org/x/sys/unix"
 )
@@ -28,7 +29,7 @@ type networkDesiredCache struct {
 
 func validateNetworkRecovery(ds *agentproto.DesiredState, state *State) error {
 	revision, hash := state.desiredBoundary()
-	if ds == nil || (ds.NetworkEgressVersion != agentproto.NetworkEgressVersion && ds.NetworkForwardVersion != agentproto.NetworkForwardVersion) || revision == 0 || ds.Revision != revision || ds.Hash != hash {
+	if ds == nil || (ds.NetworkEgressVersion != agentproto.NetworkEgressVersion && ds.NetworkForwardVersion != agentproto.NetworkForwardVersion && ds.IPv6IngressVersion != networkconfig.IPv6IngressVersion) || revision == 0 || ds.Revision != revision || ds.Hash != hash {
 		return errors.New("本机中转恢复配置不匹配最新已接受代次")
 	}
 	return agentproto.ValidateDesired(ds, state.ServerID, revision, hash)
@@ -50,7 +51,7 @@ func decodeNetworkRecovery(raw []byte, state *State) (*networkDesiredCache, erro
 	}
 	c := &networkDesiredCache{raw: raw, revision: ds.Revision, hash: ds.Hash, nodes: map[int64]bool{}, forwards: map[int64]bool{}}
 	for _, n := range ds.Nodes {
-		if n.Blocked || n.Network == nil || !n.Network.HasTransport() {
+		if n.Blocked || n.Network == nil || !n.Network.HasTransport() && n.Network.Policy.ListenMode != "public_ipv6" {
 			continue
 		}
 		// Literal endpoints also need offline recovery and reapplication when
@@ -176,7 +177,7 @@ func (a *Agent) networkRefreshDue(now time.Time) bool {
 			continue
 		}
 		seen[b.NodeID] = true
-		if b.Pending || health[b.NodeID] != "" || b.Applied.SOCKS5 == nil || b.Applied.SOCKS5.DNSRefreshDue(now) || (b.Applied.Handshake != nil && b.Applied.Handshake.DNSRefreshDue(now)) {
+		if b.Pending || health[b.NodeID] != "" || (b.Applied.SOCKS5 == nil && b.Wanted.ListenMode != "public_ipv6") || (b.Applied.SOCKS5 != nil && b.Applied.SOCKS5.DNSRefreshDue(now)) || (b.Applied.Handshake != nil && b.Applied.Handshake.DNSRefreshDue(now)) {
 			return true
 		}
 	}

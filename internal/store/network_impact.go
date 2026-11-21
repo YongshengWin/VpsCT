@@ -43,6 +43,8 @@ type NetworkImpactNode struct {
 }
 
 type NetworkImpact struct {
+	BeforePort         int                        `json:"before_port,omitempty"`
+	AfterPort          int                        `json:"after_port,omitempty"`
 	HistoryComplete    bool                       `json:"history_complete"`
 	HistoricalNodes    []NetworkHistoricalNode    `json:"historical_nodes"`
 	HistoricalForwards []NetworkHistoricalForward `json:"historical_forwards,omitempty"`
@@ -116,14 +118,22 @@ func (s *Store) impactServer(ctx context.Context, q querier, serverID int64) (do
 }
 
 func listenDescription(policy *networkconfig.Node) string {
-	if policy != nil && policy.ListenMode == "address" {
-		return policy.ListenAddress
+	if policy != nil {
+		switch policy.ListenMode {
+		case "address":
+			return policy.ListenAddress
+		case "public_ipv6":
+			return "跟随本机公网 IPv6"
+		}
 	}
 	return "全部本机地址"
 }
 
 func (s *Store) nodeNetworkImpact(ctx context.Context, q querier, n domain.Node, in NodeNetworkRequest) (NetworkImpact, error) {
 	v := NetworkImpact{ServerID: *n.ServerID, RuntimeChange: true, ReferenceCount: 1, Nodes: []NetworkImpactNode{}, BeforeListen: listenDescription(n.Network), AfterListen: listenDescription(in.Network), BeforeHost: n.Server}
+	if in.ListenPort != nil {
+		v.BeforePort, v.AfterPort = n.ListenPort, *in.ListenPort
+	}
 	server, err := s.impactServer(ctx, q, *n.ServerID)
 	if err != nil {
 		return v, err
@@ -143,6 +153,9 @@ func (s *Store) nodeNetworkImpact(ctx context.Context, q querier, n domain.Node,
 			item.Effect = "binding"
 			if in.Network == nil {
 				item.Effect = "clear"
+			}
+			if in.ListenPort != nil && *in.ListenPort != n.ListenPort {
+				item.Effect = "port"
 			}
 		} else if item.Core == core && core == domain.CoreSingBox && !item.Revoked {
 			item.Effect = "restart"
@@ -256,7 +269,7 @@ func (s *Store) egressNetworkImpact(ctx context.Context, q querier, p domain.Egr
 
 // ReviewNodeNetwork reads admission and dependency scope from one snapshot.
 // It is not a runtime lease; both are checked again in the writer transaction.
-func (s *Store) ReviewNodeNetwork(ctx context.Context, id int64, policy *networkconfig.Node, host *string) (NetworkReadiness, error) {
+func (s *Store) ReviewNodeNetwork(ctx context.Context, id int64, policy *networkconfig.Node, host *string, ports ...*int) (NetworkReadiness, error) {
 	var v NetworkReadiness
 	err := s.Tx(ctx, func(tx *sql.Tx) error {
 		n, err := s.scanNode(tx.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=?`, id))
@@ -266,15 +279,36 @@ func (s *Store) ReviewNodeNetwork(ctx context.Context, id int64, policy *network
 		if err != nil {
 			return err
 		}
+		var port *int
+		if len(ports) > 0 {
+			port = ports[0]
+		}
+		if port != nil {
+			if err := s.validateNodePort(ctx, tx, n, *port); err != nil {
+				return err
+			}
+		}
 		v, err = s.previewNodeNetwork(ctx, tx, n, policy)
 		if err != nil {
 			return err
 		}
-		impact, err := s.nodeNetworkImpact(ctx, tx, n, NodeNetworkRequest{NodeID: id, Network: policy, AdvertiseHost: host})
+		impact, err := s.nodeNetworkImpact(ctx, tx, n, NodeNetworkRequest{NodeID: id, Network: policy, AdvertiseHost: host, ListenPort: port})
 		if err != nil {
 			return err
 		}
 		v.Impact = &impact
+		targetPort := n.ListenPort
+		if port != nil {
+			targetPort = *port
+		}
+		if n.ServerID != nil {
+			record, e := unavailablePort(ctx, tx, *n.ServerID, targetPort)
+			if e == nil {
+				v.UnavailablePort = &record
+			} else if !errors.Is(e, ErrNotFound) {
+				return e
+			}
+		}
 		return nil
 	})
 	return v, err

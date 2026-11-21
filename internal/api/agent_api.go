@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"ctlvps/internal/authorization"
 	"ctlvps/internal/httpx"
 	"ctlvps/skills"
 )
@@ -38,20 +39,21 @@ var agentContracts = func() map[string]agentContract {
 }()
 
 type agentOperation struct {
-	OperationID   string           `json:"operation_id"`
-	Method        string           `json:"method"`
-	Path          string           `json:"path"`
-	Summary       string           `json:"summary"`
-	Group         string           `json:"group"`
-	Handler       string           `json:"handler"`
-	RequiredRole  string           `json:"required_role"`
-	RequiredScope string           `json:"required_scope"`
-	SessionOnly   bool             `json:"session_only"`
-	Available     bool             `json:"available"`
-	Unavailable   string           `json:"unavailable_reason,omitempty"`
-	Reauth        []string         `json:"reauthentication,omitempty"`
-	RequestBody   map[string]any   `json:"request_body,omitempty"`
-	QueryParams   []map[string]any `json:"query_parameters"`
+	OperationID        string           `json:"operation_id"`
+	Method             string           `json:"method"`
+	Path               string           `json:"path"`
+	Summary            string           `json:"summary"`
+	Group              string           `json:"group"`
+	Handler            string           `json:"handler"`
+	RequiredRole       string           `json:"required_role"`
+	RequiredPermission string           `json:"required_permission,omitempty"`
+	RequiredScope      string           `json:"required_scope"`
+	SessionOnly        bool             `json:"session_only"`
+	Available          bool             `json:"available"`
+	Unavailable        string           `json:"unavailable_reason,omitempty"`
+	Reauth             []string         `json:"reauthentication,omitempty"`
+	RequestBody        map[string]any   `json:"request_body,omitempty"`
+	QueryParams        []map[string]any `json:"query_parameters"`
 }
 
 func (a *API) registerAgentOperation(pattern string, policy accessPolicy, h httpx.Handler) {
@@ -70,9 +72,19 @@ func (a *API) registerAgentOperation(pattern string, policy accessPolicy, h http
 	if policy == adminAccess {
 		role = "admin"
 	}
+	permission := delegatedGlobalRoutes[pattern]
+	if permission == "" {
+		permission = delegatedShareRoutes[pattern]
+	}
+	if permission == "" && pattern == "POST /api/v1/shares" {
+		permission = "shares.create"
+	}
+	if permission != "" {
+		role = "user"
+	}
 	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/"), "/")
 	group := parts[0]
-	id := strings.ToLower(method) + "_" + strings.NewReplacer("/", "_", "{", "", "}", "", "-", "_", ".", "_").Replace(strings.TrimPrefix(path, "/api/v1/"))
+	id := agentOperationID(pattern)
 	contract := agentContracts[name]
 	contract.RequestBody = agentDescribeRequestBody(name, contract.RequestBody)
 	if name == "putSettings" {
@@ -98,8 +110,11 @@ func (a *API) registerAgentOperation(pattern string, policy accessPolicy, h http
 		queries = []map[string]any{}
 	}
 	op := agentOperation{OperationID: id, Method: method, Path: path, Summary: name, Handler: name, Group: group,
-		RequiredRole: role, RequiredScope: operationScope(pattern), SessionOnly: sessionOnlyOperation(pattern), RequestBody: contract.RequestBody, QueryParams: queries}
+		RequiredRole: role, RequiredPermission: permission, RequiredScope: operationScope(pattern), SessionOnly: sessionOnlyOperation(pattern), RequestBody: contract.RequestBody, QueryParams: queries}
 	if method == "POST" && strings.HasSuffix(path, "/maintenance") || path == "/api/v1/api-keys" && method == "POST" {
+		op.Reauth = []string{"password", "code_if_2fa_enabled"}
+	}
+	if name == "updateAPIKeyOperations" || name == "savePermissionGrant" || name == "replacePermissionGrants" || name == "revokePermissionGrant" || name == "transferControllerOwner" {
 		op.Reauth = []string{"password", "code_if_2fa_enabled"}
 	}
 	a.agentOperations = append(a.agentOperations, op)
@@ -108,15 +123,22 @@ func (a *API) registerAgentOperation(pattern string, policy accessPolicy, h http
 func (a *API) visibleAgentOperations(r *http.Request) []agentOperation {
 	u := userFrom(r.Context())
 	key := apiKeyFrom(r.Context())
+	permissions, permissionErr := a.Store.PermissionSnapshot(r.Context())
 	ops := append([]agentOperation(nil), a.agentOperations...)
 	for i := range ops {
 		op := &ops[i]
 		op.Available = true
 		switch {
+		case !isAdmin(u) && !a.memberAIOperationAllowed(r.Context(), u, op.Method+" "+op.Path):
+			op.Available, op.Unavailable = false, "outside_ai_boundary"
 		case op.RequiredRole == "admin" && !isAdmin(u):
 			op.Available, op.Unavailable = false, "admin_required"
+		case op.RequiredPermission != "" && (permissionErr != nil || (!permissions.Allows(u.ID, op.RequiredPermission, authorization.Scope{Kind: "all"}) && !hasAnyPermissionGrant(permissions, u.ID, op.RequiredPermission))):
+			op.Available, op.Unavailable = false, "permission_required"
 		case key != nil && op.SessionOnly:
 			op.Available, op.Unavailable = false, "session_required"
+		case key != nil && !apiKeyAllowsOperation(key, op.Method+" "+op.Path):
+			op.Available, op.Unavailable = false, "operation_not_allowed"
 		case key != nil && !hasAPIKeyScope(key, op.RequiredScope):
 			op.Available, op.Unavailable = false, "insufficient_scope"
 		}
@@ -148,11 +170,11 @@ func (a *API) agentCapabilities(w http.ResponseWriter, r *http.Request) error {
 		"workflows":  agentWorkflows(operations),
 		"deployment": map[string]any{"reference_url": "/api/v1/agent/reference", "reference_section": "2. 部署与恢复", "supported_platforms": []string{"linux/amd64"}, "modes": []string{"native-systemd", "docker-compose"}, "requires_host_authorization": true, "bootstrap_requires_setup_token": true, "api_key_creation": "session_only", "docker_maintenance": "host_compose_script"},
 		"notes": []string{
-			"API key 继承账户角色及资源权限；read 为 GET/HEAD，其他方法需要 write。",
+			"AI 接入需要管理员身份或 ai.access 权限；API key 仍受账户权限约束，read 为 GET/HEAD，其他方法需要 write。",
 			"只读响应可能包含节点凭据和订阅链接，请仅向授权用户显示。",
 			"API key 管理和两步验证管理需要面板会话；维护写入还需要密码及已启用的两步验证。",
 			"写操作没有通用自动重试保证；网络操作和维护使用各自的 operation_id 或 id。",
-			"available 表示调用权限，资源归属、运行状态和字段约束由业务接口继续验证。",
+			"普通用户的 AI 功能限于分享、个人模板及另行授予的管理操作；available 仍不代替资源归属、运行状态和字段约束校验。",
 		},
 	})
 	return nil
@@ -208,7 +230,7 @@ func (a *API) agentOpenAPI(w http.ResponseWriter, r *http.Request) error {
 			responses[status] = map[string]any{"description": description, "content": map[string]any{"application/json": map[string]any{"schema": schema}}}
 		}
 		operation := map[string]any{"operationId": op.OperationID, "summary": op.Summary, "tags": []string{op.Group}, "parameters": params, "security": security, "responses": responses,
-			"x-required-role": op.RequiredRole, "x-required-scope": op.RequiredScope, "x-session-only": op.SessionOnly, "x-available": op.Available, "x-reauthentication": op.Reauth}
+			"x-required-role": op.RequiredRole, "x-required-permission": op.RequiredPermission, "x-required-scope": op.RequiredScope, "x-session-only": op.SessionOnly, "x-available": op.Available, "x-reauthentication": op.Reauth}
 		if len(op.RequestBody) > 0 {
 			operation["requestBody"] = map[string]any{"description": "字段类型从处理器提取，必填组合和业务约束由服务端验证；PUT 不一定表示完整替换。", "content": map[string]any{"application/json": map[string]any{"schema": op.RequestBody}}}
 		}

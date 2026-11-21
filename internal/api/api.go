@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type Deps struct {
 	Store       *store.Store
 	Connlog     *connlog.Store
 	Geo         *geoip.Lookup
+	GeoCountry  *geoip.CountryManager
 	Subs        *subscription.Service
 	Desired     *desired.Builder
 	Shares      *share.Manager
@@ -73,6 +75,8 @@ type API struct {
 	loginLimiter       *rateLimiter    // password attempts per IP
 	factorLimiter      *rateLimiter    // second-factor attempts per IP
 	apiGate            safehttp.Gate
+	ipv6DNSGate        safehttp.Gate
+	ipv6Lookup         func(context.Context, string, string) ([]netip.Addr, error)
 	agentGate          safehttp.Gate
 	subscriptionGate   safehttp.Gate
 	agentLimiter       *rateLimiter
@@ -103,6 +107,7 @@ func New(d Deps) *API {
 	a := &API{
 		Deps:               d,
 		mux:                http.NewServeMux(),
+		ipv6DNSGate:        safehttp.Gate{Limit: 6},
 		Events:             NewEventBus(),
 		challenges:         newChallengeStore(),
 		loginLimiter:       newRateLimiter(10, time.Minute),
@@ -150,7 +155,10 @@ func userFrom(ctx context.Context) *domain.User {
 
 func (a *API) currentUser(r *http.Request) (*domain.User, error) {
 	if len(r.Header.Values("Authorization")) != 0 {
-		_, u, err := a.apiKeyIdentity(r)
+		key, u, err := a.apiKeyIdentity(r)
+		if err == nil && r.Pattern != "" && ((!isAdmin(u) && !a.memberAIOperationAllowed(r.Context(), u, r.Pattern)) || !apiKeyAllowsOperation(key, r.Pattern)) {
+			return nil, httpx.E(403, "operation_not_allowed", "API key 未获准使用此功能")
+		}
 		return u, err
 	}
 	c, err := r.Cookie(a.sessionName())
@@ -188,8 +196,20 @@ func (a *API) handle(pattern string, policy accessPolicy, h httpx.Handler) {
 			return err
 		}
 		if policy == adminAccess && u.Role != domain.RoleAdmin {
-			a.securityEvent(r, "role_denied")
-			return httpx.ErrForbidden
+			allowed, err := a.delegatedGlobalAllowed(r.Context(), u, pattern)
+			if !allowed && err == nil && pattern == "POST /api/v1/shares" {
+				allowed = a.delegatedCreateAllowed(r.Context(), u, "shares.create")
+			}
+			if !allowed && err == nil {
+				allowed, err = a.delegatedShareRouteAllowed(r, u, pattern)
+			}
+			if err != nil {
+				return httpx.E(503, "auth_unavailable", "权限验证暂时不可用")
+			}
+			if !allowed {
+				a.securityEvent(r, "role_denied")
+				return httpx.ErrForbidden
+			}
 		}
 		key := apiKeyFrom(r.Context())
 		if key != nil {
@@ -339,15 +359,16 @@ func (a *API) routes() {
 	a.handle("GET /api/v1/auth/csrf", memberAccess, a.csrf)
 
 	// Developer credentials and agent discovery use the same product API.
-	a.handle("GET /api/v1/api-keys", memberAccess, a.listAPIKeys)
-	a.handle("POST /api/v1/api-keys", memberAccess, a.createAPIKey)
-	a.handle("DELETE /api/v1/api-keys/{id}", memberAccess, a.revokeAPIKey)
-	a.handle("GET /api/v1/agent/capabilities", memberAccess, a.agentCapabilities)
-	a.handle("GET /api/v1/agent/openapi.json", memberAccess, a.agentOpenAPI)
-	a.handle("GET /api/v1/agent/skill", memberAccess, a.agentSkill)
-	a.handle("GET /api/v1/agent/skill.zip", memberAccess, a.agentSkillBundle)
-	a.handle("GET /api/v1/agent/client.py", memberAccess, a.agentClient)
-	a.handle("GET /api/v1/agent/reference", memberAccess, a.agentReference)
+	a.handle("GET /api/v1/api-keys", adminAccess, a.listAPIKeys)
+	a.handle("POST /api/v1/api-keys", adminAccess, a.createAPIKey)
+	a.handle("DELETE /api/v1/api-keys/{id}", adminAccess, a.revokeAPIKey)
+	a.handle("PUT /api/v1/api-keys/{id}/operations", adminAccess, a.updateAPIKeyOperations)
+	a.handle("GET /api/v1/agent/capabilities", adminAccess, a.agentCapabilities)
+	a.handle("GET /api/v1/agent/openapi.json", adminAccess, a.agentOpenAPI)
+	a.handle("GET /api/v1/agent/skill", adminAccess, a.agentSkill)
+	a.handle("GET /api/v1/agent/skill.zip", adminAccess, a.agentSkillBundle)
+	a.handle("GET /api/v1/agent/client.py", adminAccess, a.agentClient)
+	a.handle("GET /api/v1/agent/reference", adminAccess, a.agentReference)
 	// The installer contains only the embedded public Skill, never user data.
 	a.public("GET /agent/skill/install.py", a.agentSkillInstaller)
 
@@ -358,12 +379,23 @@ func (a *API) routes() {
 	a.handle("DELETE /api/v1/users/{id}", adminAccess, a.deleteUser)
 	a.handle("GET /api/v1/users/{id}/avatar", memberAccess, a.userAvatar)
 	a.handle("POST /api/v1/users/{id}/2fa/reset", adminAccess, a.twoFAReset)
+	a.handle("GET /api/v1/me/permissions", memberAccess, a.myPermissions)
+	a.handle("GET /api/v1/users/{id}/permissions", memberAccess, a.userPermissions)
+	a.handle("POST /api/v1/users/{id}/permissions", memberAccess, a.replacePermissionGrants)
+	a.handle("PUT /api/v1/users/{id}/permissions/{permission}", memberAccess, a.savePermissionGrant)
+	a.handle("DELETE /api/v1/permissions/{id}", memberAccess, a.revokePermissionGrant)
+	a.handle("GET /api/v1/system/owner", adminAccess, a.controllerOwner)
+	a.handle("POST /api/v1/system/owner", adminAccess, a.transferControllerOwner)
 
 	// servers
 	a.handle("GET /api/v1/servers", adminAccess, a.listServers)
 	a.handle("POST /api/v1/servers", adminAccess, a.createServer)
 	a.handle("GET /api/v1/servers/{id}", adminAccess, a.getServer)
 	a.handle("PUT /api/v1/servers/{id}", adminAccess, a.updateServer)
+	a.handle("GET /api/v1/servers/{id}/unavailable-ports", adminAccess, a.listUnavailablePorts)
+	a.handle("GET /api/v1/servers/{id}/unavailable-ports/{port}", adminAccess, a.getUnavailablePort)
+	a.handle("PUT /api/v1/servers/{id}/unavailable-ports/{port}", adminAccess, a.saveUnavailablePort)
+	a.handle("DELETE /api/v1/servers/{id}/unavailable-ports/{port}", adminAccess, a.deleteUnavailablePort)
 	a.handle("GET /api/v1/servers/{id}/nat", adminAccess, a.serverNAT)
 	a.handle("PUT /api/v1/servers/{id}/nat", adminAccess, a.saveServerNAT)
 	a.handle("DELETE /api/v1/servers/{id}", adminAccess, a.deleteServer)
@@ -423,6 +455,9 @@ func (a *API) routes() {
 	a.public("POST /api/maintenance/v1/jobs/{job}/report", a.reportMaintenance)
 	a.handle("POST /api/v1/agents/update", adminAccess, a.updateAllAgents)
 	a.handle("POST /api/v1/servers/{id}/nodes", adminAccess, a.deployNode)
+	a.handle("POST /api/v1/servers/{id}/nodes/preview", adminAccess, a.previewIPv6Node)
+	a.handle("GET /api/v1/servers/{id}/ipv6-endpoint/check", adminAccess, a.getServerIPv6Endpoint)
+	a.handle("POST /api/v1/servers/{id}/ipv6-endpoint/check", adminAccess, a.checkServerIPv6Endpoint)
 
 	// nodes
 	a.handle("GET /api/v1/nodes", adminAccess, a.listNodes)
@@ -437,6 +472,7 @@ func (a *API) routes() {
 	a.handle("POST /api/v1/nodes/{id}/network/preview", adminAccess, a.previewNodeNetwork)
 	a.handle("PUT /api/v1/nodes/{id}/network", adminAccess, a.updateNodeNetwork)
 	a.handle("PUT /api/v1/nodes/{id}", adminAccess, a.updateNode)
+	a.handle("PUT /api/v1/nodes/{id}/exit-region", adminAccess, a.setNodeExitRegion)
 	a.handle("DELETE /api/v1/nodes/{id}", adminAccess, a.deleteNode)
 	a.handle("GET /api/v1/nodes/{id}/uri", adminAccess, a.nodeURI)
 	a.handle("GET /api/v1/nodes/{id}/traffic", adminAccess, a.nodeTraffic)
@@ -465,9 +501,22 @@ func (a *API) routes() {
 
 	// templates & presets
 	a.handle("GET /api/v1/templates", memberAccess, a.listTemplates)
+	a.handle("GET /api/v1/templates/{id}/versions", memberAccess, a.listTemplateVersions)
 	a.handle("POST /api/v1/templates", adminAccess, a.createTemplate)
 	a.handle("PUT /api/v1/templates/{id}", adminAccess, a.updateTemplate)
 	a.handle("DELETE /api/v1/templates/{id}", adminAccess, a.deleteTemplate)
+	a.handle("GET /api/v1/me/templates", memberAccess, a.listPersonalTemplates)
+	a.handle("POST /api/v1/me/templates", memberAccess, a.createPersonalTemplate)
+	a.handle("GET /api/v1/me/templates/{id}", memberAccess, a.getPersonalTemplate)
+	a.handle("GET /api/v1/me/templates/{id}/versions", memberAccess, a.listPersonalTemplateVersions)
+	a.handle("PUT /api/v1/me/templates/{id}", memberAccess, a.updatePersonalTemplate)
+	a.handle("DELETE /api/v1/me/templates/{id}", memberAccess, a.deletePersonalTemplate)
+	a.handle("GET /api/v1/shares/{id}/personal-templates", memberAccess, a.listSharePersonalTemplates)
+	a.handle("POST /api/v1/shares/{id}/personal-templates/preview", memberAccess, a.previewSharePersonalTemplate)
+	a.handle("POST /api/v1/shares/{id}/personal-templates/preview-draft", memberAccess, a.previewShareTemplateDraft)
+	a.handle("POST /api/v1/shares/{id}/template-preview-draft", adminAccess, a.previewAdminShareTemplateDraft)
+	a.handle("PUT /api/v1/shares/{id}/personal-templates/{format}", memberAccess, a.setSharePersonalTemplate)
+	a.handle("DELETE /api/v1/shares/{id}/personal-templates/{format}", memberAccess, a.clearSharePersonalTemplate)
 	a.handle("GET /api/v1/presets", memberAccess, a.listPresets)
 	a.handle("POST /api/v1/presets", adminAccess, a.createPreset)
 	a.handle("PUT /api/v1/presets/{id}", adminAccess, a.updatePreset)
@@ -477,6 +526,7 @@ func (a *API) routes() {
 	a.handle("GET /api/v1/shares", memberAccess, a.listShares)
 	a.handle("POST /api/v1/shares", adminAccess, a.createShare)
 	a.handle("GET /api/v1/shares/{id}", memberAccess, a.getShare)
+	a.handle("GET /api/v1/share-pages/{public_id}", memberAccess, a.getShareByPublicID)
 	a.handle("PUT /api/v1/shares/{id}", adminAccess, a.updateShare)
 	a.handle("PUT /api/v1/shares/{id}/connlog", adminAccess, a.setShareConnlog)
 	a.handle("DELETE /api/v1/shares/{id}", adminAccess, a.deleteShare)
@@ -500,6 +550,9 @@ func (a *API) routes() {
 	a.handle("GET /api/v1/dashboard", memberAccess, a.dashboard)
 	a.handle("GET /api/v1/traffic/overview", adminAccess, a.trafficOverview)
 	a.handle("GET /api/v1/settings", adminAccess, a.getSettings)
+	a.handle("GET /api/v1/geoip/countries", adminAccess, a.geoipCountries)
+	a.handle("POST /api/v1/geoip/refresh", adminAccess, a.refreshGeoIP)
+	a.handle("POST /api/v1/geoip/lookup/refresh", adminAccess, a.refreshGeoLookup)
 	a.handle("GET /api/v1/settings/core-versions", adminAccess, a.coreVersions)
 	a.handle("GET /api/v1/settings/core-upgrade", adminAccess, a.coreUpgradeStatus)
 	a.handle("PUT /api/v1/settings", adminAccess, a.putSettings)

@@ -92,11 +92,15 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 }
 
 func (m *Manager) EnsureNodes(ctx context.Context, nodes []agentproto.NodeSpec) error {
-	if err := checkMarkRoutes(ctx); err != nil {
-		return err
-	}
 	rules, err := NodeRules(nodes)
 	if err != nil {
+		return err
+	}
+	ids := make([]uint32, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, uint32(node.NodeID))
+	}
+	if err := checkMarkPrefixes(ctx, []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix}, ids...); err != nil {
 		return err
 	}
 	if _, err = m.run(ctx, rules, "--check", "-f", "-"); err != nil {
@@ -165,11 +169,7 @@ func (m *Manager) NodesExist(ctx context.Context) bool {
 }
 
 // A packet mark must not accidentally select an existing policy-routing table.
-func checkMarkRoutes(ctx context.Context) error {
-	return checkMarkPrefixes(ctx, []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix})
-}
-
-func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
+func checkMarkPrefixes(ctx context.Context, prefixes []uint32, resourceIDs ...uint32) error {
 	for _, family := range []string{"-4", "-6"} {
 		raw, err := exec.CommandContext(ctx, "ip", family, "-j", "rule", "show").Output()
 		if err != nil {
@@ -195,6 +195,27 @@ func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
 				if e != nil {
 					return e
 				}
+			}
+			if _, ok := r["not"]; ok {
+				// FIB_RULE_INVERT (iproute2 JSON: "not": null) matches the
+				// complement of the fwmark class. With any mask bit set that
+				// complement also swallows VpsCT marks (id bits 0-23 are
+				// free), so treat it as a conflict. A zero mask matches every
+				// packet and its complement matches none.
+				if mask != 0 {
+					return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+				}
+				continue
+			}
+			// Low-bit-only rules select resource IDs, independently of the
+			// accounting prefix. Recheck the current IDs on each apply.
+			if mask&MarkMask == 0 {
+				for _, id := range resourceIDs {
+					if (mark^id)&mask == 0 {
+						return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+					}
+				}
+				continue
 			}
 			for _, prefix := range prefixes {
 				if (mark^prefix)&mask&MarkMask == 0 {

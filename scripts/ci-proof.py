@@ -10,7 +10,7 @@ import re
 import subprocess
 import tarfile
 
-REQUIRED = {"lint", "source", "race", "integration", "network", "alpine", "soak", "upgrade", "security"}
+REQUIRED = {"lint", "source", "race-store", "race", "integration", "network", "alpine", "soak", "upgrade", "acme", "security"}
 VERSION = "v0.1.999-ci"
 
 
@@ -29,6 +29,31 @@ def context():
             "source_tree": tree(), "created_at": dt.datetime.now(dt.timezone.utc).isoformat()}
 
 
+def gate_results(results, source_tree):
+    """Reject incomplete runs before reading outputs that failed jobs never set."""
+    if not isinstance(results, dict):
+        raise ValueError("CI job results must be an object")
+    missing, unexpected = REQUIRED - results.keys(), results.keys() - REQUIRED
+    statuses = {name: value.get("result", "missing") if isinstance(value, dict) else "invalid"
+                for name, value in results.items()}
+    failed = {name: status for name, status in statuses.items() if status != "success"}
+    problems = []
+    if missing:
+        problems.append("missing gates: " + ", ".join(sorted(missing)))
+    if unexpected:
+        problems.append("unexpected gates: " + ", ".join(sorted(unexpected)))
+    if failed:
+        problems.append("unsuccessful gates: " + ", ".join(f"{name}={status}" for name, status in sorted(failed.items())))
+    if problems:
+        raise ValueError("CI evidence rejected; " + "; ".join(problems))
+    outputs = results["source"].get("outputs")
+    if not isinstance(outputs, dict) or not outputs.get("tree"):
+        raise ValueError("CI evidence rejected; successful source job did not publish its tested tree")
+    if outputs["tree"] != source_tree:
+        raise ValueError("final checkout differs from the tested build")
+    return statuses
+
+
 def validate(proof, repository, run_id, source_tree, source_head, now=None, require_full=True):
     if proof.get("schema") != 1 or proof.get("repository") != repository or proof.get("run_id") != run_id:
         raise ValueError("CI evidence identity mismatch")
@@ -44,6 +69,11 @@ def validate(proof, repository, run_id, source_tree, source_head, now=None, requ
     duration = proof.get("soak_seconds")
     if duration not in (60, 600) or (require_full and duration != 600):
         raise ValueError("release evidence requires the complete 600-second UDP soak")
+    acme_profile = proof.get("acme_profile")
+    if acme_profile not in ("handshake", "renewal") or (require_full and acme_profile != "renewal"):
+        raise ValueError("release evidence requires the complete ACME renewal profile")
+    if acme_profile != ("renewal" if duration == 600 else "handshake"):
+        raise ValueError("ACME profile differs from the selected daily/release acceptance profile")
     age = (now or dt.datetime.now(dt.timezone.utc)) - dt.datetime.fromisoformat(proof["created_at"])
     if age.total_seconds() < -600 or age > dt.timedelta(days=7):
         raise ValueError("CI evidence is stale or future-dated")
@@ -94,13 +124,15 @@ def main():
         proof["soak_sessions"] = int(os.environ["UDP_STRESS_SESSIONS"])
         proof["soak_seconds"] = int(os.environ["UDP_STRESS_SECONDS"])
         results = json.loads(os.environ["CI_RESULTS"])
-        proof["results"] = {key: value["result"] for key, value in results.items()}
-        if results["source"]["outputs"]["tree"] != proof["source_tree"]:
-            raise ValueError("final checkout differs from the tested build")
+        proof["results"] = gate_results(results, proof["source_tree"])
+        proof["acme_profile"] = os.environ.get("ACME_PROFILE")
         validate(proof, proof["repository"], proof["run_id"], proof["source_tree"], proof["source_head"], require_full=False)
         filename = "ci-evidence.json"
     (args.directory / filename).write_text(json.dumps(proof, indent=2) + "\n")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as error:
+        raise SystemExit(str(error)) from error

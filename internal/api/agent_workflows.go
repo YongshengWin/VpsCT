@@ -22,12 +22,22 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 		return agentWorkflowStep{Purpose: purpose, Method: method, Path: path}
 	}
 	items := []agentWorkflow{
+		{ID: "unavailable_ports", Title: "人工记录不可用端口", Steps: []agentWorkflowStep{step("读取服务器端口记录", "GET", "/api/v1/servers/{id}/unavailable-ports"), step("记录端口及适用网络", "PUT", "/api/v1/servers/{id}/unavailable-ports/{port}"), step("按服务器和端口核对保存结果", "GET", "/api/v1/servers/{id}/unavailable-ports/{port}"), step("恢复后移除人工记录", "DELETE", "/api/v1/servers/{id}/unavailable-ports/{port}")}, Completion: "PUT 200 后 GET 同一端口核对 transport/network/reason。记录不改变节点状态，不是自动探测结论。换端口预览的 unavailable_port 为匹配目标端口的人工提醒。", Recovery: "断连先 GET 同一服务器和端口，完整 PUT 可重放；DELETE 可重放，删除后 GET 为 404。512 条上限时先移除过期记录。"},
+		{ID: "node_port", Title: "已有节点更换端口", Steps: []agentWorkflowStep{step("读取节点网络版本、监听端口和原有策略", "GET", "/api/v1/nodes/{id}"), step("保留 network，附 listen_port 预览实际影响", "POST", "/api/v1/nodes/{id}/network/preview"), step("提交固定编号、版本及影响凭证", "PUT", "/api/v1/nodes/{id}/network"), step("核对应用结果", "GET", "/api/v1/network/operations/{op}")}, Completion: "status=applied；表示服务器已确认新端口配置，不代表用户本地可达。", Recovery: "超时先查原操作；同一编号及完整请求可重放。apply_failed 按 retry_revision 重试；端口冲突重新预览，不删除重建节点。"},
+		{ID: "node_ingress_policy", Title: "限制节点入口来源", Steps: []agentWorkflowStep{step("读取受管节点的 network 和当前版本", "GET", "/api/v1/nodes/{id}"), step("读取当前数据源可用的国家清单（选择国家前必须先配置地址库）", "GET", "/api/v1/geoip/countries"), step("在 network.ingress 中设置 relay_only 或 deny_countries 并预览", "POST", "/api/v1/nodes/{id}/network/preview"), step("提交预览返回的完整 network 与 impact.token", "PUT", "/api/v1/nodes/{id}/network"), step("核对 agent 已应用的 network operation", "GET", "/api/v1/network/operations/{op}"), step("需要更新地区库时显式刷新并再次核对", "POST", "/api/v1/geoip/refresh")}, Completion: "网络操作 status=applied；relay_only 表示仅指定中转出口 CIDR 可进入，deny_countries 表示按固定 GeoIP 地址集合拒绝实际源地址。", Recovery: "超时先查询原 operation_id；GeoIP 更新失败继续使用上一份已验证集合，不把地区未知当成策略已应用。地区判断不能识别被中转隐藏的原始客户端。"},
 		{ID: "server_enrollment", Title: "接入 VPS", Steps: []agentWorkflowStep{
 			step("复用已有服务器，避免重复创建", "GET", "/api/v1/servers"),
 			step("仅缺少记录时创建", "POST", "/api/v1/servers"),
 			step("确认 Linux AMD64 后生成临时安装命令；执行需要目标主机授权", "POST", "/api/v1/servers/{id}/enroll-token"),
 			step("安装后核对 agent_status 和实际能力", "GET", "/api/v1/servers/{id}"),
 		}, Completion: "目标 agent_status=online，能力满足请求；生成安装命令不算安装完成。", Recovery: "先查询是否已接入；安装令牌不得写入日志或回显。"},
+		{ID: "deploy_ipv6_node", Title: "从首次启动仅接受 IPv6", Steps: []agentWorkflowStep{
+			step("读取服务器独立 IPv6 地址和 agent 状态", "GET", "/api/v1/servers/{id}"),
+			step("使用 host 查询参数核对 IPv6 地址与 agent 网卡清单", "GET", "/api/v1/servers/{id}/ipv6-endpoint/check"),
+			step("验证初始监听、访问地址与端口", "POST", "/api/v1/servers/{id}/nodes/preview"),
+			step("提交确认值和稳定操作 ID", "POST", "/api/v1/servers/{id}/nodes"),
+			step("等待节点 IPv6 监听确认", "GET", "/api/v1/nodes/{id}"),
+		}, Completion: "仅 IPv6 节点返回 ipv6_ingress_ready=true；201/202 只代表已记录部署。", Recovery: "用相同 operation_id 和完整载荷安全重试，条件变化时重新预览。"},
 		{ID: "deploy_node", Title: "部署代理节点", Steps: []agentWorkflowStep{
 			step("确认协议支持和运行条件", "GET", "/api/v1/servers/{id}/network/capabilities"),
 			step("创建节点", "POST", "/api/v1/servers/{id}/nodes"),
@@ -38,6 +48,9 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 		{ID: "import_nodes", Title: "导入外部节点", Steps: []agentWorkflowStep{
 			step("先解析并核对内容", "POST", "/api/v1/nodes/parse"), step("保存用户选择的节点", "POST", "/api/v1/nodes/import"), step("筛选 source、协议、服务器和名称", "GET", "/api/v1/nodes"),
 		}, Completion: "节点记录存在且协议、来源、端点与请求一致；导入不代表已测试可达。", Recovery: "先比对导入结果，避免重复导入；不要回显 URI。"},
+		{ID: "node_exit_region", Title: "设置节点的实际出口地区", Steps: []agentWorkflowStep{
+			step("读取节点", "GET", "/api/v1/nodes/{id}"), step("设置或清空经核实的出口地区", "PUT", "/api/v1/nodes/{id}/exit-region"), step("核对保存的地区", "GET", "/api/v1/nodes/{id}"),
+		}, Completion: "节点 exit_region 与请求一致；只影响 Mihomo 地区分组，客户端需更新订阅。链式或转发线路应设置落地节点。", Recovery: "超时先读取节点确认，PUT 同一地区可重放；未核实的出口留空。"},
 		{ID: "access_route", Title: "两台或三台转发线路", Steps: []agentWorkflowStep{
 			step("选择受管、导入或手动落地节点", "GET", "/api/v1/nodes"),
 			step("operation_id 固定；两台用 ix_server_id=0，三台指定中转；获取 candidate/token/checks", "POST", "/api/v1/access-routes/preview"),
@@ -58,8 +71,14 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 			step("验证模板、节点选择和分流", "POST", "/api/v1/subscriptions/preview"), step("创建订阅", "POST", "/api/v1/subscriptions"), step("核对资源配置", "GET", "/api/v1/subscriptions/{id}"), step("检查客户端格式渲染", "GET", "/api/v1/subscriptions/{id}/render"),
 		}, Completion: "保存和指定格式渲染均成功；渲染结果可能包含凭据。", Recovery: "无通用幂等保证；超时比对资源 ID、字段和创建时间，不按名称盲目重建。"},
 		{ID: "share", Title: "创建资源分享", Steps: []agentWorkflowStep{
-			step("核对目标与权限", "GET", "/api/v1/servers"), step("创建专用资源及配额", "POST", "/api/v1/shares"), step("核对分享状态、节点和用量", "GET", "/api/v1/shares/{id}"),
+			step("核对目标与权限", "GET", "/api/v1/servers"), step("创建专用资源及配额", "POST", "/api/v1/shares"), step("核对分享状态、节点和用量", "GET", "/api/v1/shares/{id}"), step("按公开标识查询分享", "GET", "/api/v1/share-pages/{public_id}"),
 		}, Completion: "分享配置正确；专用节点实际已应用。", Recovery: "暂停、撤销、重签与删除的影响不同，按用户实际要求选择。"},
+		{ID: "personal_share_template", Title: "为自己的分享设置客户端模板", Steps: []agentWorkflowStep{
+			step("读取自己获分配的分享", "GET", "/api/v1/shares/{id}"), step("读取个人模板", "GET", "/api/v1/me/templates"), step("按需读取历史版本", "GET", "/api/v1/me/templates/{id}/versions"), step("预览未保存草稿", "POST", "/api/v1/shares/{id}/personal-templates/preview-draft"), step("创建个人模板", "POST", "/api/v1/me/templates"), step("用分享节点预览", "POST", "/api/v1/shares/{id}/personal-templates/preview"), step("应用模板", "PUT", "/api/v1/shares/{id}/personal-templates/{format}"), step("核对格式选择", "GET", "/api/v1/shares/{id}/personal-templates"),
+		}, Completion: "选择表中对应格式的 template_id 与请求一致；客户端下次更新订阅时生效，预览内容可能包含凭据。", Recovery: "创建超时先查个人模板并比对字段，无法唯一判断时不盲目重建；应用超时先查格式选择，409 时重新读取模板及分享并预览。使用中的模板先复制再修改。"},
+		{ID: "delegate_template_management", Title: "授权公共模板管理", Steps: []agentWorkflowStep{
+			step("读取目标账户现有授权", "GET", "/api/v1/users/{id}/permissions"), step("二次认证并替换自己授予的权限", "POST", "/api/v1/users/{id}/permissions"), step("核对目标授权", "GET", "/api/v1/users/{id}/permissions"),
+		}, Completion: "目标账户的授权列表含期望权限及 effective=true；目标旧会话和 API key 失效，需要重新登录。", Recovery: "超时先读取目标授权核对；替换只影响当前授权者授予的权限，不能覆盖其他人的授权。凭据和验证码不得记录。"},
 		{ID: "observe", Title: "监控和排查", Steps: []agentWorkflowStep{
 			step("查看服务器回执与诊断", "GET", "/api/v1/servers/{id}"), step("查看本期或时间段用量", "GET", "/api/v1/servers/{id}/traffic"), step("查看操作状态", "GET", "/api/v1/servers/{id}/network/operations"), step("按需有界监听事件", "GET", "/api/v1/events"),
 		}, Completion: "报告实际状态与证据；离线、失败、待应用分别说明。", Recovery: "限制查询范围与事件数量；429 遵循 Retry-After，不自动重试写操作。"},

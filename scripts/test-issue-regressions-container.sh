@@ -21,4 +21,5 @@ docker run -d --platform "linux/$arch" --name "$container" --network none --priv
 bash scripts/wait-systemd-container.sh "$container"
 docker exec -e CTLVPS_SYSTEMD_TEST=1 "$container" /fixtures/core.test -test.run '^TestKernelProxy(SliceValidation|PreflightDiagnostics)$' -test.v
 docker exec -e CTLVPS_INGRESS_TEST=1 "$container" unshare --net sh -ec 'ip link set lo up; exec /fixtures/nft.test -test.run "^TestKernel(ForeignIngress|IngressLifecycle)$" -test.v'
+docker exec -e CTLVPS_IPV6_INGRESS_TEST=1 "$container" unshare --net /fixtures/nft.test -test.run '^TestKernelIPv6NodeIngress$' -test.v
 docker exec "$container" /fixtures/sandbox.test -test.run '^TestKernelSocketSandbox$' -test.v

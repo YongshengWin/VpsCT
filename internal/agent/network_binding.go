@@ -475,6 +475,11 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 	required := a.State.NetworkBindingVersion
 	egressRequired := a.State.NetworkEgressVersion
 	forwardRequired := a.State.NetworkForwardVersion
+	// Unlike the base network binding contract, ingress policy has an explicit
+	// independent version only while a desired node carries an ingress policy.
+	// Clearing the last policy is a safe, explicit cleanup and must be allowed
+	// to publish version 0.
+	ingressRequired := 0
 	sshRequired := a.State.NetworkSSHVersion
 	wgRequired := a.State.NetworkWireGuardVersion
 	mitaRequired := a.State.MitaVersion
@@ -491,6 +496,9 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 		}
 		if n.Network != nil {
 			required = max(required, agentproto.NetworkBindingVersion)
+			if n.Network.Policy.Ingress != nil {
+				ingressRequired = agentproto.NetworkIngressVersion
+			}
 			if n.Network.WireGuard != nil {
 				wgRequired = agentproto.NetworkWireGuardVersion
 			}
@@ -517,8 +525,14 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 	if ds.NetworkForwardVersion < forwardRequired {
 		return errors.New("控制端缺少已启用的固定转发版本，拒绝回退")
 	}
+	if ds.NetworkIngressVersion < ingressRequired {
+		return errors.New("控制端缺少已启用的入口来源策略版本，拒绝回退")
+	}
 	if ds.MitaVersion < mitaRequired {
 		return errors.New("控制端缺少已启用的 mita 能力，拒绝回退")
+	}
+	if ds.IPv6IngressVersion < a.State.IPv6IngressVersion {
+		return errors.New("控制端缺少已启用的仅 IPv6 入口版本，拒绝回退")
 	}
 	a.State.MitaVersion = ds.MitaVersion
 	for _, n := range ds.Nodes {
@@ -553,6 +567,8 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 	}
 	a.State.NetworkDesiredRevision, a.State.NetworkDesiredHash = ds.Revision, ds.Hash
 	a.State.NetworkBindingVersion = ds.NetworkBindingVersion
+	a.State.IPv6IngressVersion = ds.IPv6IngressVersion
+	a.State.NetworkIngressVersion = ds.NetworkIngressVersion
 	a.State.NetworkEgressVersion = ds.NetworkEgressVersion
 	a.State.NetworkSSHVersion = ds.NetworkSSHVersion
 	a.State.NetworkWireGuardVersion = ds.NetworkWireGuardVersion

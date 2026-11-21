@@ -75,6 +75,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 	}
 	req.Header.Set("User-Agent", "ctlvps-agent/"+c.Version)
 	if path == agentproto.PathDesired && runtime.GOOS == "linux" {
+		req.Header.Set(networkconfig.IPv6IngressHeader, fmt.Sprint(networkconfig.IPv6IngressVersion))
 		req.Header.Set(agentproto.NetworkBindingHeader, fmt.Sprint(agentproto.NetworkBindingVersion))
 		req.Header.Set(agentproto.NetworkWireGuardHeader, fmt.Sprint(agentproto.NetworkWireGuardVersion))
 		req.Header.Set(networkconfig.MitaHeader, fmt.Sprint(networkconfig.MitaVersion))
@@ -82,6 +83,7 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		req.Header.Set(agentproto.NetworkEgressHeader, fmt.Sprint(agentproto.NetworkEgressVersion))
 		req.Header.Set(agentproto.NetworkForwardHeader, fmt.Sprint(agentproto.NetworkForwardVersion))
 		req.Header.Set(networkconfig.ForwardUDPHeader, fmt.Sprint(networkconfig.ForwardUDPVersion))
+		req.Header.Set(agentproto.NetworkIngressHeader, fmt.Sprint(agentproto.NetworkIngressVersion))
 	}
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")

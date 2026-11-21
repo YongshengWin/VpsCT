@@ -2,10 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"ctlvps/internal/authorization"
 	"ctlvps/internal/connlog"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/geoip"
@@ -24,8 +26,20 @@ type ShareView struct {
 }
 
 func (a *API) shareView(r *http.Request, sh domain.Share, withNodes bool) ShareView {
+	u := userFrom(r.Context())
+	owner := u != nil && sh.UserID != nil && *sh.UserID == u.ID
+	links := isAdmin(u) || owner || a.delegatedShareAllowed(r.Context(), u, sh, "shares.links")
+	if !isAdmin(u) && !owner {
+		// Network policy, notes and raw node identities are administration data,
+		// separate from permission to inspect the share's status and quota.
+		sh.Targets = []domain.ShareTarget{}
+		sh.ExtraNodeIDs = []int64{}
+		sh.NodeUsage = nil
+		sh.Notes = ""
+		sh.TemplateID, sh.SubscriptionID = nil, nil
+	}
 	v := ShareView{Share: sh, Usage: a.Shares.UsageOf(sh)}
-	if sub, err := a.Store.GetSubscriptionByShare(r.Context(), sh.ID); err == nil {
+	if sub, err := a.Store.GetSubscriptionByShare(r.Context(), sh.ID); links && err == nil {
 		sv := a.subView(r, sub, true)
 		v.Subscription = &sv
 	}
@@ -34,29 +48,51 @@ func (a *API) shareView(r *http.Request, sh domain.Share, withNodes bool) ShareV
 			v.UserName = u.DisplayName()
 		}
 	}
-	if withNodes {
+	if withNodes && links {
 		nodes, _ := a.Store.ListNodes(r.Context(), store.NodeFilter{ShareID: &sh.ID})
 		v.Nodes = a.nodeViews(r, nodes)
 	}
 	return v
 }
 
-func (a *API) canSeeShare(u *domain.User, sh domain.Share) bool {
-	return isAdmin(u) || (sh.UserID != nil && *sh.UserID == u.ID)
+func (a *API) canSeeShare(ctx context.Context, u *domain.User, sh domain.Share) bool {
+	if isAdmin(u) || a.delegatedShareAllowed(ctx, u, sh, "shares.view") {
+		return true
+	}
+	if u == nil || sh.UserID == nil || *sh.UserID != u.ID {
+		return false
+	}
+	list, err := a.Store.ListShares(ctx, &u.ID)
+	return err == nil && len(list) > 0 && list[0].ID == sh.ID
+}
+
+func (a *API) ensureSingleUserShare(ctx context.Context, userID *int64, shareID int64) error {
+	if userID == nil {
+		return nil
+	}
+	list, err := a.Store.ListShares(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for _, existing := range list {
+		if existing.ID != shareID {
+			return httpx.Conflict("一个普通用户只能绑定一份分享")
+		}
+	}
+	return nil
 }
 
 func (a *API) listShares(w http.ResponseWriter, r *http.Request) error {
 	u := userFrom(r.Context())
-	var filter *int64
-	if !isAdmin(u) {
-		filter = &u.ID
-	}
-	list, err := a.Store.ListShares(r.Context(), filter)
+	list, err := a.Store.ListShares(r.Context(), nil)
 	if err != nil {
 		return err
 	}
 	out := make([]ShareView, 0, len(list))
 	for _, sh := range list {
+		if !a.canSeeShare(r.Context(), u, sh) {
+			continue
+		}
 		out = append(out, a.shareView(r, sh, false))
 	}
 	httpx.OK(w, out)
@@ -157,6 +193,25 @@ func (a *API) createShare(w http.ResponseWriter, r *http.Request) error {
 	if err := in.apply(&sh); err != nil {
 		return err
 	}
+	if u := userFrom(r.Context()); !isAdmin(u) {
+		if sh.UserID == nil {
+			sh.UserID = &u.ID
+		} else if *sh.UserID != u.ID {
+			return httpx.ErrForbidden
+		}
+		e, err := a.Store.PermissionSnapshot(r.Context())
+		if err != nil {
+			return err
+		}
+		for _, target := range sh.Targets {
+			if !e.Allows(u.ID, "shares.create", authorization.Scope{Kind: "servers", IDs: []int64{target.ServerID}}) {
+				return httpx.ErrForbidden
+			}
+		}
+	}
+	if err := a.ensureSingleUserShare(r.Context(), sh.UserID, 0); err != nil {
+		return err
+	}
 	token, err := a.Shares.Create(r.Context(), &sh)
 	if err != nil {
 		if sh.ID != 0 {
@@ -184,8 +239,25 @@ func (a *API) getShare(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeShare(userFrom(r.Context()), sh) {
+	if !a.canSeeShare(r.Context(), userFrom(r.Context()), sh) {
 		return httpx.ErrForbidden
+	}
+	httpx.OK(w, a.shareView(r, sh, true))
+	return nil
+}
+
+// Public IDs are identifiers, not bearer tokens. Apply the same resource
+// authorization as the numeric endpoint and hide inaccessible records.
+func (a *API) getShareByPublicID(w http.ResponseWriter, r *http.Request) error {
+	sh, err := a.Store.GetShareByPublicID(r.Context(), r.PathValue("public_id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return httpx.ErrNotFound
+		}
+		return err
+	}
+	if !a.canSeeShare(r.Context(), userFrom(r.Context()), sh) {
+		return httpx.ErrNotFound
 	}
 	httpx.OK(w, a.shareView(r, sh, true))
 	return nil
@@ -207,6 +279,9 @@ func (a *API) updateShare(w http.ResponseWriter, r *http.Request) error {
 	if err := in.apply(&sh); err != nil {
 		return err
 	}
+	if err := a.ensureSingleUserShare(r.Context(), sh.UserID, id); err != nil {
+		return err
+	}
 	if err := a.Shares.Update(r.Context(), &sh); err != nil {
 		return natAPIError(err)
 	}
@@ -226,7 +301,7 @@ func (a *API) setShareConnlog(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeShare(userFrom(r.Context()), sh) {
+	if !a.canSeeShare(r.Context(), userFrom(r.Context()), sh) {
 		return httpx.ErrForbidden
 	}
 	var in struct {
@@ -313,7 +388,7 @@ func (a *API) shareEvents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeShare(userFrom(r.Context()), sh) {
+	if !a.canSeeShare(r.Context(), userFrom(r.Context()), sh) {
 		return httpx.ErrForbidden
 	}
 	list, err := a.Store.ListShareEvents(r.Context(), id, httpx.QueryInt(r, "limit", 100))
@@ -333,7 +408,7 @@ func (a *API) shareTraffic(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return httpx.ErrNotFound
 	}
-	if !a.canSeeShare(userFrom(r.Context()), sh) {
+	if !a.canSeeShare(r.Context(), userFrom(r.Context()), sh) {
 		return httpx.ErrForbidden
 	}
 	s, err := a.Traffic.Daily(r.Context(), store.SubjectShare, id, httpx.QueryInt(r, "days", 30))

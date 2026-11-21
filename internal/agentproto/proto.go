@@ -127,6 +127,7 @@ type Diagnostics struct {
 	MitaVersion                int                            `json:"mita_version,omitempty"`
 	NetworkEgressVersion       int                            `json:"network_egress_version,omitempty"`
 	NetworkForwardVersion      int                            `json:"network_forward_version,omitempty"`
+	IPv6IngressVersion         int                            `json:"ipv6_ingress_version,omitempty"`
 	NetworkBindingVersion      int                            `json:"network_binding_version,omitempty"`
 	NetworkConfigureAllowed    bool                           `json:"network_configure_allowed,omitempty"`
 	NetworkBindingErrors       map[int64]string               `json:"network_binding_errors,omitempty"`
@@ -269,6 +270,8 @@ type DesiredState struct {
 	// nodes keep their existing wire contract without opting into networking.
 	PublicationGeneration   int64                  `json:"-"`
 	NetworkBindingVersion   int                    `json:"network_binding_version,omitempty"`
+	IPv6IngressVersion      int                    `json:"ipv6_ingress_version,omitempty"`
+	NetworkIngressVersion   int                    `json:"network_ingress_version,omitempty"`
 	NetworkSSHVersion       int                    `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion int                    `json:"network_wireguard_version,omitempty"`
 	MitaVersion             int                    `json:"mita_version,omitempty"`

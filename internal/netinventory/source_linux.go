@@ -255,15 +255,20 @@ func parseLink(data []byte) (link, error) {
 }
 
 func parseAddress(data []byte) (int, string, bool, error) {
+	index, address, usable, _, err := parseAddressFlags(data)
+	return index, address, usable, err
+}
+
+func parseAddressFlags(data []byte) (int, string, bool, bool, error) {
 	if len(data) < 8 {
-		return 0, "", false, errors.New("short address")
+		return 0, "", false, false, errors.New("short address")
 	}
 	if data[0] != unix.AF_INET && data[0] != unix.AF_INET6 {
-		return 0, "", false, nil
+		return 0, "", false, false, nil
 	}
 	a, err := attrs(data[8:])
 	if err != nil {
-		return 0, "", false, err
+		return 0, "", false, false, err
 	}
 	b := a[unix.IFA_LOCAL]
 	if len(b) == 0 {
@@ -271,27 +276,27 @@ func parseAddress(data []byte) (int, string, bool, error) {
 	}
 	ip, ok := netip.AddrFromSlice(b)
 	if !ok || (data[0] == unix.AF_INET && !ip.Is4()) || (data[0] == unix.AF_INET6 && !ip.Is6()) {
-		return 0, "", false, errors.New("invalid address")
+		return 0, "", false, false, errors.New("invalid address")
 	}
 	prefix := netip.PrefixFrom(ip, int(data[1]))
 	if !prefix.IsValid() {
-		return 0, "", false, errors.New("invalid prefix")
+		return 0, "", false, false, errors.New("invalid prefix")
 	}
 	flags := uint32(data[2])
 	if raw, ok := a[unix.IFA_FLAGS]; ok {
 		if len(raw) != 4 {
-			return 0, "", false, errors.New("invalid address flags")
+			return 0, "", false, false, errors.New("invalid address flags")
 		}
 		flags = native.Uint32(raw)
 	}
 	usable := flags&(unix.IFA_F_TENTATIVE|unix.IFA_F_DADFAILED|unix.IFA_F_DEPRECATED|unix.IFA_F_OPTIMISTIC) == 0
 	if raw, ok := a[unix.IFA_CACHEINFO]; ok {
 		if len(raw) < 16 {
-			return 0, "", false, errors.New("invalid address lifetime")
+			return 0, "", false, false, errors.New("invalid address lifetime")
 		}
 		usable = usable && native.Uint32(raw) != 0 && native.Uint32(raw[4:]) != 0
 	}
-	return u32(data[4:]), prefix.String(), usable, nil
+	return u32(data[4:]), prefix.String(), usable, ip.Is6() && flags&unix.IFA_F_TEMPORARY != 0, nil
 }
 
 func defaultRoute(data []byte) (byte, []int, error) {
@@ -377,7 +382,7 @@ func readNetwork() (reading, error) {
 			if m.Header.Type != unix.RTM_NEWADDR {
 				continue
 			}
-			index, address, usable, err := parseAddress(m.Data)
+			index, address, usable, temporary, err := parseAddressFlags(m.Data)
 			if err != nil {
 				r.Complete = false
 				continue
@@ -385,6 +390,9 @@ func readNetwork() (reading, error) {
 			if l := byIndex[index]; l != nil && address != "" {
 				if len(l.Addresses) < agentproto.MaxInterfaceAddresses {
 					l.Addresses = append(l.Addresses, address)
+					if temporary {
+						l.TemporaryIPv6 = append(l.TemporaryIPv6, address)
+					}
 					if usable {
 						l.UsableAddresses = append(l.UsableAddresses, address)
 					}

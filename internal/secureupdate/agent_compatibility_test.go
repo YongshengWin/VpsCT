@@ -28,6 +28,30 @@ func TestUDPForwardStatePreventsAgentDowngrade(t *testing.T) {
 	}
 }
 
+func TestIPv6IngressPreventsAgentDowngrade(t *testing.T) {
+	dir := t.TempDir()
+	state, binary := filepath.Join(dir, "state.json"), filepath.Join(dir, "candidate")
+	if err := os.WriteFile(state, []byte(`{"ipv6_ingress_version":1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, supported := range []bool{false, true} {
+		capabilities := networkconfig.CurrentCapabilities()
+		if !supported {
+			capabilities.IPv6Ingress = 0
+		}
+		raw, err := json.Marshal(capabilities)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' '"+string(raw)+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckAgentCompatibility(context.Background(), binary, state); (err == nil) != supported {
+			t.Fatalf("IPv6 capability=%v, result=%v", supported, err)
+		}
+	}
+}
+
 func TestOpenRCInstallationCannotSynchronizeSystemdOnlyAgent(t *testing.T) {
 	dir := t.TempDir()
 	state, binary := filepath.Join(dir, "state.json"), filepath.Join(dir, "candidate")

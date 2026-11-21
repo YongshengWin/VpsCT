@@ -9,6 +9,8 @@ BIN_DIR="/usr/local/bin"
 CONF_DIR="/etc/ctlvps"
 STATE_DIR="/var/lib/ctlvps-agent"
 UPDATE=0
+ASSETS_DIR=""
+REQUESTED_VERSION=""
 umask 077
 
 while [[ $# -gt 0 ]]; do
@@ -17,6 +19,8 @@ while [[ $# -gt 0 ]]; do
     --token) TOKEN="$2"; shift 2 ;;
     --bin-dir) BIN_DIR="$2"; shift 2 ;;
     --update) UPDATE=1; shift ;;
+    --assets-dir) ASSETS_DIR="${2:?--assets-dir needs a directory}"; shift 2 ;;
+    --version) REQUESTED_VERSION="${2:?--version needs a release tag}"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -56,7 +60,17 @@ else
 fi
 # Alpine's default BusyBox tools do not provide all installer/deletion guards.
 # Updates need the same tools and runtime sandbox as initial installations.
-if [[ "$INIT" == openrc ]]; then
+if [[ -n "$ASSETS_DIR" ]]; then
+  ASSETS_DIR=$(cd -- "$ASSETS_DIR" && pwd -P)
+  # Offline mode assumes distribution-signed dependencies were installed first.
+  offline_tools=(nft curl unzip tar flock sha256sum)
+  if [[ "$INIT" == openrc ]]; then
+    offline_tools+=(findmnt setpriv bwrap useradd)
+  fi
+  for tool in "${offline_tools[@]}"; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "offline dependencies missing: $tool" >&2; exit 1; }
+  done
+elif [[ "$INIT" == openrc ]]; then
   command -v apk >/dev/null 2>&1 || { echo "OpenRC support currently requires Alpine Linux" >&2; exit 1; }
   apk add --no-cache bash curl ca-certificates nftables unzip tar chrony coreutils findmnt flock setpriv bubblewrap shadow >/dev/null
 fi
@@ -73,6 +87,11 @@ flock -n 9 || { echo "another installation or maintenance task is running" >&2; 
 # Download a complete release from the fixed publisher. The controller supplies
 # enrollment/configuration only; it cannot choose executable bytes or checksums.
 RELEASE_VERSION='__VERSION__'
+if [[ -n "$REQUESTED_VERSION" ]]; then RELEASE_VERSION="$REQUESTED_VERSION"; fi
+if [[ -n "$ASSETS_DIR" && "$RELEASE_VERSION" == '__VERSION__' ]]; then
+  echo '--assets-dir requires an exact release version' >&2
+  exit 2
+fi
 if [[ "$RELEASE_VERSION" == '__VERSION__' ]]; then
   RELEASE_VERSION=$(curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 https://api.github.com/repos/YongshengWin/VpsCT/releases/latest | sed -n 's/.*"tag_name": *"\([^" ]*\)".*/\1/p')
 fi
@@ -140,19 +159,39 @@ install_openrc_agent() {
   install -m 0755 "$WORK/agent.init.new" "$staged"
   mv -Tf -- "$staged" /etc/init.d/ctlvps-agent
 }
+release_asset() {
+  local name=$1 limit=$2 target=$3 source size
+  if [[ -z "$ASSETS_DIR" ]]; then
+    curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize "$limit" "$RELEASE_BASE/$name" -o "$target"
+    return
+  fi
+  source="$ASSETS_DIR/$name"
+  [[ -f "$source" && ! -L "$source" ]] || { echo "missing offline release asset: $name" >&2; exit 1; }
+  size=$(stat -c '%s' -- "$source")
+  [[ "$size" =~ ^[0-9]+$ && "$size" -gt 0 && "$size" -le "$limit" ]] || { echo "invalid size for offline asset: $name" >&2; exit 1; }
+  cp -- "$source" "$target"
+}
 download_agent() {
   local asset="ctlvps-agent-linux-$ARCH" helper="ctlvps-verify-linux-$ARCH" expected helper_stage
   TMP="$WORK/$asset"
-  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$asset" -o "$TMP"
-  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 --max-filesize 1048576 "$RELEASE_BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
+  release_asset "$asset" 134217728 "$TMP"
+  release_asset SHA256SUMS 1048576 "$WORK/SHA256SUMS"
   expected=$(awk -v name="$asset" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$TMP" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'agent SHA256 mismatch' >&2; exit 1; }
-  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 300 --max-filesize 134217728 "$RELEASE_BASE/$helper" -o "$WORK/$helper"
+  release_asset "$helper" 134217728 "$WORK/$helper"
   expected=$(awk -v name="$helper" '$2 == name { print $1 }' "$WORK/SHA256SUMS")
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$WORK/$helper" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'recovery helper SHA256 mismatch' >&2; exit 1; }
-  curl -fLsS --proto '=https' --proto-redir '=https' --max-time 60 --max-filesize 1048576 "$RELEASE_BASE/uninstall.sh" -o "$WORK/uninstall.sh"
+  release_asset uninstall.sh 1048576 "$WORK/uninstall.sh"
   expected=$(awk '$2 == "uninstall.sh" { print $1 }' "$WORK/SHA256SUMS")
   [[ "$expected" =~ ^[a-fA-F0-9]{64}$ && "$(sha256sum "$WORK/uninstall.sh" | cut -d ' ' -f 1)" == "$expected" ]] || { echo 'uninstaller SHA256 mismatch' >&2; exit 1; }
+  # The temporary directory may be mounted noexec.
+  agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
+  install -m 0755 "$TMP" "$agent_stage"
+  if [[ -n "$ASSETS_DIR" ]]; then
+    local product version _
+    read -r product version _ <<< "$("$agent_stage" version)"
+    [[ "$product" == ctlvps-agent && "$version" == "$RELEASE_VERSION" ]] || { echo 'offline agent does not match release version' >&2; exit 1; }
+  fi
   install -d -m 0755 /usr/local/libexec
   helper_stage=$(mktemp /usr/local/libexec/.ctlvps-verify.XXXXXXXX)
   install -m 0755 "$WORK/$helper" "$helper_stage"
@@ -176,8 +215,6 @@ if [[ "$UPDATE" -eq 1 ]]; then
 	flock -n 8 || { echo 'agent configuration or maintenance is running; retry after it finishes' >&2; exit 1; }
   [[ -f "$BIN_DIR/ctlvps-agent" && ! -L "$BIN_DIR/ctlvps-agent" ]] || { echo 'existing agent must be a regular file' >&2; exit 1; }
   cp -- "$BIN_DIR/ctlvps-agent" "$WORK/agent.previous"
-  agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
-  install -m 0755 "$TMP" "$agent_stage"
   if ! "$agent_stage" version; then rm -f -- "$agent_stage"; exit 1; fi
 	if "$BIN_DIR/ctlvps-agent" capabilities >/dev/null 2>&1; then
 	  if ! "$BIN_DIR/ctlvps-agent" check-update --candidate "$agent_stage" --state "$STATE_DIR"; then
@@ -226,8 +263,10 @@ if [[ "$UPDATE" -eq 1 ]]; then
   exit 0
 fi
 
-echo "==> installing dependencies"
-if command -v apt-get >/dev/null 2>&1; then
+echo "==> preparing dependencies"
+if [[ -n "$ASSETS_DIR" ]]; then
+  echo "==> using preinstalled system dependencies"
+elif command -v apt-get >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq >/dev/null
   apt-get install -y -qq nftables curl ca-certificates unzip tar chrony >/dev/null
@@ -251,10 +290,6 @@ fi
 echo "==> downloading ctlvps-agent (linux-$ARCH)"
 install -d -m 0755 "$BIN_DIR"
 download_agent
-# /tmp may be mounted noexec. Execute the checked candidate only from the
-# destination filesystem, then atomically promote it after OpenRC preflight.
-agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
-install -m 0755 "$TMP" "$agent_stage"
 if [[ "$INIT" == openrc ]]; then prepare_openrc_agent "$agent_stage"; fi
 mv -Tf -- "$agent_stage" "$BIN_DIR/ctlvps-agent"
 rm -f "$TMP"
