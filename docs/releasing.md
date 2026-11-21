@@ -18,7 +18,7 @@
 
 ### 1.2 每个版本
 
-当前候选版本使用 [v0.1.7 发布说明](releases/v0.1.7.md)；上一版完整功能验收见 [v0.1.5 专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
+当前候选版本使用 [v0.1.8 发布说明](releases/v0.1.8.md)；上一版完整功能验收见 [v0.1.5 专项验收清单](releases/v0.1.5-checklist.md)。下文构建命令仅用于准备候选附件，不表示已发布。
 
 确定 `vX.Y.Z` 版本号，将 CHANGELOG 中的 Unreleased 内容归入该版本。注明数据库迁移、agent 兼容要求、已验证范围和已知限制。依赖有变化时重新生成第三方声明。
 
@@ -39,17 +39,17 @@ bash scripts/check.sh
 在项目根目录执行，替换实际仓库归属和版本：
 
 ```bash
-make release VERSION=v0.1.7 REPOSITORY=YongshengWin/VpsCT
+make release VERSION=v0.1.8 REPOSITORY=YongshengWin/VpsCT
 ```
 
-产物位于 `release/v0.1.7/`：
+产物位于 `release/v0.1.8/`：
 
 | 附件 | 内容 |
 |---|---|
 | `install.sh` | 已填写仓库和固定版本的安装脚本 |
 | `install-agent.sh` | 固定发行版本的 agent 安装脚本 |
 | `uninstall.sh` | 独立卸载控制端、agent 或本机两端；支持预览及显式清空数据 |
-| `ctlvps-v0.1.7-linux-amd64.tar.gz` | 对应架构控制端及校验器、AMD64 agent、安装脚本、服务配置、说明文档与许可文件 |
+| `ctlvps-v0.1.8-linux-amd64.tar.gz` | 对应架构控制端及校验器、AMD64 agent、安装脚本、服务配置、说明文档与许可文件 |
 | `ctlvps-agent-linux-amd64` | agent 独立分发文件 |
 | `ctlvps-verify-linux-amd64` | 安装及恢复使用的对应架构校验器 |
 | `LICENSE`、`THIRD_PARTY_NOTICES.md` | 项目许可与第三方声明 |
@@ -68,7 +68,7 @@ README 的安装与更新命令使用 `releases/latest/download/install.sh`，�
 以下容器测试需要可运行的 Docker。先执行：
 
 ```bash
-release_dir=release/v0.1.7 # 替换为刚用当前源码构建的待发布版本目录
+release_dir=release/v0.1.8 # 替换为刚用当前源码构建的待发布版本目录
 bash scripts/test-install-container.sh "$release_dir"
 bash scripts/test-uninstall-container.sh
 bash scripts/test-maintenance-container.sh "$release_dir"
@@ -89,8 +89,8 @@ SINGBOX_BIN=/path/to/verified-official-sing-box-1.14.1 \
 首次公开发行前，可以把本地发行目录传到测试主机，通过附件模式验证安装：
 
 ```bash
-sudo bash install.sh --assets-dir /path/to/release/v0.1.7 \
-  --version v0.1.7 --domain panel.example.com
+sudo bash install.sh --assets-dir /path/to/release/v0.1.8 \
+  --version v0.1.8 --domain panel.example.com
 ```
 
 这里使用发行目录内生成的 `install.sh`，目录同时包含对应架构压缩包和 `SHA256SUMS`。该模式仍需系统软件源提供依赖。实际验证过哪些系统和架构，就在验收记录中写明哪些；交叉编译不能替代实机安装。
@@ -112,12 +112,12 @@ sudo bash install.sh --assets-dir /path/to/release/v0.1.7 \
 
 ## 4. 公开发行并验证下载
 
-维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.7-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
+维护者确认后公开仓库和 Release。预发行标签可使用 `v0.1.8-rc.1`，发布时标记为 prerelease；正式用户的 `latest` 入口应指向正式版本。
 
 发布后从未登录 GitHub 的环境检查：
 
 1. Release 页面与安装脚本可以下载，`releases/latest/download/install.sh` 指向预期的最新正式版。
-2. 两种架构附件与 `SHA256SUMS` 一致。
+2. Linux AMD64 发行附件与 `SHA256SUMS` 一致。
 3. Release 展示的真实 curl 安装命令能够完成安装。
 4. 管理员初始化、agent 接入、更新和分享资源访问符合该版本说明。
 
@@ -168,7 +168,7 @@ systemd 容器必须等待明确的 `running/degraded` 状态，不能把总线�
 若标签没有可复用证据，例如主分支基线变化、证据到期或曾临时允许直接推送，应先对该标签提交手动执行 CI：
 
 ```bash
-gh workflow run ci.yml --ref v0.1.7
+gh workflow run ci.yml --ref v0.1.8 -f soak_seconds=600 -f soak_sessions=1024
 gh run list --workflow ci.yml
 ```
 
@@ -176,4 +176,4 @@ gh run list --workflow ci.yml
 
 日常 PR 的 UDP 持续负载为 60 秒，验证 1024 会话、活跃映射、闲置回收、重新填满与内存门槛。发布 PR 加上 `release-candidate` 标签后自动重跑完整 600 秒并加入 ACME 原生续期；手动 CI 也可选择 600 秒。CI 证据记录 UDP 持续秒数 `soak_seconds`、会话数 `soak_sessions` 和 ACME 档位 `acme_profile`，Release 校验拒绝 60 秒、ACME 快档、缺失档位或跳过必要任务的证据。环境预检失败不会通过自动重试被掩盖。
 
-默认代理预算 256 MiB 下，v0.1.7 的发布基线为 1024 会话、600 秒；8192 会话在原生 AMD64 上仍触发管理 API 超时和保护性暂停，不作为已验证承载能力宣传。手动 CI 可选择 8192 会话诊断；该诊断失败仍会失败，不自动重试或改为成功。8192 的配置总上限仅用于资源准入校验，不能等同于默认预算下的性能承诺。
+默认代理预算 256 MiB 下，v0.1.8 的发布基线为 1024 会话、600 秒；8192 会话在原生 AMD64 上仍触发管理 API 超时和保护性暂停，不作为已验证承载能力宣传。手动 CI 可选择 8192 会话诊断；该诊断失败仍会失败，不自动重试或改为成功。8192 的配置总上限仅用于资源准入校验，不能等同于默认预算下的性能承诺。
