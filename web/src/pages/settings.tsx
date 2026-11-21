@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Save, Send, Plus, Trash2, Sun, Moon, Monitor } from "lucide-react";
+import { Save, Send, Plus, Trash2, Sun, Moon, Monitor, RefreshCw } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
 import { MaintenancePanel } from "@/components/maintenance";
 import { CoreUpgradeDetails } from "@/components/core-upgrade";
@@ -16,13 +16,13 @@ type Settings = Record<string, string>;
 export function SettingsPage() {
   const [params, setParams] = useSearchParams();
   const selected = params.get("tab") || "general";
-  const tab = ["general", "notify", "retention", "cores", "security", "audit", "system"].includes(selected) ? selected : "general";
+  const tab = ["general", "notify", "retention", "cores", "geoip", "security", "audit", "system"].includes(selected) ? selected : "general";
   const setTab = (value: string) => setParams(p => { p.set("tab", value); return p; });
   return (
     <div>
       <PageHeader title="设置" />
       <Tabs value={tab} onChange={setTab} items={[
-        { value: "general", label: "常规" }, { value: "notify", label: "通知" }, { value: "retention", label: "数据保留" }, { value: "cores", label: "内核版本" },
+        { value: "general", label: "常规" }, { value: "notify", label: "通知" }, { value: "retention", label: "数据保留" }, { value: "cores", label: "内核版本" }, { value: "geoip", label: "IP 数据" },
         { value: "security", label: "安全" }, { value: "audit", label: "审计日志" }, { value: "system", label: "系统" },
       ]} />
       <div className="mt-4">
@@ -30,6 +30,7 @@ export function SettingsPage() {
         {tab === "notify" && <NotifyTab />}
         {tab === "retention" && <RetentionTab />}
         {tab === "cores" && <CoresTab />}
+        {tab === "geoip" && <GeoIPTab />}
         {tab === "security" && <SecurityTab />}
         {tab === "audit" && <AuditTab />}
         {tab === "system" && <><MaintenancePanel /><SystemTab /></>}
@@ -206,6 +207,43 @@ function CoresTab() {
     <Card className="min-w-0 p-4 sm:p-5">
       <CoreUpgradeDetails selectedVersion={s.value("core.singbox_version")} onSelect={v => s.set("core.singbox_version", v)} />
     </Card>
+    </div>
+  );
+}
+
+function GeoIPTab() {
+  const s = useSettings();
+  const toast = useToast();
+  const refreshCountry = useMutation({ mutationFn: () => post("/api/v1/geoip/refresh"), onSuccess: () => toast.success("已按当前地区库刷新入口策略"), onError: (e) => toast.fromError(e, "地区策略刷新失败") });
+  const refreshLookup = useMutation({ mutationFn: () => post("/api/v1/geoip/lookup/refresh"), onSuccess: () => toast.success("IP 归属地数据库已刷新"), onError: (e) => toast.fromError(e, "IP 归属地数据库刷新失败") });
+  if (s.q.isLoading) return <Spinner />;
+  const countryProvider = s.value("geoip.country_provider") || "dbip-country-lite";
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <Card className="p-4 sm:p-5">
+        <CardHeader className="p-0"><CardTitle>节点入口地区库</CardTitle><p className="mt-1 text-sm leading-6 text-muted-foreground">用于“拒绝指定国家 / 地区”策略。控制端把国家地址段固定成版本后下发到节点，不会逐连接上传客户端 IP。</p></CardHeader>
+        <div className="mt-4 grid gap-4">
+          <Field label="数据源"><Select value={countryProvider} onChange={e => s.set("geoip.country_provider", e.target.value)}><option value="dbip-country-lite">DB-IP Country Lite（内置，无需账号）</option><option value="maxmind-geolite2-country">MaxMind GeoLite2 Country（需要账号与 License Key）</option></Select></Field>
+          {countryProvider === "maxmind-geolite2-country" && <>
+            <Field label="MaxMind Account ID" hint="只用于控制端从 MaxMind 官方地址下载 GeoLite2 Country CSV。"><Input className="mono" value={s.value("geoip.maxmind_account_id")} onChange={e => s.set("geoip.maxmind_account_id", e.target.value)} /></Field>
+            <Field label="MaxMind License Key" hint="按密码保存并掩码显示；不会写入节点配置。"><Input className="mono" type="password" value={s.value("geoip.maxmind_license_key")} onChange={e => s.set("geoip.maxmind_license_key", e.target.value)} placeholder="留空保留当前 key" /></Field>
+          </>}
+          <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshCountry.mutate()} loading={refreshCountry.isPending} disabled={s.dirty}><RefreshCw className="h-4 w-4" />按当前数据刷新已启用策略</Button></div>
+          <p className="text-xs leading-5 text-muted-foreground">切换数据源只改变后续预览使用的地址库；现有节点策略仍保留原版本，点击刷新后才会重新物化并发布。国家级归属存在误差，不能识别被中转隐藏的原始客户端地区。</p>
+        </div>
+      </Card>
+      <Card className="p-4 sm:p-5">
+        <CardHeader className="p-0"><CardTitle>连接日志 IP 归属地</CardTitle><p className="mt-1 text-sm leading-6 text-muted-foreground">用于连接日志和节点列表的 IP 地点展示。默认使用本地 ip2region 数据库。</p></CardHeader>
+        <div className="mt-4 grid gap-4">
+          <Switch checked={s.value("geoip.online_enabled") === "1"} onChange={v => s.set("geoip.online_enabled", v ? "1" : "0")} label="允许在线 IP 归属查询" />
+          <p className="-mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300">开启后，控制端可能把待查询的公网客户端 IP 发送给第三方服务；关闭后只使用本地数据库和已有缓存。</p>
+          <Field label="IPv4 ip2region 镜像" hint="HTTPS 地址；可填写自托管镜像。留空使用内置官方镜像。"><Input className="mono" value={s.value("geoip.ip2region_v4_mirror")} onChange={e => s.set("geoip.ip2region_v4_mirror", e.target.value)} placeholder="留空使用内置镜像" /></Field>
+          <Field label="IPv6 ip2region 镜像" hint="HTTPS 地址；可填写自托管镜像。留空使用内置官方镜像。"><Input className="mono" value={s.value("geoip.ip2region_v6_mirror")} onChange={e => s.set("geoip.ip2region_v6_mirror", e.target.value)} placeholder="留空使用内置镜像" /></Field>
+          <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => refreshLookup.mutate()} loading={refreshLookup.isPending} disabled={s.dirty}><RefreshCw className="h-4 w-4" />刷新本地数据库</Button></div>
+          <p className="text-xs leading-5 text-muted-foreground">镜像文件必须是受支持的 ip2region XDB，下载后会校验格式；不会执行镜像中的脚本或命令。</p>
+        </div>
+      </Card>
+      <div className="lg:col-span-2"><SaveBar s={s} /></div>
     </div>
   );
 }

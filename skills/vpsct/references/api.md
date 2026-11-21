@@ -1,6 +1,6 @@
 # 1. 常用业务请求
 
-此文件提供已对照服务端请求结构的示例，不是完整 schema。先读取部署实例的 `/api/v1/agent/capabilities`，确认目标路由、角色、scope 与版本。示例中的 ID、名称与 `example.com` 均为占位；不代表用户的实际 VPS。
+此文件提供已对照服务端请求结构的示例，不是完整 schema。先读取部署实例的 `/api/v1/agent/capabilities`，确认目标路由、角色、scope、实时权限与版本。每次任务或更换 key 后重新查询，并按 operations 和 workflow 各步骤的 available 判断；资源范围仍需服务端校验。示例中的 ID、名称与 `example.com` 均为占位；不代表用户的实际 VPS。
 
 ## 1.1 查询状态
 
@@ -49,6 +49,23 @@
 
 `port=0` 由服务端分配。其它可用字段包括 `sni`、`domain`、`obfs`、`snell_version`、`mieru_transport`、`cert_id`、`cert_mode`，具体协议和能力以 `/api/v1/meta`、服务器网络能力及官方内核能力为准。服务端生成节点凭据，201 表示记录已创建；仍需查询服务器 desired/apply 状态。
 
+仅 IPv6 部署使用服务器的 `public_host_ipv6` 或本节点的独立地址。可以先用 `GET /api/v1/servers/{id}/ipv6-endpoint/check` 检查 `host=v6.example.com` 的 DNS 和网卡匹配，再用 `POST /api/v1/servers/{id}/nodes/preview` 检查初始监听和端口。
+
+```json
+{
+  "protocol": "anytls",
+  "ingress_family": "ipv6",
+  "network": {
+    "ingress_family": "ipv6",
+    "listen_mode": "public_ipv6",
+    "advertise_mode": "inherit_ipv6",
+    "on_unavailable": "block"
+  }
+}
+```
+
+预览 `readiness.ready=true` 后，用原部署接口提交相同策略、预览给出的 `port` 和 `expected_ipv6`（返回的 `confirmation`），以及固定的 32 位十六进制 `operation_id`。超时用同一请求重试。节点详情 `ipv6_ingress_ready=true` 时才请求连接参数。仅 IPv6 指客户端接入，业务出站按现有出口策略处理。
+
 ## 1.3 订阅预览与创建
 
 `POST /api/v1/subscriptions/preview`：
@@ -94,7 +111,15 @@
 
 `user_id` 可指向真实已存在成员，`targets` 为要生成专用节点的目标。`extra_node_ids` 是复用节点，不产生独立分享节点计量。expires_at 使用 RFC 3339 时间，quota/billing/reset 与服务器相同公式。分享不接受订阅预设覆盖。
 
+拥有 `shares.create` 的成员可以创建绑定自己的分享；服务器范围授权会逐目标校验，不能替他人创建或绑定分享。分享的暂停、恢复、重置、撤销、重签和删除可分别按分享范围授权；配额、目标和网络编辑仍要求管理员。`shares.view` 只显示状态和用量，`shares.links` 才显示订阅链接、节点和凭据。
+
 暂停/恢复分别为 `POST /api/v1/shares/{id}/pause`、`POST /api/v1/shares/{id}/resume`，无需 body。`reset` 会改变用量，`revoke`/`reissue` 会改变凭据，均为写操作且需属于用户请求。创建响应含节点/订阅秘密；即使返回 201，也应检查专用节点是否真正应用。
+
+成员通过 `GET /api/v1/me/templates` 和 `POST /api/v1/me/templates` 管理个人模板，创建 body 与管理员模板相同；单条资源支持 GET、PUT、DELETE。最多 32 个，正文和变量各最多 256 KiB。使用中的模板不能修改，应复制成新模板，预览并应用后再按需删除旧模板；删除会使引用它的分享恢复默认。
+
+管理员可分别授予 `templates.create`、`templates.edit`、`templates.delete`。先 `GET /api/v1/users/{id}/permissions`，再 `POST` 同路径提交 `{"grants":[{"permission":"templates.create","scope":{"kind":"all"}}],"password":"当前账户密码","code":"已启用两步验证时填写"}`；此操作原子替换当前授权者对目标的授权，保留其他授权者的记录。先核对完整列表，避免无意删除自己的其他授权。目标账户及其下级授权链的现有会话和 API key 会失效。权限和所有者变更需要二次认证，不要记录认证字段；其他模块仍要求管理员。
+
+对自己的分享，`POST /api/v1/shares/{id}/personal-templates/preview` 提交 `{"template_id":1,"format":"mihomo"}`，响应 body 含实际节点凭据。确认后 `PUT /api/v1/shares/{id}/personal-templates/mihomo` 提交 `{"template_id":1}`，用 `GET /api/v1/shares/{id}/personal-templates` 核对对应格式的模板 ID；`DELETE` 同一格式路径恢复默认。格式为 mihomo、surge、shadowrocket、singbox。自动链接按识别出的格式选择模板，raw/uri 不应用完整配置模板。分享转交会清除旧选择，客户端下次更新订阅才生效。创建超时先核对列表，应用超时先核对选择；409 时重新读取并预览。
 
 ## 1.5 网络变更与维护
 
@@ -105,6 +130,17 @@
 ```
 
 实际 revision 必须来自读取结果，示例 0 不能原样用于真实重试。409 后重新查询状态。
+
+节点入口来源限制也使用节点网络 preview/PUT。`network.ingress` 支持：
+
+```json
+{
+  "mode": "relay_only",
+  "source_cidrs": ["203.0.113.10/32"]
+}
+```
+
+`relay_only` 是仅允许指定中转出口的强保证模式；`deny_countries` 使用 `countries`（ISO 3166-1 两位代码），控制端预览时会固定“设置 → IP 数据”中选定的地址库版本并返回物化的 `geo_provider`、`geo_version`、`geo_ipv4_cidrs` 和 `geo_ipv6_cidrs`，这些字段随完整 `network` 原样提交。实际源 IP 不等于被中转前的客户端 IP，不能用它判断原始客户端地区。保存后查询 `/api/v1/network/operations/{op}`，只有 `status=applied` 才算 agent 已应用。管理员可调用 `POST /api/v1/geoip/refresh` 更新并重新发布已有地区拒绝策略；数据更新失败时保留上一份已验证集合，不自动放宽入口。
 
 控制端维护前检查 `GET /api/v1/system/maintenance` 和 `GET /api/v1/system/maintenance/latest`；agent 维护前检查 `GET /api/v1/servers/{id}/maintenance`。维护请求统一字段为 `id`（32 位小写十六进制任务编号）、`role`（`controller`/`agent`）、`action`（`update`/`uninstall`）、`version`、`purge`、`remove_caddy`、`delete_server`、`password`、`code`、`confirm`。使用权限为 0600 的临时 body 文件，密码/验证码不进入命令参数或聊天。
 
@@ -164,6 +200,22 @@
 - 仅转发固定端口：使用 `/servers/{id}/forwards/preview` 和 `/servers/{id}/forwards`。多段线路交给 access-routes 管理，不在不同功能中重复创建。
 
 这些步骤需实际 preview 凭证和 revision。完成条件由最新节点回执与网络任务决定，不能仅凭 PUT 成功或旧的 applied 状态认定本次修改成功。
+
+## 1.10 换端口与不可用记录
+
+先 GET `/api/v1/nodes/{id}`，保留 `network`，若其 `advertise_mode=override`，也保留 `server` 为 `advertise_host`。向 `/api/v1/nodes/{id}/network/preview` POST 原网络及 `listen_port`（1–65535，mieru 至少 1025）；确认返回的影响范围和新旧端口。再 PUT `/api/v1/nodes/{id}/network`：
+
+```json
+{"operation_id":"0123456789abcdef0123456789abcdef","expected_revision":0,"network":null,"listen_port":23001,"expected_impact":"使用本次预览返回的 impact.token"}
+```
+
+示例仅适用于原网络为 null 的节点；不要用 null 覆盖已有出口/监听策略。202 后 GET `/api/v1/network/operations/{op}`，只有 `applied` 表示当前版本已确认。发布/应用失败使用该操作的 `/retry` 及 `expected_retry_revision`；断连先读原编号，相同完整请求可幂等重放。恢复旧端口也是一次新的预览/版本操作，不能修改数据库绕过确认。节点 ID、凭据、分享归属及用量保留；云安全组由主机管理员预先放行。NAT 须有商家确认映射；正被线路管理的节点不允许独立改端口。
+
+人工不可用端口按服务器记录：GET `/api/v1/servers/{id}/unavailable-ports` 读取列表；PUT `/api/v1/servers/{id}/unavailable-ports/{port}`，正文为 `{"transport":"tcp","network":"本地电信","reason":"人工观察到连接失败"}`；再 GET 同条核对。transport 必填，tcp/udp/both；network/reason 分别最多 120/500 UTF-8 字节。port 为 1–65535，每台服务器最多 512 条。同一服务器同端口一条，再次 PUT 覆盖；断连先 GET。DELETE 同条可重放，成功后 GET 为 404。
+
+管理员 read key 读取，write key 写入；成员无权访问。记录不改变节点、流量或服务器配置，删除节点后仍保留。换端口 preview 可带 unavailable_port，表示目标端口的人工记录，须说明其适用的网络／地区，不冒充全网封禁或实时探测；ready 仍只表示配置准入。
+
+延迟、实际代理请求及分段探测接口已移除。用户本地视角的端口验证需要用户本地工具或当地实际探测服务，不能把普通同地区 IP 当作可发起 Ping/TCPing 的 API。
 
 # 2. 部署与恢复
 

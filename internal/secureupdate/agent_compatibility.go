@@ -26,6 +26,7 @@ type agentRequirements struct {
 	Mita             int             `json:"mita_version"`
 	WireGuard        int             `json:"network_wireguard_version"`
 	SSH              int             `json:"network_ssh_version"`
+	IPv6Ingress      int             `json:"ipv6_ingress_version"`
 	Binding          int             `json:"network_binding_version"`
 	Egress           int             `json:"network_egress_version"`
 	Forward          int             `json:"network_forward_version"`
@@ -58,6 +59,9 @@ func readAgentRequirements(path string) (agentRequirements, error) {
 	if r.NAT < 0 || r.NAT > networkconfig.NATVersion {
 		return r, errors.New("agent NAT 特性状态无效")
 	}
+	if r.IPv6Ingress < 0 || r.IPv6Ingress > networkconfig.IPv6IngressVersion {
+		return r, errors.New("agent 仅 IPv6 接入状态无效")
+	}
 	if r.OpenRCMieru < 0 || r.OpenRCMieru > 1 || r.OpenRC < 0 || r.OpenRC > 1 {
 		return r, errors.New("agent OpenRC 特性状态无效")
 	}
@@ -70,7 +74,7 @@ func readAgentRequirements(path string) (agentRequirements, error) {
 	if r.ForwardTransport > 0 {
 		r.Egress = max(1, r.Egress)
 	}
-	if r.ListenBinding > 0 {
+	if r.ListenBinding > 0 || r.IPv6Ingress > 0 {
 		r.Binding = max(1, r.Binding)
 	}
 	if r.Revision > 0 || r.Egress > 0 || r.Forward > 0 {
@@ -114,7 +118,7 @@ func (r agentRequirements) check(c networkconfig.ExecutableCapabilities) error {
 	if r.ListenBinding > 0 && r.ListenBinding != c.ListenBinding || r.ForwardDNS > 0 && r.ForwardDNS != c.ForwardDNS || r.ForwardPrivate > 0 && r.ForwardPrivate != c.ForwardPrivate || r.ForwardTransport > 0 && r.ForwardTransport != c.ForwardTransport {
 		return errors.New("候选 agent 不支持已启用的监听或固定转发能力，拒绝降级")
 	}
-	if c.Schema != 1 || r.Mita > 0 && c.Mita != r.Mita || (r.WireGuard > 0 && c.NetworkWireGuard != r.WireGuard) || (r.SSH > 0 && c.NetworkSSH != r.SSH) || (r.Binding > 0 && c.NetworkBinding != r.Binding) || (r.Egress > 0 && c.NetworkEgress != r.Egress) || (r.Forward > 0 && c.NetworkForward != r.Forward) || (r.billingRequired() && c.NetworkBilling != networkconfig.BillingVersion) {
+	if c.Schema != 1 || r.IPv6Ingress != 0 && c.IPv6Ingress != r.IPv6Ingress || r.Mita > 0 && c.Mita != r.Mita || (r.WireGuard > 0 && c.NetworkWireGuard != r.WireGuard) || (r.SSH > 0 && c.NetworkSSH != r.SSH) || (r.Binding > 0 && c.NetworkBinding != r.Binding) || (r.Egress > 0 && c.NetworkEgress != r.Egress) || (r.Forward > 0 && c.NetworkForward != r.Forward) || (r.billingRequired() && c.NetworkBilling != networkconfig.BillingVersion) {
 		return errors.New("候选 agent 不支持本机已启用的网络或计量协议，拒绝降级；原程序保持不变")
 	}
 	return nil

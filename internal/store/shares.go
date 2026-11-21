@@ -10,7 +10,7 @@ import (
 	"ctlvps/internal/domain"
 )
 
-const shareCols = `id, name, user_id, targets, extra_node_ids, quota_bytes, billing_mode, reset_day, expires_at, status, template_id, connlog_enabled, notes, subscription_id, period_start, used_upload, used_download, created_at, updated_at, node_usage`
+const shareCols = `id, name, user_id, targets, extra_node_ids, quota_bytes, billing_mode, reset_day, expires_at, status, template_id, connlog_enabled, notes, subscription_id, period_start, used_upload, used_download, created_at, updated_at, node_usage, public_id`
 
 func scanShare(sc interface{ Scan(...any) error }) (domain.Share, error) {
 	var v domain.Share
@@ -19,7 +19,7 @@ func scanShare(sc interface{ Scan(...any) error }) (domain.Share, error) {
 	var targets, extra, period, created, updated, nodeUsage string
 	var connlog int
 	if err := sc.Scan(&v.ID, &v.Name, &userID, &targets, &extra, &v.QuotaBytes, &v.BillingMode, &v.ResetDay, &expires, &v.Status, &templateID, &connlog,
-		&v.Notes, &subID, &period, &v.UsedUpload, &v.UsedDownload, &created, &updated, &nodeUsage); err != nil {
+		&v.Notes, &subID, &period, &v.UsedUpload, &v.UsedDownload, &created, &updated, &nodeUsage, &v.PublicID); err != nil {
 		return v, err
 	}
 	v.UserID = intPtr(userID)
@@ -64,13 +64,18 @@ func (s *Store) CreateShare(ctx context.Context, v *domain.Share) error {
 	if v.PeriodStart.IsZero() {
 		v.PeriodStart = now
 	}
-	args := append(shareArgs(v), fmtTime(now), fmtTime(now))
-	res, err := s.db.ExecContext(ctx, `INSERT INTO shares(name,user_id,targets,extra_node_ids,quota_bytes,billing_mode,reset_day,expires_at,status,template_id,connlog_enabled,notes,subscription_id,period_start,used_upload,used_download,created_at,updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
+	publicID, err := newSharePublicID()
+	if err != nil {
+		return err
+	}
+	args := append(shareArgs(v), fmtTime(now), fmtTime(now), publicID)
+	res, err := s.db.ExecContext(ctx, `INSERT INTO shares(name,user_id,targets,extra_node_ids,quota_bytes,billing_mode,reset_day,expires_at,status,template_id,connlog_enabled,notes,subscription_id,period_start,used_upload,used_download,created_at,updated_at,public_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 	if err != nil {
 		return err
 	}
 	v.ID, _ = res.LastInsertId()
+	v.PublicID = publicID
 	v.CreatedAt, v.UpdatedAt = now, now
 	return nil
 }
@@ -118,6 +123,17 @@ func (s *Store) DeleteShare(ctx context.Context, id int64) error {
 // GetShare fetches one.
 func (s *Store) GetShare(ctx context.Context, id int64) (domain.Share, error) {
 	v, err := scanShare(s.db.QueryRowContext(ctx, `SELECT `+shareCols+` FROM shares WHERE id=?`, id))
+	if isNoRows(err) {
+		return v, ErrNotFound
+	}
+	return v, err
+}
+
+func (s *Store) GetShareByPublicID(ctx context.Context, publicID string) (domain.Share, error) {
+	if !validSharePublicID(publicID) {
+		return domain.Share{}, ErrNotFound
+	}
+	v, err := scanShare(s.db.QueryRowContext(ctx, `SELECT `+shareCols+` FROM shares WHERE public_id=?`, publicID))
 	if isNoRows(err) {
 		return v, ErrNotFound
 	}

@@ -6,7 +6,7 @@
 
 ## 1. 本地开发
 
-需要 Go 1.26.8+、Node.js 24、npm；打发行包还需要 Python 3.11+。Linux 安装器面向 Debian / Ubuntu + systemd。
+需要 Go 1.26.11、Node.js 24、npm；打发行包还需要 Python 3.11+。当前发行与容器仅支持 Linux AMD64，原生控制端安装器要求 systemd。
 
 ```bash
 cd web
@@ -19,7 +19,7 @@ make dev-web
 
 ## 2. 构建与检查
 
-在项目根目录运行 `make build`，构建前端、本机控制端和双架构 Linux agent。已有前端依赖时，可运行 `make check` 做快速检查。
+在项目根目录运行 `make build`，构建前端、本机控制端和 Linux AMD64 agent。已有前端依赖时，可运行 `make check` 做快速检查。
 
 提交前运行完整检查：
 
@@ -27,7 +27,7 @@ make dev-web
 bash scripts/check.sh
 ```
 
-这会先构建前端，再运行 Go 静态检查、测试以及 Linux 双架构交叉编译。前端行为变化还应在浏览器验证。
+脚本会运行前端测试、类型检查和构建，检查 API 合约，执行 Go 静态检查、测试、Linux AMD64 编译及安装器校验。前端行为变化还应在浏览器验证。PR 的 `checks` 另行汇总原生 AMD64 集成、网络、安全等门禁。日常 PR 与发布候选的 UDP 和 ACME 验收档位见[发布流程](docs/releasing.md#6-ci-并行与发布证据)。
 
 安装器变更需要先构建测试附件，再运行带附件目录参数的集成测试：
 
@@ -45,13 +45,13 @@ bash scripts/test-install-container.sh release/v0.0.0-ci
 - 修改 API 字段时同步检查 `web/src/lib/types.ts` 与前端调用。
 - 修改 agent 协议时保持旧 agent 的兼容性，并测试重试和失败场景。
 - 数据库采用追加迁移；不要修改已发布版本执行过的迁移，也不要把真实数据库放进测试。
-- 流量统一为 VPS 入站、出站、汇总；配额按汇总。模板与预设的业务边界见 [项目约定](AGENTS.md)。
+- 流量统一为 VPS 入站、出站、汇总；服务器和分享分别按所选公式计入配额。模板与预设的业务边界见 [项目约定](AGENTS.md)。
 - 依赖更新后重新生成第三方声明：`go mod download all`，`cd web && npm ci`，再在根目录运行 `python3 scripts/third-party.py`。
 - 测试使用 `example.com`、保留测试域名和虚构数据。不要提交生产域名、节点密码、订阅令牌、SSH 地址或个人浏览记录。
 
 ## 4. 依赖更新
 
-1. 常规 Dependabot 更新按周检查：前端只自动提出补丁更新，Go 和 Actions 允许小版本与补丁更新。前端包含 `0.x` 依赖，小版本也可能超出现有兼容范围，需单独评估。安全更新不受这些版本级别限制，仍需通过 CI 后由维护者合并。
+1. 不使用 Dependabot 自动创建版本或安全更新 PR；保留 Dependency graph、Dependabot alerts 和 CI 安全门禁。维护者按漏洞、兼容性和实际需求集中更新依赖，不因有新版本就全量升级。仓库设置需关闭 Dependabot security updates，仅删除配置文件不能关闭安全更新 PR。
 2. React、React DOM 及对应类型包必须一起验证；Tailwind、tailwind-merge 与样式构建工具单独成组。跨大版本升级使用专门的迁移 PR，包含代码适配和浏览器验收。
 3. 更新锁文件后，重新生成 `THIRD_PARTY_NOTICES.md` 与 `third_party/`，把生成结果提交到同一个 PR。CI 的许可校验失败时，应补齐文件，不跳过检查；当前生成器覆盖运行依赖和 Go 模块图。
 4. 先确认 `npm ci`、前端测试、类型检查与构建通过；有图表或样式变化时在浏览器检查交互。再通过完整 CI，包括依赖审计、Go 测试和安装器验证。

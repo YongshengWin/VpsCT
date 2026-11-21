@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"ctlvps/internal/domain"
@@ -39,7 +41,7 @@ WHEN NEW.security_version IS NOT OLD.security_version BEGIN
 END;
 `
 
-const apiKeyCols = `id,user_id,name,token_hash,token_hint,scopes,security_version,created_at,expires_at,last_used_at,revoked_at`
+const apiKeyCols = `id,user_id,name,token_hash,token_hint,scopes,security_version,created_at,expires_at,last_used_at,revoked_at,operations`
 
 // Fixed-width UTC timestamps make expiry comparisons exact even at a second
 // boundary, where variable-width RFC3339Nano strings do not sort by time.
@@ -57,11 +59,16 @@ func apiKeyTimePtr(t *time.Time) any {
 func scanAPIKey(sc interface{ Scan(...any) error }) (domain.APIKey, error) {
 	var key domain.APIKey
 	var scopes, created string
-	var expires, used, revoked sql.NullString
-	if err := sc.Scan(&key.ID, &key.UserID, &key.Name, &key.TokenHash, &key.TokenHint, &scopes, &key.SecurityVersion, &created, &expires, &used, &revoked); err != nil {
+	var expires, used, revoked, operations sql.NullString
+	if err := sc.Scan(&key.ID, &key.UserID, &key.Name, &key.TokenHash, &key.TokenHint, &scopes, &key.SecurityVersion, &created, &expires, &used, &revoked, &operations); err != nil {
 		return key, err
 	}
 	key.Scopes = jsonList[string](scopes)
+	if operations.Valid {
+		if err := json.Unmarshal([]byte(operations.String), &key.Operations); err != nil || key.Operations == nil {
+			return key, errors.New("invalid API key operations")
+		}
+	}
 	key.CreatedAt = parseTime(created)
 	key.ExpiresAt = parseTimePtr(expires)
 	key.LastUsedAt = parseTimePtr(used)
@@ -83,12 +90,12 @@ func (s *Store) CreateAPIKey(ctx context.Context, key *domain.APIKey) error {
 	if scopes == nil {
 		scopes = []string{}
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO api_keys(user_id,name,token_hash,token_hint,scopes,security_version,created_at,expires_at)
- SELECT id,?,?,?,?,security_version,?,? FROM users
+	res, err := tx.ExecContext(ctx, `INSERT INTO api_keys(user_id,name,token_hash,token_hint,scopes,security_version,created_at,expires_at,operations)
+ SELECT id,?,?,?,?,security_version,?,?,? FROM users
  WHERE id=? AND enabled=1 AND security_version=?
  AND (SELECT COUNT(*) FROM api_keys WHERE user_id=users.id AND revoked_at IS NULL
       AND security_version=users.security_version AND (expires_at IS NULL OR expires_at>?))<?`,
-		key.Name, key.TokenHash, key.TokenHint, jsonStr(scopes), fmtAPIKeyTime(now), apiKeyTimePtr(key.ExpiresAt), key.UserID, key.SecurityVersion, fmtAPIKeyTime(now), MaxActiveAPIKeys)
+		key.Name, key.TokenHash, key.TokenHint, jsonStr(scopes), fmtAPIKeyTime(now), apiKeyTimePtr(key.ExpiresAt), apiKeyOperations(key.Operations), key.UserID, key.SecurityVersion, fmtAPIKeyTime(now), MaxActiveAPIKeys)
 	if err != nil {
 		return err
 	}
@@ -188,4 +195,33 @@ func (s *Store) TouchAPIKey(ctx context.Context, id int64) error {
 func (s *Store) DeleteUserAPIKeys(ctx context.Context, userID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM api_keys WHERE user_id=?`, userID)
 	return err
+}
+
+// nil means unrestricted by operation; an empty list denies all business operations.
+func apiKeyOperations(operations []string) any {
+	if operations == nil {
+		return nil
+	}
+	return jsonStr(operations)
+}
+
+// UpdateAPIKeyOperations updates one active key owned by the reauthenticated
+// user and records the change in the same transaction.
+func (s *Store) UpdateAPIKeyOperations(ctx context.Context, actor domain.User, id int64, operations []string, audit domain.AuditEvent) error {
+	return s.Tx(ctx, func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `UPDATE api_keys SET operations=? WHERE id=? AND user_id=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?) AND security_version=? AND EXISTS (SELECT 1 FROM users WHERE id=? AND enabled=1 AND security_version=?)`, apiKeyOperations(operations), id, actor.ID, fmtAPIKeyTime(s.Now()), actor.SecurityVersion, actor.ID, actor.SecurityVersion)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return ErrNotFound
+		}
+		audit.Action, audit.Target = "api_key.operations.update", fmt.Sprintf("api_key:%d", id)
+		audit.Detail, _ = json.Marshal(map[string]any{"operations": operations})
+		return s.addAudit(ctx, tx, audit)
+	})
 }

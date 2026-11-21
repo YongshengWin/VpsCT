@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,14 +39,20 @@ var mirrorsV6 = []string{
 	"https://raw.githubusercontent.com/lionsoul2014/ip2region/master/data/ip2region_v6.xdb",
 }
 
+func DefaultMirrors() (v4, v6 []string) {
+	return append([]string(nil), mirrorsV4...), append([]string(nil), mirrorsV6...)
+}
+
 const minXDBSize = 2 << 20
 
 // Lookup resolves public IPv4/IPv6 using local ip2region databases. Online
 // lookups can be enabled explicitly by the operator.
 type Lookup struct {
-	dir    string
-	path   string
-	pathV6 string
+	dir       string
+	path      string
+	pathV6    string
+	mirrorsV4 []string
+	mirrorsV6 []string
 
 	mu            sync.Mutex
 	searcher      *xdb.Searcher
@@ -65,11 +72,57 @@ func Open(dir string) *Lookup {
 		mem:           map[string]Info{},
 		disk:          loadDisk(dir),
 		http:          &http.Client{Timeout: 2 * time.Second},
+		mirrorsV4:     append([]string(nil), mirrorsV4...),
+		mirrorsV6:     append([]string(nil), mirrorsV6...),
 		disableOnline: true,
 	}
 	_ = l.tryLoadV4()
 	_ = l.tryLoadV6()
 	return l
+}
+
+// SetMirrors changes the HTTPS sources used for the local ip2region files.
+// The files are still validated as ip2region XDB data before activation.
+func (l *Lookup) SetMirrors(v4, v6 []string) error {
+	if l == nil {
+		return nil
+	}
+	validated4, err := validateMirrorURLs(v4)
+	if err != nil {
+		return err
+	}
+	validated6, err := validateMirrorURLs(v6)
+	if err != nil {
+		return err
+	}
+	l.mu.Lock()
+	l.mirrorsV4, l.mirrorsV6 = validated4, validated6
+	l.mu.Unlock()
+	return nil
+}
+
+func ValidateMirrors(values []string) error {
+	_, err := validateMirrorURLs(values)
+	return err
+}
+
+func validateMirrorURLs(values []string) ([]string, error) {
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+			return nil, fmt.Errorf("ip2region 镜像必须是不带凭据的 HTTPS 地址")
+		}
+		out = append(out, raw)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("至少配置一个 ip2region 镜像地址")
+	}
+	return out, nil
 }
 
 // SetOnlineEnabled controls third-party queries. Existing cached labels remain
@@ -85,8 +138,11 @@ func (l *Lookup) Ensure(ctx context.Context) error {
 	if l == nil {
 		return nil
 	}
-	err4 := l.ensureXDB(ctx, l.path, mirrorsV4, l.tryLoadV4)
-	_ = l.ensureXDB(ctx, l.pathV6, mirrorsV6, l.tryLoadV6)
+	l.mu.Lock()
+	v4, v6 := append([]string(nil), l.mirrorsV4...), append([]string(nil), l.mirrorsV6...)
+	l.mu.Unlock()
+	err4 := l.ensureXDB(ctx, l.path, v4, l.tryLoadV4)
+	_ = l.ensureXDB(ctx, l.pathV6, v6, l.tryLoadV6)
 	return err4
 }
 

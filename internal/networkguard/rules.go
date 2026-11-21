@@ -34,12 +34,20 @@ func (p Plan) Rules() (string, error) {
 	for _, b := range p.sorted() {
 		set := ResourceSetName(b.Resource())
 		fmt.Fprintf(&s, "add set inet %s %s { type nf_proto; flags timeout; timeout 6s; gc-interval 1s; size 2; }\n", Table, set)
+		if b.ForwardID == 0 && b.Wanted.Ingress != nil {
+			if err := writeIngressSets(&s, b.NodeID, b.Wanted.Ingress); err != nil {
+				return "", err
+			}
+		}
 		rule := func(chain, match, action string) {
 			fmt.Fprintf(&s, "add rule inet %s %s %s %s\n", Table, chain, match, action)
 		}
 		port := fmt.Sprintf("ct direction original meta l4proto { tcp, udp } th dport %d", b.ListenPort)
 		gate := "meta nfproto != @" + set + " drop"
 		rule("input", port, gate)
+		if b.ForwardID == 0 && b.Wanted.Ingress != nil {
+			writeIngressRules(&s, rule, b.NodeID, port, b.Wanted.Ingress)
+		}
 		if b.Forward != nil {
 			if b.Forward.MaxUDPSessions > 0 {
 				udpSet := UDPSetName(b.ForwardID)
@@ -186,6 +194,70 @@ func (p Plan) Rules() (string, error) {
 		fmt.Fprintf(&s, "add rule inet %s %s %s drop\n", Table, chain, match)
 	}
 	return s.String(), nil
+}
+
+func writeIngressSets(s *strings.Builder, nodeID int64, policy *networkconfig.IngressPolicy) error {
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	add := func(name, family string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		fmt.Fprintf(s, "add set inet %s %s { type %s_addr; flags interval; auto-merge; size %d; elements = { %s }; }\n", Table, name, family, len(values), strings.Join(values, ", "))
+	}
+	add(IngressSourceSetName(nodeID, "4"), "ipv4", familyValues(policy.SourceCIDRs, true))
+	add(IngressSourceSetName(nodeID, "6"), "ipv6", familyValues(policy.SourceCIDRs, false))
+	add(IngressGeoSetName(nodeID, "4"), "ipv4", policy.GeoIPv4CIDRs)
+	add(IngressGeoSetName(nodeID, "6"), "ipv6", policy.GeoIPv6CIDRs)
+	return nil
+}
+
+func familyValues(values []string, v4 bool) []string {
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		prefix, err := netip.ParsePrefix(raw)
+		if err == nil && prefix.Addr().Is4() == v4 {
+			out = append(out, prefix.String())
+		}
+	}
+	return out
+}
+
+func writeIngressRules(s *strings.Builder, rule func(string, string, string), nodeID int64, port string, policy *networkconfig.IngressPolicy) {
+	for _, family := range []struct {
+		nf, ip, suffix string
+		v4             bool
+	}{{"ipv4", "ip", "4", true}, {"ipv6", "ip6", "6", false}} {
+		match := port + " meta nfproto " + family.nf
+		if policy.Mode == networkconfig.IngressRelayOnly {
+			set := IngressSourceSetName(nodeID, family.suffix)
+			if len(familyValues(policy.SourceCIDRs, family.v4)) == 0 {
+				rule("input", match, "drop")
+				rule("output", "ct direction reply meta nfproto "+family.nf, "drop")
+				continue
+			}
+			rule("input", match, family.ip+" saddr != @"+set+" drop")
+			rule("output", "ct direction reply meta nfproto "+family.nf, family.ip+" daddr != @"+set+" drop")
+			continue
+		}
+		values := policy.GeoIPv4CIDRs
+		if !family.v4 {
+			values = policy.GeoIPv6CIDRs
+		}
+		set := IngressGeoSetName(nodeID, family.suffix)
+		if len(values) == 0 {
+			continue
+		}
+		if exceptions := familyValues(policy.SourceCIDRs, family.v4); len(exceptions) > 0 {
+			// Explicitly allowed relay addresses bypass only the GeoIP deny set.
+			rule("input", match+" "+family.ip+" saddr != { "+strings.Join(exceptions, ", ")+" } "+family.ip+" saddr @"+set, "drop")
+			rule("output", "ct direction reply meta nfproto "+family.nf+" "+family.ip+" daddr != { "+strings.Join(exceptions, ", ")+" } "+family.ip+" daddr @"+set, "drop")
+		} else {
+			rule("input", match+" "+family.ip+" saddr @"+set, "drop")
+			rule("output", "ct direction reply meta nfproto "+family.nf+" "+family.ip+" daddr @"+set, "drop")
+		}
+	}
 }
 
 const TransportChain = "ctlvps_transports"

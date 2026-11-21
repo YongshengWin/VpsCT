@@ -38,6 +38,17 @@ func meterProgram(fd, direction int) []bpfInsn {
 	}
 }
 
+// The kernel may interrupt BPF_PROG_LOAD with EAGAIN during verification.
+// Retry just this side-effect-free failed load, never pin or attach operations.
+func retryMeterProgramLoad(load func() (int, error)) (int, error) {
+	for attempt := 1; ; attempt++ {
+		fd, err := load()
+		if attempt == 5 || !errors.Is(err, unix.EAGAIN) {
+			return fd, err
+		}
+	}
+}
+
 func bpfCall(cmd int, attr unsafe.Pointer, size uintptr) (int, error) {
 	r, _, e := unix.Syscall(unix.SYS_BPF, uintptr(cmd), uintptr(attr), size)
 	if e != 0 {
@@ -156,21 +167,25 @@ func EnsureMeter(unit string) error {
 		insns := meterProgram(fd, direction)
 		license := []byte("GPL\x00")
 		log := make([]byte, 16<<10)
-		a := struct {
-			Type, Count       uint32
-			Insns, License    uint64
-			LogLevel, LogSize uint32
-			Log               uint64
-			Kernel, Flags     uint32
-			Name              [16]byte
-			IfIndex, Attach   uint32
-		}{
-			Type: unix.BPF_PROG_TYPE_CGROUP_SKB, Count: uint32(len(insns)), Insns: uint64(uintptr(unsafe.Pointer(&insns[0]))), License: uint64(uintptr(unsafe.Pointer(&license[0]))), LogLevel: 1, LogSize: uint32(len(log)), Log: uint64(uintptr(unsafe.Pointer(&log[0]))), Attach: uint32(direction),
-		}
-		prog, err := bpfCall(unix.BPF_PROG_LOAD, unsafe.Pointer(&a), unsafe.Sizeof(a))
-		runtime.KeepAlive(insns)
-		runtime.KeepAlive(license)
-		runtime.KeepAlive(log)
+		prog, err := retryMeterProgramLoad(func() (int, error) {
+			clear(log)
+			a := struct {
+				Type, Count       uint32
+				Insns, License    uint64
+				LogLevel, LogSize uint32
+				Log               uint64
+				Kernel, Flags     uint32
+				Name              [16]byte
+				IfIndex, Attach   uint32
+			}{
+				Type: unix.BPF_PROG_TYPE_CGROUP_SKB, Count: uint32(len(insns)), Insns: uint64(uintptr(unsafe.Pointer(&insns[0]))), License: uint64(uintptr(unsafe.Pointer(&license[0]))), LogLevel: 1, LogSize: uint32(len(log)), Log: uint64(uintptr(unsafe.Pointer(&log[0]))), Attach: uint32(direction),
+			}
+			fd, err := bpfCall(unix.BPF_PROG_LOAD, unsafe.Pointer(&a), unsafe.Sizeof(a))
+			runtime.KeepAlive(insns)
+			runtime.KeepAlive(license)
+			runtime.KeepAlive(log)
+			return fd, err
+		})
 		if err != nil {
 			return fmt.Errorf("%w: %s", err, strings.TrimRight(string(log), "\x00"))
 		}

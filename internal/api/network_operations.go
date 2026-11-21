@@ -11,6 +11,8 @@ import (
 
 func networkOperationError(err error) error {
 	switch {
+	case errors.Is(err, store.ErrNodePortRequest):
+		return httpx.BadRequest(err.Error())
 	case errors.Is(err, store.ErrNATNotReady), errors.Is(err, store.ErrNATResources), errors.Is(err, store.ErrNATPublicHost):
 		return natAPIError(err)
 	case errors.Is(err, store.ErrAccessRouteInUse):

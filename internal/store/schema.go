@@ -713,4 +713,69 @@ ALTER TABLE sessions ADD COLUMN security_version INTEGER NOT NULL DEFAULT 0;`,
 	accessRouteSchema,
 	// v41: optional extra relay; entry can forward directly to the landing node.
 	optionalAccessRelaySchema,
+	// v42: bounded, durable per-hop TCP diagnostics.
+	`CREATE TABLE latency_tests (
+ id TEXT PRIMARY KEY, resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL,
+ fingerprint TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+);
+CREATE TABLE latency_segments (
+ job_id TEXT NOT NULL REFERENCES latency_tests(id) ON DELETE CASCADE,
+ segment INTEGER NOT NULL, server_id INTEGER NOT NULL,
+ from_name TEXT NOT NULL, to_name TEXT NOT NULL, command TEXT NOT NULL, result TEXT NOT NULL,
+ PRIMARY KEY(job_id,segment)
+);
+CREATE INDEX latency_source ON latency_segments(server_id,job_id);`,
+	// v43: retire controller probes and add manual server port records.
+	unavailablePortsSchema,
+	// v44: personal templates and selections are account-bound. A share transfer
+	// removes selections atomically, including transfers through other code paths.
+	personalTemplateSchema,
+	// v45: each explicit grant retains its issuer for live delegation checks.
+	permissionGrantSchema,
+	// v46: preserve one explicit owner without changing legacy admin roles.
+	controllerOwnerSchema,
+	// v47: optional manually verified exit region; empty retains automatic detection.
+	`ALTER TABLE nodes ADD COLUMN exit_region TEXT NOT NULL DEFAULT '';`,
+	// v48: preserve bounded encrypted template history on every update.
+	`CREATE TABLE rule_template_versions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, template_id INTEGER NOT NULL REFERENCES rule_templates(id) ON DELETE CASCADE,
+ name TEXT NOT NULL, kind TEXT NOT NULL, description TEXT NOT NULL, content TEXT NOT NULL, variables TEXT NOT NULL,
+ is_builtin INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+);
+CREATE INDEX rule_template_versions_template ON rule_template_versions(template_id,id DESC);
+CREATE TRIGGER rule_template_save_version BEFORE UPDATE OF name,kind,description,content,variables,is_builtin ON rule_templates BEGIN
+ INSERT INTO rule_template_versions(template_id,name,kind,description,content,variables,is_builtin,created_at,updated_at)
+ VALUES(OLD.id,OLD.name,OLD.kind,OLD.description,OLD.content,OLD.variables,OLD.is_builtin,OLD.created_at,OLD.updated_at);
+ DELETE FROM rule_template_versions WHERE template_id=OLD.id AND id NOT IN (SELECT id FROM rule_template_versions WHERE template_id=OLD.id ORDER BY id DESC LIMIT 30);
+END;`,
+	// v49: opaque stable identifiers for browser-facing share URLs. Existing
+	// records are filled with crypto/rand in the migration transaction.
+	sharePublicIDSchema,
+	// v50: optional per-key operation allowlist; NULL preserves existing keys.
+	`ALTER TABLE api_keys ADD COLUMN operations TEXT;`,
+	// v51: separate IPv6 endpoints and retry-safe first deployments.
+	`ALTER TABLE servers ADD COLUMN public_host_ipv6 TEXT NOT NULL DEFAULT '';
+ ALTER TABLE node_applied_states ADD COLUMN listen_ipv6 TEXT NOT NULL DEFAULT '';
+ ALTER TABLE server_network_requirements ADD COLUMN ipv6_ingress_version INTEGER NOT NULL DEFAULT 0 CHECK(ipv6_ingress_version IN (0,1));
+ CREATE TRIGGER network_generation_server_ipv6 AFTER UPDATE OF public_host_ipv6 ON servers
+ WHEN OLD.public_host_ipv6 IS NOT NEW.public_host_ipv6 BEGIN
+ UPDATE server_network_generations SET generation=generation+1 WHERE server_id=NEW.id;
+ END;
+ CREATE TABLE ipv6_deployments (
+   server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+   operation_id TEXT NOT NULL,
+   owner_user_id INTEGER NOT NULL,
+   fingerprint TEXT NOT NULL,
+   node_id INTEGER REFERENCES nodes(id) ON DELETE SET NULL,
+   PRIMARY KEY(server_id,operation_id)
+ );
+ CREATE TABLE ipv6_endpoint_checks (
+   node_id INTEGER PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+   host TEXT NOT NULL,
+   listen_address TEXT NOT NULL,
+   state TEXT NOT NULL CHECK(state IN ('ok','invalid','temporary')),
+   message TEXT NOT NULL DEFAULT '',
+   checked_at TEXT NOT NULL,
+   last_good_at TEXT NOT NULL DEFAULT ''
+ );`,
 }

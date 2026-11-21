@@ -134,6 +134,11 @@ func (p Plan) Validate() error {
 			if err != nil || a.String() != b.Applied.ListenAddress {
 				return errors.New("unresolved listener address")
 			}
+		} else if b.Wanted.ListenMode == "public_ipv6" {
+			i := b.Applied.ListenInterface
+			if !validInterface(i) || !networkconfig.IsPublicIPv6(b.Applied.ListenAddress) || b.Wanted.ListenInterfaceID != "" && i.ID != b.Wanted.ListenInterfaceID {
+				return errors.New("unresolved IPv6 listener")
+			}
 		} else if b.Applied.ListenInterface != nil || (b.Applied.ListenAddress != "::" && b.Applied.ListenAddress != "0.0.0.0") {
 			return errors.New("invalid wildcard listener observation")
 		}

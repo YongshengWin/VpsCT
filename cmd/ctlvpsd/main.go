@@ -162,7 +162,29 @@ func run(cfg config.Config, logger *slog.Logger) error {
 	ing := traffic.New(st)
 	sched := scheduler.New(logger)
 	geo := geoip.Open(filepath.Join(cfg.DataDir, "geo"))
+	geoCountry := geoip.OpenCountry(filepath.Join(cfg.DataDir, "geo"))
 	geo.SetOnlineEnabled(cfg.OnlineGeoIP)
+	if err := geoCountry.SetSource(geoip.CountrySourceConfig{
+		Provider:       st.GetSetting(ctx, domain.SettingGeoCountryProvider, geoip.CountryProviderDBIP),
+		MaxMindAccount: st.GetSetting(ctx, domain.SettingGeoMaxMindAccount, ""),
+		MaxMindKey:     st.GetSetting(ctx, domain.SettingGeoMaxMindKey, ""),
+	}); err != nil {
+		logger.Warn("invalid country GeoIP settings; using built-in source", "err", err)
+		_ = geoCountry.SetSource(geoip.CountrySourceConfig{Provider: geoip.CountryProviderDBIP})
+	}
+	v4Mirrors, v6Mirrors := geoip.DefaultMirrors()
+	if raw := st.GetSetting(ctx, domain.SettingGeoIPV4Mirror, ""); raw != "" {
+		v4Mirrors = strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t' })
+	}
+	if raw := st.GetSetting(ctx, domain.SettingGeoIPV6Mirror, ""); raw != "" {
+		v6Mirrors = strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t' })
+	}
+	if err := geo.SetMirrors(v4Mirrors, v6Mirrors); err != nil {
+		logger.Warn("invalid ip2region mirror settings; using built-in mirrors", "err", err)
+	}
+	if value := st.GetSetting(ctx, domain.SettingGeoOnlineEnabled, ""); value != "" {
+		geo.SetOnlineEnabled(value == "1" || cfg.OnlineGeoIP)
+	}
 	go func() {
 		if err := geo.Ensure(ctx); err != nil {
 			logger.Warn("geoip database unavailable", "err", err)
@@ -175,12 +197,13 @@ func run(cfg config.Config, logger *slog.Logger) error {
 
 	secure := strings.HasPrefix(cfg.SiteURL, "https://")
 	a := api.New(api.Deps{
-		Store: st, Connlog: cl, Geo: geo, Subs: subs, Desired: des, Shares: shares, Traffic: ing, Notify: tg, Scheduler: sched, Logger: logger,
+		Store: st, Connlog: cl, Geo: geo, GeoCountry: geoCountry, Subs: subs, Desired: des, Shares: shares, Traffic: ing, Notify: tg, Scheduler: sched, Logger: logger,
 		Static: web.Handler(cfg.DevProxy),
 		Config: api.Config{SiteURL: cfg.SiteURL, TrustProxy: false, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs, SecureCookies: secure, SessionTTL: cfg.SessionTTL, Version: buildinfo.String(), StartedAt: time.Now(), DataDir: cfg.DataDir, AgentBinDir: cfg.AgentBinDir, SetupToken: setupToken},
 	})
 
 	registerJobs(sched, st, cl, subs, shares, des, tg, ing, cfg, logger)
+	sched.Add(scheduler.Job{Name: "ipv6_endpoint_dns", Interval: 15 * time.Second, RunAtStart: true, Fn: a.RefreshIPv6Endpoints})
 	go sched.Run(ctx)
 
 	srv := &http.Server{

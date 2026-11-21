@@ -29,6 +29,9 @@ type NetworkReadinessCheck struct {
 // Readiness describes admission from the controller's current observation. It
 // never replaces the agent's fresh local checks, guard leases or apply receipt.
 type NetworkReadiness struct {
+	Network                 *networkconfig.Node     `json:"network,omitempty"`
+	UnavailablePort         *UnavailablePort        `json:"unavailable_port,omitempty"`
+	IPv6IngressVersion      int                     `json:"ipv6_ingress_version,omitempty"`
 	ProxyInboundVersion     int                     `json:"proxy_inbound_version,omitempty"`
 	ForwardUDPVersion       int                     `json:"forward_udp_version,omitempty"`
 	Impact                  *NetworkImpact          `json:"impact,omitempty"`
@@ -99,6 +102,7 @@ func (s *Store) networkReadinessForCore(ctx context.Context, q querier, serverID
 	var diag agentproto.Diagnostics
 	diagnosticsValid := json.Unmarshal(a.Diagnostics, &diag) == nil && agentproto.ValidateNetworkDiagnostics(diag) == nil
 	if diagnosticsValid {
+		v.IPv6IngressVersion = diag.IPv6IngressVersion
 		v.EgressVersion = diag.NetworkEgressVersion
 		v.ProxyInboundVersion = diag.NetworkProxyInboundVersion
 		v.SSHVersion = diag.NetworkSSHVersion
@@ -248,6 +252,10 @@ func (s *Store) previewNodeNetworkForEgress(ctx context.Context, q querier, n do
 		}
 		v.Checks = checks
 		return *v, nil
+	}
+	if policy.IngressFamily == "ipv6" {
+		v.check("ipv6_ingress", v.IPv6IngressVersion == networkconfig.IPv6IngressVersion && n.Core == domain.CoreSingBox && !state.server.IsNAT,
+			"仅 IPv6 接入需要新版 agent、官方 sing-box 和独立公网服务器")
 	}
 	var params map[string]any
 	_ = json.Unmarshal(n.ServerParams, &params)

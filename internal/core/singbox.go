@@ -108,6 +108,13 @@ func (d *SingBox) tlsBlock(spec agentproto.NodeSpec, ds *agentproto.DesiredState
 	tls["server_name"] = domain
 	switch cert.Mode {
 	case "acme":
+		// ACME adds acme-tls/1 to the server's ALPN list. Without an
+		// application protocol, TCP clients offering h2/http/1.1 cannot
+		// negotiate TLS. Keep file certificates' permissive empty list and
+		// the explicit QUIC protocol list unchanged.
+		if len(alpn) == 0 && (spec.Protocol == "anytls" || spec.Protocol == "trojan") {
+			tls["alpn"] = []string{"h2", "http/1.1"}
+		}
 		acme := map[string]any{"domain": []string{domain}, "data_directory": firstNonEmpty(d.runtimeACME, filepath.Join(d.Paths.DataDir, "acme")), "default_server_name": domain, "provider": "letsencrypt"}
 		if email := firstNonEmpty(cert.Email, d.ACMEEmail); email != "" {
 			acme["email"] = email

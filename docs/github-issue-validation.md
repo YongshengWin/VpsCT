@@ -136,3 +136,46 @@ UDP 与 TCP+UDP 已在当前源码开放，补充本机认证 API、只读 connt
 ## 9. UDP 必要可靠性优化
 
 后续优化独立记录在 [UDP 可靠性迭代](udp-reliability-iteration.md)：故障隔离、压力测试、运行诊断与官方每入站容量修正。原生双架构 CI 已加入压力测试，未运行的远程 CI 不计为通过。
+
+## 10. AnyTLS / Trojan ACME ALPN 与依赖维护
+
+### 10.1 修复范围
+
+2026-10-31，针对 [#46](https://github.com/YongshengWin/VpsCT/issues/46)，仅为 ACME 模式的 AnyTLS / Trojan 生成默认业务 ALPN `h2`、`http/1.1`，兼容旧 `acme` 与新版 `certificate_provider`。官方内核继续管理 `acme-tls/1`；自签、外部证书及 Hy2 / TUIC 的现有 ALPN 不变。没有修改官方 sing-box、数据库、API 或订阅结构。
+
+更新 agent 后，进程首次心跳重新生成已有节点配置，即使 desired revision/hash 与磁盘旧成功状态相同也不跳过。新配置有差异时，沿用预检、事务和失败恢复；对应共享 sing-box 实例可能短暂中断，不能声称仅重启一个节点。验收核对新 agent 版本/文件摘要、新应用回执及实际代理连接，无需删建节点或清理 ACME 账号和证书。
+
+### 10.2 回归与 CI
+
+1. 配置矩阵覆盖 3 个内核版本、4 种 TLS 协议及 3 种证书模式；可信本地证书握手覆盖 `h2,http/1.1`、仅 `http/1.1`、无 ALPN 和无交集报价。冷启动回归验证旧成功状态不会掩盖当前配置失败，失败持久化且可以重试。
+2. 复用一次性 systemd、官方 sing-box 和 Pebble 测试 CA；仅在 CA 网络命名空间阻断 HTTP-01，保留真实挑战验证，检查旧/新格式及两种协议的 TLS-ALPN-01 签发、实际代理流量、重启复用和原生续期。默认 CA 域名只在容器内映射到测试目录代理，无公网路径，不修改产品 CA 配置。快速用例使用一天有效期证书，断言重启后指纹不变；续期使用十五分钟证书，等待官方原生调度器自行换证。
+3. 保留共享构建和既有并行矩阵。普通 PR 使用快速 ACME 档，完整发布档才并行加入原生续期；发布证据要求 `acme_profile=renewal` 及 600 秒 UDP 档，缺失、快档或任意必要门禁失败都不能复用发布。
+4. 安全扫描独立并行报告，定时审计只读、不创建 PR 或 issue。Go 构建基线更新至 1.26.10，Vite 更新至 8.3.5，并重新生成第三方许可产物。
+
+### 10.3 当前验证状态
+
+本地 Go 1.26.10 完整 `scripts/check.sh` 通过：50 项前端测试、类型检查与生产构建、Go vet、契约新鲜度、Python 客户端测试、Go 全仓库测试、Linux AMD64 交叉编译及安装/卸载参数验证。新增核心握手回归的 race 检查通过；ShellCheck、actionlint 和 CI 工具测试通过。`npm audit --audit-level=high` 为 0 漏洞；govulncheck 无可达漏洞，但仍报告 3 条当前未调用的模块级漏洞，不能描述为整个依赖图零公告。
+
+本地 ARM64 一次性 systemd 容器的 ACME 快档通过：官方 sing-box 1.14.1、AnyTLS / Trojan × 旧/新格式 × 三类 ALPN 报价的真实代理流量、完整证书链与域名校验、无交集拒绝、强制 TLS-ALPN-01 签发及同证书重启复用通过。现代格式还验证旧 JSON 补回 ALPN 后共享实例重启一次、再次应用幂等、错误候选不改变活动配置与实例。这个结果用于核验回归夹具，不能替代原生 AMD64 CI 或恢复 ARM 发行支持。
+
+修改测试 helper 后，原 candidate 边界脚本也通过：非 root、SO_MARK/seccomp、管理路径隔离、真实 Apply、幂等、无效配置保留、激活回滚、证书替换、公私分组及不同 UID 隔离，以及 VLESS / AnyTLS / Hy2 / TUIC / Trojan / SS 的 IPv4/IPv6 TCP/UDP。未提供 Snell 官方二进制，不能把原始 Snell 安全探针通过描述为 Snell 全流程验收。
+
+初次续期长测实际失败：旧夹具在注入外部证书无效候选后，没有重新应用原 ACME 出站策略，已签发证书的旧连接仍可用，但新的续期连接被正确拦截。该结果不计通过。夹具已改为失败后合法重试原 desired，并检查无重启、配置不变、ACME 出站 mark 和私网阻断均恢复；独立续期场景不执行故障注入，持续检查这些防火墙约束。
+
+修正后的最终快档退出 0；干净容器中的现代 Trojan / certificate provider 原生续期也通过，2026-10-31 新加坡时间 20:15:54 记录到自动换证，服务 InvocationID 未变、账户密钥未变，新证书与磁盘一致，带 ALPN 的真实代理流量正常；随后重启也复用该证书。Docker 原执行退出事件确认续期 Python 退出 0。两协议及两种格式是快档矩阵，续期长测覆盖现代 Trojan 的共享 provider 路径，不扩大到其他组合的续期承诺。
+
+已核对真实分支保护要求 `checks` 和 `security`，安全扫描拆分后仍保留精确同名汇总检查。21 项 CI 工具测试覆盖失败/取消/跳过/缺失证据、ACME 档位、发布拒绝快档及安全汇总状态，actionlint 通过。本地 AMD64 测试附件已构建且全部摘要一致；归档内旧 ARM 路径仅为拒绝脚本，不含 ARM 程序或第三方代理内核。
+
+已关闭 GitHub 自动安全更新 PR 功能并回读确认，Dependabot alerts 仍启用；#45、#47–#51 已关闭，开放 PR 为 0。常规更新配置已在本地移除，必须进入默认分支后才永久停止；本次未 commit、push 或发布 Release。正式 AMD64 CI、附件验收和真实 VPS 升级尚未执行。
+
+### 10.4 隔离复现入口
+
+要求 Go 1.26.10、可启动一次性特权 systemd 容器的 Docker、经官方资产摘要核验的 sing-box 1.14.1 与 Pebble 2.10.1；正式验收使用原生 Linux AMD64。先通过 `scripts/fetch-network-test-fixtures.py` 和 `scripts/fetch-pebble.py` 获取相同架构的官方夹具，再运行：
+
+```bash
+CTLVPS_BOUNDARY_MODE=candidate CTLVPS_ACME_SCENARIO=handshake \
+  SINGBOX_BIN=/path/to/sing-box PEBBLE_BIN=/path/to/pebble \
+  bash scripts/test-security-boundary-container.sh
+```
+
+完整续期使用相同入口，将 `CTLVPS_ACME_SCENARIO` 改成 `renewal`，约等待十分钟。CI 自动复用共享构建中的测试 helper，不在两个 ACME runner 重复编译；普通 PR 只运行快档，完整发布档两者并行。不要在真实 VPS 上运行这些测试或安装测试 CA。

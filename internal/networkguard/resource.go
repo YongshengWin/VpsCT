@@ -150,3 +150,12 @@ func (p Plan) Revoke(affected map[int64]bool) (string, error) {
 }
 
 func UDPSetName(id int64) string { return fmt.Sprintf("f%d_udp_ready", id) }
+
+func ingressSetName(id int64, family string, kind string) string {
+	// nftables set names are limited on older distributions. The numeric
+	// resource ID is already bounded by the plan validator.
+	return fmt.Sprintf("n%d_%s%s", id, kind, family)
+}
+
+func IngressSourceSetName(id int64, family string) string { return ingressSetName(id, family, "src") }
+func IngressGeoSetName(id int64, family string) string    { return ingressSetName(id, family, "geo") }

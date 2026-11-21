@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -11,7 +12,78 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/networkguard"
 )
+
+func TestKernelIPv6NodeIngress(t *testing.T) {
+	if runtime.GOOS != "linux" || os.Getenv("CTLVPS_IPV6_INGRESS_TEST") != "1" {
+		t.Skip("isolated Linux nftables test")
+	}
+	ifaces, err := net.Interfaces()
+	if _, err := os.Stat("/.dockerenv"); err != nil || os.Geteuid() != 0 || len(ifaces) != 1 || ifaces[0].Name != "lo" {
+		t.Fatal("requires root in a disposable container with --network none")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	const host = "2606:4700:100::12"
+	const port = "24443"
+	for _, args := range [][]string{{"link", "set", "lo", "up"}, {"-6", "addr", "add", host + "/128", "dev", "lo", "nodad"}} {
+		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+			t.Fatalf("fixture address: %v %s", err, out)
+		}
+	}
+	t.Cleanup(func() { _ = exec.Command("ip", "-6", "addr", "del", host+"/128", "dev", "lo").Run() })
+	serveIngressProbe(t, "tcp", ":"+port)
+	serveIngressProbe(t, "udp", ":"+port)
+	for _, network := range []string{"tcp4", "udp4"} {
+		if err := probeIngress(network, "127.0.0.1:"+port); err != nil {
+			t.Fatal("fixture listener must accept IPv4 before the guard", err)
+		}
+	}
+	ifaceID := strings.Repeat("a", 32)
+	plan, err := networkguard.New([]networkguard.Binding{{
+		NodeID: 1, ListenPort: 24443, Core: "singbox", IPv4Only: true,
+		Wanted: networkconfig.Node{IngressFamily: "ipv6", ListenMode: "public_ipv6", ListenInterfaceID: ifaceID, AdvertiseMode: "inherit_ipv6", OnUnavailable: "block"},
+		Applied: networkconfig.Resolved{ListenAddress: host, ListenInterface: &networkconfig.Interface{ID: ifaceID, Name: "lo", Index: ifaces[0].Index},
+			CollectorID: strings.Repeat("b", 32), BootID: "fixture", Sequence: 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	m := New()
+	rules, err := plan.Rules()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.run(ctx, rules, "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = m.run(ctx, "", "delete", "table", "inet", networkguard.Table) })
+	published := net.JoinHostPort(host, port)
+	if err := probeIngress("tcp6", published); err == nil {
+		t.Fatal("unconfirmed IPv6 listener accepted traffic")
+	}
+	rules, err = plan.RenewResources(map[agentproto.ResourceIdentity]bool{plan.Bindings[0].Resource(): true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.run(ctx, rules, "-f", "-"); err != nil {
+		t.Fatal(err)
+	}
+	for _, protocol := range []string{"tcp", "udp"} {
+		if err := probeIngress(protocol+"6", published); err != nil {
+			t.Fatal("verified IPv6 address was blocked", protocol, err)
+		}
+		for _, denied := range []struct{ network, host string }{{protocol + "4", "127.0.0.1"}, {protocol, "::ffff:127.0.0.1"}, {protocol + "6", "::1"}} {
+			if err := probeIngress(denied.network, net.JoinHostPort(denied.host, port)); err == nil {
+				t.Fatal("IPv6-only guard accepted a different endpoint", denied)
+			}
+		}
+	}
+}
 
 // Run only in a disposable network namespace. Exercise real nft JSON and
 // packet filtering for both transports and address families.

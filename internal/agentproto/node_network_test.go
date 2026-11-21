@@ -76,6 +76,20 @@ func TestNetworkContractRequiresKnownVersionAndParticipatesInHash(t *testing.T) 
 	}
 }
 
+func TestIngressPolicyRequiresIndependentContract(t *testing.T) {
+	network := &NodeNetworkSpec{Policy: networkconfig.Node{ListenMode: "all", AdvertiseMode: "inherit", OnUnavailable: "block", Ingress: &networkconfig.IngressPolicy{Mode: networkconfig.IngressRelayOnly, SourceCIDRs: []string{"203.0.113.10/32"}}}}
+	ds := &DesiredState{ServerID: 1, Revision: 1, NetworkBindingVersion: NetworkBindingVersion, Nodes: []NodeSpec{{NodeID: 1, ListenPort: 21001, Core: "singbox", Network: network}}}
+	ds.Hash = ContentHash(ds)
+	if ValidateDesired(ds, 1, 0, "") == nil {
+		t.Fatal("ingress policy accepted without independent contract")
+	}
+	ds.NetworkIngressVersion = NetworkIngressVersion
+	ds.Hash = ContentHash(ds)
+	if err := ValidateDesired(ds, 1, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSOCKS5WireRequiresIndependentContract(t *testing.T) {
 	resolver := networkconfig.Resolver{Transport: "tcp", Address: "192.0.2.53", Port: 53}
 	network := &NodeNetworkSpec{

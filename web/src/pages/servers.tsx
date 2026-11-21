@@ -1,15 +1,19 @@
+import { UnavailablePorts } from "@/components/unavailable-ports";
 import { ConfigStatusNotice, configurationState } from "@/components/config-status";
 import * as React from "react";
 import { MaintenancePanel } from "@/components/maintenance";
 import { ServerActions } from "@/components/server-actions";
+import { NetworkAddressSelect } from "@/components/network-address";
+import { NetworkChecks } from "@/components/network-operations";
+import { networkOperationID, type NetworkAddress, type NetworkReadiness, type NodeNetworkPolicy } from "@/lib/network";
 import { ServerNetwork } from "@/components/server-network";
 import { NATBadge, NATStatus, ServerNAT, NATMappingFields } from "@/components/server-nat";
 import { ServerRoutes } from "@/components/server-routes";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Copy, KeyRound, Plus, RefreshCw, Trash2, Pencil, Cpu, MemoryStick, Wifi, ShieldCheck, AlertTriangle, Wrench } from "lucide-react";
-import { get, post, put } from "@/lib/api";
-import type { Server, Node, Series, ServerQuotaBilling } from "@/lib/types";
+import { ApiError, get, post, put } from "@/lib/api";
+import type { Server, Node, Series, ServerQuotaBilling, NetworkView } from "@/lib/types";
 import { SERVER_BILLING_OPTIONS, serverBillingLabel, serverBillingMode } from "@/lib/server-billing";
 import { fmtBytes, fmtAgo, fmtDuration, fmtRate, gbToBytes, bytesToGb, parseResetDay, formatResetDay, copyText, STATUS_LABELS, PROTOCOL_LABELS, fmtDate, defaultNodeName } from "@/lib/utils";
 import { calibrationPayload, trafficUsage, trafficPeriodDate, validCalibration, validGiB, type QuotaCalibrationDraft } from "@/lib/traffic-billing";
@@ -28,6 +32,7 @@ interface ServerForm {
   name: string;
   region: string;
   public_host: string;
+  public_host_ipv6: string;
   tags: string;
   notes: string;
   quota_gb: string;
@@ -43,10 +48,10 @@ interface ServerForm {
   enabled: boolean;
 }
 
-const emptyForm: ServerForm = { is_nat: false, name: "", region: "", public_host: "", tags: "", notes: "", quota_gb: "", quota_reset_day: "1", quota_calibrated_usage_gb: "", quota_calibration_kind: "total", quota_calibrated_inbound_gb: "", quota_calibrated_outbound_gb: "", quota_billing: "dual", core_mode: "stable", ipv4_only: false, cert_mode: "self_signed", enabled: true };
+const emptyForm: ServerForm = { is_nat: false, name: "", region: "", public_host: "", public_host_ipv6: "", tags: "", notes: "", quota_gb: "", quota_reset_day: "1", quota_calibrated_usage_gb: "", quota_calibration_kind: "total", quota_calibrated_inbound_gb: "", quota_calibrated_outbound_gb: "", quota_billing: "dual", core_mode: "stable", ipv4_only: false, cert_mode: "self_signed", enabled: true };
 
 function toForm(s: Server): ServerForm {
-  return { is_nat: isNATServer(s), name: s.name, region: s.region, public_host: s.public_host, tags: s.tags.join(","), notes: s.notes, quota_gb: bytesToGb(s.quota_bytes), quota_reset_day: String(s.quota_reset_day ?? 0), quota_calibrated_usage_gb: "", quota_calibration_kind: serverBillingMode(s.quota_billing) === "max" ? "directions" : "total", quota_calibrated_inbound_gb: "", quota_calibrated_outbound_gb: "", quota_billing: serverBillingMode(s.quota_billing), core_mode: s.core_mode, ipv4_only: s.ipv4_only, cert_mode: s.cert_mode, enabled: s.enabled };
+  return { is_nat: isNATServer(s), name: s.name, region: s.region, public_host: s.public_host, public_host_ipv6: s.public_host_ipv6 ?? "", tags: s.tags.join(","), notes: s.notes, quota_gb: bytesToGb(s.quota_bytes), quota_reset_day: String(s.quota_reset_day ?? 0), quota_calibrated_usage_gb: "", quota_calibration_kind: serverBillingMode(s.quota_billing) === "max" ? "directions" : "total", quota_calibrated_inbound_gb: "", quota_calibrated_outbound_gb: "", quota_billing: serverBillingMode(s.quota_billing), core_mode: s.core_mode, ipv4_only: s.ipv4_only, cert_mode: s.cert_mode, enabled: s.enabled };
 }
 
 function formCalibration(f: ServerForm): QuotaCalibrationDraft {
@@ -65,6 +70,7 @@ function toPayload(f: ServerForm) {
 }
 
 const fmtUTCDate = trafficPeriodDate;
+const ipv6HostPlaceholder = "2001:db8::1 或 v6.example.net";
 
 export function ServerDialog({ open, onClose, server }: { open: boolean; onClose: () => void; server?: Server }) {
   const qc = useQueryClient();
@@ -82,30 +88,44 @@ export function ServerDialog({ open, onClose, server }: { open: boolean; onClose
   const calibrationEntered = (calibration.kind === "directions" ? [calibration.inbound, calibration.outbound] : [calibration.total]).some((v) => v.trim() !== "");
   const canSave = !natIssue && validGiB(f.quota_gb, true) && (!calibrationEntered || (parseResetDay(f.quota_reset_day) > 0 && validCalibration(calibration)));
   const billingChanged = !!server && f.quota_billing !== serverBillingMode(server.quota_billing);
+  const ipv6Host = f.public_host_ipv6.trim();
+  const checkIPv6OnSave = !f.is_nat && !!ipv6Host && ipv6Host !== (server?.public_host_ipv6 ?? "");
+  const ipv6Input = React.useRef<HTMLInputElement>(null);
+  const ipv6ErrorID = React.useId();
   const m = useMutation({
-    mutationFn: () => (server ? put<Server>(`/api/v1/servers/${server.id}`, toPayload(f)) : post<Server>("/api/v1/servers", { ...toPayload(f), ...(initialNAT ? { nat_config: initialNAT } : {}) })),
+    networkMode: "always",
+    mutationFn: (draft: ReturnType<typeof toPayload>) =>
+      server ? put<Server>(`/api/v1/servers/${server.id}`, draft) : post<Server>("/api/v1/servers", { ...draft, ...(initialNAT ? { nat_config: initialNAT } : {}) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["servers"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success(billingChanged ? "已保存计费方式；本期旧校准已清除" : server ? "已保存" : "已添加服务器");
       onClose();
     },
-    onError: (e) => toast.fromError(e),
+    onError: (e) => {
+      if (!(e instanceof ApiError && e.code.startsWith("ipv6_"))) toast.fromError(e);
+    },
   });
+  const ipv6Error = m.error instanceof ApiError && m.error.code.startsWith("ipv6_") && m.variables?.public_host_ipv6.trim() === ipv6Host ? m.error.message : undefined;
+  React.useEffect(() => {
+    if (open && ipv6Error) ipv6Input.current?.focus();
+  }, [open, ipv6Error]);
   return (
     <Dialog
       open={open}
       onClose={onClose}
       title={server ? "编辑服务器" : "添加服务器"}
-      description="添加后生成注册令牌，在 VPS 上一键安装 agent。"
+      description={server ? undefined : "添加后生成注册令牌，在 VPS 上一键安装 agent。"}
       footer={
         <>
-          <Button variant="outline" onClick={onClose}>取消</Button>
-          <Button onClick={() => m.mutate()} loading={m.isPending} disabled={!canSave}>保存</Button>
+          <Button variant="outline" onClick={onClose} disabled={m.isPending}>取消</Button>
+          <Button onClick={() => m.mutate(toPayload(f))} loading={m.isPending} disabled={!canSave}>
+            {m.isPending ? (checkIPv6OnSave ? "正在检查 IPv6 并保存…" : "保存中…") : "保存"}
+          </Button>
         </>
       }
     >
-      <div className="grid gap-4 sm:grid-cols-2">
+      <fieldset disabled={m.isPending} className="grid gap-4 sm:grid-cols-2">
         <Field label="名称"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="hk-1" /></Field>
         <Field label="地区" hint="两位代码，如 HK/JP/US"><Input value={f.region} onChange={(e) => set("region", e.target.value.toUpperCase())} maxLength={4} /></Field>
         <Field label="服务器类型" className="sm:col-span-2"><Select aria-label="服务器类型" value={f.is_nat ? "nat" : "public"} onChange={(e) => set("is_nat", e.target.value === "nat")}><option value="public" disabled={!!server && hasNAT(server.nat)}>独立公网</option><option value="nat">NAT 服务器</option></Select>{server && hasNAT(server.nat) && <p className="mt-1 text-xs text-muted-foreground">请先清除端口映射并等待生效，再改为独立公网。</p>}</Field>
@@ -117,6 +137,12 @@ export function ServerDialog({ open, onClose, server }: { open: boolean; onClose
           </> : <p className="text-sm text-muted-foreground">修改映射请打开服务器的“端口映射”。</p>}
         </div>}
         <Field label="公网地址" hint="留空则使用 agent 上报的 IP" className="sm:col-span-2"><Input value={f.public_host} onChange={(e) => set("public_host", e.target.value)} placeholder="1.2.3.4 或 hk.example.com" /></Field>
+        <Field label="IPv6 公网地址" hint="仅 IPv6 节点的默认访问地址。域名须仅有 AAAA 记录。" className="sm:col-span-2">
+          <Input ref={ipv6Input} aria-label="IPv6 公网地址" aria-invalid={!!ipv6Error} aria-describedby={ipv6Error ? ipv6ErrorID : undefined}
+            value={f.public_host_ipv6} onChange={(e) => { if (ipv6Error) m.reset(); set("public_host_ipv6", e.target.value); }}
+            placeholder={ipv6HostPlaceholder} maxLength={253} />
+          {ipv6Error && <p id={ipv6ErrorID} role="alert" className="mt-2 text-xs text-destructive">{ipv6Error}</p>}
+        </Field>
         <Field label="月流量配额 (GiB)" hint="0 为不限"><Input type="number" min={0} step="any" value={f.quota_gb} onChange={(e) => set("quota_gb", e.target.value)} /></Field>
         <Field label="重置日" hint={server && parseResetDay(f.quota_reset_day) !== server.quota_reset_day ? "更改重置日将清除本期校准；保存后可按新账期重新校准。" : "按 UTC 00:00 重置；1–28 固定那天，29/30/31 为每月最后一天。不选则按近 30 天滚动。"}><ResetDayInput value={f.quota_reset_day} onChange={(v) => setF((p) => ({ ...p, quota_reset_day: v, ...(parseResetDay(v) > 0 ? {} : { quota_calibrated_usage_gb: "", quota_calibrated_inbound_gb: "", quota_calibrated_outbound_gb: "" }) }))} /></Field>
         <Field label="流量计费方式" hint={billingChanged ? "保存后会清除本期旧校准；请按新方式重新校准。流量图仍展示实际入站和出站。" : "只影响配额、提醒和超额停用；流量图始终展示实际入站和出站。"} className="sm:col-span-2">
@@ -144,7 +170,7 @@ export function ServerDialog({ open, onClose, server }: { open: boolean; onClose
           <Switch checked={f.enabled} onChange={(v) => set("enabled", v)} label="启用（关闭后 agent 停止所有节点）" />
         </div>
         <Field label="备注" className="sm:col-span-2"><Textarea value={f.notes} onChange={(e) => set("notes", e.target.value)} rows={2} /></Field>
-      </div>
+      </fieldset>
     </Dialog>
   );
 }
@@ -499,6 +525,8 @@ export function ServerDetailPage() {
         </div>
       )}
 
+      {tab === "nodes" && <UnavailablePorts key={`ports-${s.id}`} serverID={s.id} />}
+
       {tab === "nat" && <ServerNAT key={`nat-${s.id}`} server={s} />}
       {tab === "network" && <ServerNetwork server={s} />}
 
@@ -622,31 +650,123 @@ function Diag({ ok, label, warnOnly }: { ok: boolean; label: string; warnOnly?: 
   );
 }
 
+interface IPv6DeployPreview {
+  readiness: NetworkReadiness;
+  advertise_host: string;
+  listen_address: string;
+  port: number;
+  confirmation?: string;
+}
+
 function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { open: boolean; onClose: () => void; server: Server; protocols: string[]; onConfigureNAT: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, mieru_transport: "TCP", ss_method: "2022-blake3-aes-128-gcm", ss_network: "tcp", cert_mode: "", cert_id: "" });
+  const [ipv6, setIPv6] = React.useState(false);
+  const [overrideHost, setOverrideHost] = React.useState("");
+  const [fixedListener, setFixedListener] = React.useState(false);
+  const [listener, setListener] = React.useState<NetworkAddress>();
+  const [review, setReview] = React.useState<{ result: IPv6DeployPreview; operationID: string } | null>(null);
+  React.useEffect(() => {
+    if (!open) {
+      setIPv6(false);
+      setOverrideHost("");
+      setFixedListener(false);
+      setListener(undefined);
+      setReview(null);
+    }
+  }, [open]);
   const set = (k: string, v: unknown) => setF((p) => ({ ...p, [k]: v }));
   const nat = useQuery({ queryKey: ["server-nat", server.id], queryFn: () => get<NATView>(`/api/v1/servers/${server.id}/nat`), enabled: open && isNATServer(server) });
   const natConfig = natConfigForDeploy(nat.data);
   const natMissing = !!natConfig?.mappings.length && !natCovers(natConfig, f.protocol, f.port ? Number(f.port) : undefined, f.mieru_transport, f.ss_network);
   const natUnconfigured = isNATServer(server) && !natConfig?.mappings.length;
   const natAwaiting = isNATServer(server) && (server.agent_status !== "online" || !nat.data || nat.data.pending || nat.data.report?.status !== "applied");
+  const inventory = useQuery({
+    queryKey: ["server-network", server.id],
+    queryFn: () => get<NetworkView>(`/api/v1/servers/${server.id}/network`),
+    enabled: open && ipv6,
+  });
+  const protocolSupportsIPv6 = (p: string) => ["vless", "ss", "anytls", "trojan", "hysteria2", "tuic"].includes(p);
+  const endpoint = `/api/v1/servers/${server.id}/nodes`;
+  const payload = () => {
+    const base = { ...f, port: Number(f.port) || 0, snell_version: Number(f.snell_version) };
+    if (!ipv6) return base;
+    const host = overrideHost.trim();
+    const network: NodeNetworkPolicy = {
+      ingress_family: "ipv6",
+      listen_mode: fixedListener ? "address" : "public_ipv6",
+      ...(fixedListener && listener ? { listen_address: listener.address, listen_interface_id: listener.interface_id } : {}),
+      advertise_mode: host ? "override" : "inherit_ipv6",
+      on_unavailable: "block",
+    };
+    return { ...base, ingress_family: "ipv6", network, ...(host ? { advertise_host: host } : {}) };
+  };
+  const preview = useMutation({
+    mutationFn: () => post<IPv6DeployPreview>(`${endpoint}/preview`, payload()),
+    onSuccess: result => setReview({ result, operationID: networkOperationID() }),
+    onError: e => toast.fromError(e),
+  });
   const m = useMutation({
-    mutationFn: () => post<Node>(`/api/v1/servers/${server.id}/nodes`, { ...f, port: Number(f.port) || 0, snell_version: Number(f.snell_version) }),
-    onSuccess: () => { toast.success("节点已创建，agent 将在下次心跳后生效"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); },
-    onError: (e) => toast.fromError(e),
+    mutationFn: () => post<Node>(endpoint, review
+      ? { ...payload(), port: review.result.port, operation_id: review.operationID, expected_ipv6: review.result.confirmation }
+      : payload()),
+    onSuccess: () => {
+      toast.success("节点已创建，等待 agent 应用");
+      void qc.invalidateQueries({ queryKey: ["nodes"] });
+      void qc.invalidateQueries({ queryKey: ["servers"] });
+      onClose();
+    },
+    onError: e => toast.fromError(e),
   });
   const list = protocols.filter((p) => !(server.core_mode === "lean" && ["snell","mieru"].includes(p)));
+  const busy = preview.isPending || m.isPending;
+  const canPreview = !ipv6 || (protocolSupportsIPv6(f.protocol) && !!(overrideHost.trim() || server.public_host_ipv6) && (!fixedListener || !!listener));
+  const canSubmit = canPreview && (!review || (review.result.readiness.ready && !!review.result.confirmation)) && (!ipv6 || !isNATServer(server));
   const tls = ["anytls", "hysteria2", "tuic", "trojan"].includes(f.protocol);
   return (
-    <Dialog open={open} onClose={onClose} title={`在 ${server.name} 上部署节点`} description="凭据自动生成；SS 和 Reality 无需证书，Hy2/TUIC/AnyTLS/Trojan 按服务器证书模式处理。" footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={natUnconfigured || natMissing || natAwaiting} onClick={() => m.mutate()} loading={m.isPending}>部署</Button></>}>
-      <div className="grid gap-4 sm:grid-cols-2">
+    <Dialog open={open} onClose={onClose} title={`在 ${server.name} 上部署节点`} description="凭据自动生成。TLS 协议按所选证书模式部署。"
+      footer={<>
+        <Button variant="outline" onClick={() => review ? setReview(null) : onClose()} disabled={busy}>{review ? "返回编辑" : "取消"}</Button>
+        <Button disabled={!canSubmit || natUnconfigured || natMissing || natAwaiting} onClick={() => ipv6 && !review ? preview.mutate() : m.mutate()} loading={busy}>
+          {ipv6 && !review ? "检查并预览" : "部署"}
+        </Button>
+      </>}>
+      {review ? <div className="space-y-3">
+        <NetworkChecks view={review.result.readiness} />
+        <dl className="grid grid-cols-[auto_1fr] gap-2 text-sm">
+          <dt>访问地址</dt><dd className="break-all">{review.result.advertise_host}</dd>
+          <dt>监听 IPv6</dt><dd className="break-all">{review.result.listen_address || "等待核验"}</dd>
+          <dt>节点端口</dt><dd>{review.result.port}</dd>
+        </dl>
+      </div> : <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
         <Field label="协议">
-          <Select value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
-            {list.map((p) => <option key={p} value={p} disabled={!!natConfig?.mappings.length && !natCovers(natConfig, p, undefined, f.mieru_transport, f.ss_network)}>{PROTOCOL_LABELS[p] ?? p}</option>)}
+          <Select aria-label="协议" value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
+            {list.map((p) => <option key={p} value={p} disabled={(ipv6 && !protocolSupportsIPv6(p)) || (!!natConfig?.mappings.length && !natCovers(natConfig, p, undefined, f.mieru_transport, f.ss_network))}>{PROTOCOL_LABELS[p] ?? p}</option>)}
           </Select>
         </Field>
+        {!isNATServer(server) && <Field label="接入方式" hint="仅 IPv6 接入时，业务出站仍由节点出口配置决定。">
+          <Select aria-label="接入方式" value={ipv6 ? "ipv6" : "default"} onChange={e => {
+            const only = e.target.value === "ipv6";
+            setIPv6(only);
+            if (only && !protocolSupportsIPv6(f.protocol)) set("protocol", list.find(protocolSupportsIPv6) ?? "vless");
+          }}>
+            <option value="default">普通接入</option><option value="ipv6">仅 IPv6 接入</option>
+          </Select>
+        </Field>}
+        {ipv6 && <>
+          <Field label="IPv6 客户端访问地址" hint={server.public_host_ipv6 ? `留空继承 ${server.public_host_ipv6}` : "未配置服务器 IPv6 默认地址，请填写独立地址。"} className="sm:col-span-2">
+            <Input value={overrideHost} onChange={e => setOverrideHost(e.target.value)} placeholder={ipv6HostPlaceholder} maxLength={253} />
+          </Field>
+          <Field label="节点监听" hint="本机同时存在多个公网 IPv6 时，可指定其中一个。">
+            <Select aria-label="节点监听" value={fixedListener ? "address" : "public_ipv6"} onChange={e => setFixedListener(e.target.value === "address")}>
+              <option value="public_ipv6">跟随本机公网 IPv6</option><option value="address">指定本机 IPv6</option>
+            </Select>
+          </Field>
+          {fixedListener && <Field label="本机 IPv6">
+            <NetworkAddressSelect label="本机 IPv6" family="ipv6" value={listener} onChange={setListener} inventory={inventory.data} optional={false} />
+          </Field>}
+        </>}
         <Field label="名称" hint="留空自动生成"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={defaultNodeName(server, f.protocol)} /></Field>
         <Field label={isNATServer(server) ? "公网端口" : "端口"} hint={isNATServer(server) ? "留空从商家映射的可用公网端口选择" : "留空随机 20000-50000"}><Input aria-label="节点端口" type="number" min={1} max={65535} value={f.port} onChange={(e) => set("port", e.target.value)} /></Field>
         {f.protocol === "ss" && <>
@@ -668,9 +788,9 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
         {f.protocol === "vless" && <Field label="Reality 伪装域名" hint="默认 www.sony.com"><Input value={f.sni} onChange={(e) => set("sni", e.target.value)} placeholder="www.sony.com" /></Field>}
         {tls && (
           <>
-            <Field label="TLS 域名" hint="留空用服务器公网地址"><Input value={f.domain} onChange={(e) => set("domain", e.target.value)} /></Field>
+            <Field label="TLS 域名" hint={ipv6 ? "留空使用 IPv6 客户端访问域名" : "留空用服务器公网地址"}><Input value={f.domain} onChange={(e) => set("domain", e.target.value)} /></Field>
             <Field label="证书模式" hint="留空继承服务器">
-              <Select value={f.cert_mode} onChange={(e) => set("cert_mode", e.target.value)}>
+              <Select aria-label="证书模式" value={f.cert_mode} onChange={(e) => set("cert_mode", e.target.value)}>
                 <option value="">继承（{server.cert_mode}）</option>
                 <option value="self_signed">自签名</option>
                 <option value="acme">ACME</option>
@@ -691,7 +811,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
             </Select>
           </Field>
         )}
-      </div>
+      </fieldset>}
       {natMissing && <p role="alert" className="mt-3 text-sm text-destructive">NAT 映射未覆盖此公网端口或协议；UDP 节点需要 UDP 映射，SS 仅 TCP 模式需要 TCP 映射，TCP+UDP 模式需要两种映射。</p>}
       {natUnconfigured && <div role="alert" className="mt-3 rounded-lg border border-amber-500/30 p-3 text-sm">请先在商家面板做好端口映射，再填写映射配置。<Button size="sm" variant="link" onClick={onConfigureNAT}>去配置端口映射</Button></div>}
       {!natUnconfigured && natAwaiting && <p role="alert" className="mt-3 text-sm text-muted-foreground">等待在线 agent 确认 NAT 配置后再部署节点。</p>}

@@ -45,6 +45,12 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 	if d.NetworkBindingVersion != 0 && d.NetworkBindingVersion != NetworkBindingVersion {
 		return errors.New("不支持的网络绑定配置版本")
 	}
+	if d.IPv6IngressVersion != 0 && (d.IPv6IngressVersion != networkconfig.IPv6IngressVersion || d.NetworkBindingVersion != NetworkBindingVersion) {
+		return errors.New("仅 IPv6 接入能力版本无效")
+	}
+	if d.NetworkIngressVersion != 0 && (d.NetworkIngressVersion != NetworkIngressVersion || d.NetworkBindingVersion != NetworkBindingVersion) {
+		return errors.New("不支持的入口来源策略版本")
+	}
 	if d.NetworkEgressVersion != 0 && (d.NetworkEgressVersion != NetworkEgressVersion || d.NetworkBindingVersion != NetworkBindingVersion) {
 		return errors.New("不支持的中转出口配置版本或缺少网络绑定声明")
 	}
@@ -102,6 +108,12 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 		if n.Network != nil {
 			if d.NetworkBindingVersion != NetworkBindingVersion {
 				return errors.New("网络绑定配置缺少版本声明")
+			}
+			if n.Network.Policy.IngressFamily == "ipv6" && (d.IPv6IngressVersion != networkconfig.IPv6IngressVersion || n.Core != "singbox" || d.NAT != nil) {
+				return errors.New("仅 IPv6 节点需要兼容的独立公网 sing-box 部署")
+			}
+			if n.Network.Policy.Ingress != nil && d.NetworkIngressVersion != NetworkIngressVersion {
+				return errors.New("入口来源策略缺少独立版本声明")
 			}
 			if n.Core != "singbox" && (n.Network.Policy.EgressProfileID != 0 || n.Network.OuterBinding() != nil || n.Network.HasTransport()) {
 				return errors.New("独立内核仅支持指定监听")

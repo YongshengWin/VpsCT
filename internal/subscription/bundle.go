@@ -71,16 +71,18 @@ type ChainedProxy struct {
 
 // Bundle is the format-independent result of the generator.
 type Bundle struct {
-	Name          string
-	Proxies       []proxynode.Proxy
-	Chains        []ChainedProxy
-	Groups        []domain.ProxyGroup
-	Rules         []string
-	RuleProviders map[string]any
-	Template      *domain.RuleTemplate
-	Userinfo      *Userinfo
-	InfoNodes     []string
-	GeneratedAt   time.Time
+	// ValidationOnly is used for syntax checks with no actual subscription nodes.
+	ValidationOnly bool
+	Name           string
+	Proxies        []proxynode.Proxy
+	Chains         []ChainedProxy
+	Groups         []domain.ProxyGroup
+	Rules          []string
+	RuleProviders  map[string]any
+	Template       *domain.RuleTemplate
+	Userinfo       *Userinfo
+	InfoNodes      []string
+	GeneratedAt    time.Time
 }
 
 // AllProxyNames returns proxies + chains in output order.

@@ -30,6 +30,8 @@ type request struct {
 	Encoding                string
 	Body                    []byte
 	NetworkBindingVersion   int `json:",omitempty"`
+	NetworkIngressVersion   int `json:",omitempty"`
+	IPv6IngressVersion      int `json:",omitempty"`
 	NetworkEgressVersion    int `json:",omitempty"`
 	MitaVersion             int `json:",omitempty"`
 	NetworkSSHVersion       int `json:",omitempty"`
@@ -74,6 +76,18 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 				return nil, errors.New("unsupported network binding request version")
 			}
 			in.NetworkBindingVersion = networkconfig.BindingVersion
+		}
+		if version := r.Header.Get(networkconfig.IngressHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.IngressVersion) {
+				return nil, errors.New("unsupported network ingress request version")
+			}
+			in.NetworkIngressVersion = networkconfig.IngressVersion
+		}
+		if version := r.Header.Get(networkconfig.IPv6IngressHeader); version != "" {
+			if version != fmt.Sprint(networkconfig.IPv6IngressVersion) || in.NetworkBindingVersion != networkconfig.BindingVersion || in.NetworkIngressVersion != networkconfig.IngressVersion {
+				return nil, errors.New("unsupported IPv6 ingress request version")
+			}
+			in.IPv6IngressVersion = networkconfig.IPv6IngressVersion
 		}
 		if version := r.Header.Get(networkconfig.EgressHeader); version != "" {
 			if version != fmt.Sprint(networkconfig.EgressVersion) || in.NetworkBindingVersion != networkconfig.BindingVersion {
@@ -219,6 +233,22 @@ func Entry(args []string) (bool, error) {
 		}
 		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
 			r.Header.Set(networkconfig.BindingHeader, fmt.Sprint(in.NetworkBindingVersion))
+		}
+	}
+	if in.NetworkIngressVersion != 0 {
+		if in.NetworkIngressVersion != networkconfig.IngressVersion || in.NetworkBindingVersion != networkconfig.BindingVersion {
+			return true, errors.New("unsupported network ingress request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.IngressHeader, fmt.Sprint(in.NetworkIngressVersion))
+		}
+	}
+	if in.IPv6IngressVersion != 0 {
+		if in.IPv6IngressVersion != networkconfig.IPv6IngressVersion || in.NetworkBindingVersion != networkconfig.BindingVersion || in.NetworkIngressVersion != networkconfig.IngressVersion {
+			return true, errors.New("unsupported IPv6 ingress request version")
+		}
+		if !in.Public && in.Method == http.MethodGet && u.Path == "/api/agent/v1/desired" {
+			r.Header.Set(networkconfig.IPv6IngressHeader, fmt.Sprint(in.IPv6IngressVersion))
 		}
 	}
 	if in.NetworkEgressVersion != 0 {

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { AuthProvider, useAuth } from "@/lib/auth";
+import { AuthProvider, useAuth, useProductPermissions } from "@/lib/auth";
 import { ToastProvider } from "@/components/toast";
 import { Layout } from "@/components/layout";
 import { Spinner } from "@/components/ui";
@@ -31,11 +31,14 @@ const queryClient = new QueryClient({
   },
 });
 
-function RequireAuth({ children, admin }: { children: React.ReactNode; admin?: boolean }) {
+function RequireAuth({ children, admin, permissions: required }: { children: React.ReactNode; admin?: boolean; permissions?: string[] }) {
   const { user, loading } = useAuth();
+  const permissions = useProductPermissions();
   const loc = useLocation();
   if (loading) return <Spinner className="min-h-screen" />;
   if (!user) return <Navigate to="/login" replace state={{ from: loc.pathname }} />;
+  if (required && permissions.loading) return <Spinner className="min-h-screen" />;
+  if (required && !required.some(permissions.can)) return <Navigate to="/" replace />;
   if (admin && user.role !== "admin") return <Navigate to="/" replace />;
   return <>{children}</>;
 }
@@ -45,6 +48,11 @@ function LoginRoute() {
   if (loading) return <Spinner className="min-h-screen" />;
   if (user) return <Navigate to="/" replace />;
   return <LoginPage />;
+}
+
+function HomeRoute() {
+  const { user } = useAuth();
+  return user?.role === "admin" ? <DashboardPage /> : <Navigate to="/shares" replace />;
 }
 
 // Live updates: subscribe to SSE and invalidate affected queries.
@@ -124,21 +132,21 @@ export default function App() {
             <Routes>
               <Route path="/login" element={<LoginRoute />} />
               <Route element={<RequireAuth><Layout /></RequireAuth>}>
-                <Route index element={<DashboardPage />} />
+                <Route index element={<HomeRoute />} />
                 <Route path="servers" element={<RequireAuth admin><ServersPage /></RequireAuth>} />
                 <Route path="servers/:id" element={<RequireAuth admin><ServerDetailPage /></RequireAuth>} />
                 <Route path="nodes" element={<RequireAuth admin><NodesPage /></RequireAuth>} />
                 <Route path="externals" element={<RequireAuth admin><ExternalsPage /></RequireAuth>} />
-                <Route path="subscriptions" element={<SubscriptionsPage />} />
+                <Route path="subscriptions" element={<RequireAuth admin><SubscriptionsPage /></RequireAuth>} />
                 <Route path="subscriptions/new" element={<RequireAuth admin><SubscriptionEditorPage /></RequireAuth>} />
                 <Route path="subscriptions/:id/edit" element={<RequireAuth admin><SubscriptionEditorPage /></RequireAuth>} />
                 <Route path="shares" element={<SharesPage />} />
                 <Route path="shares/:id" element={<ShareDetailPage />} />
-                <Route path="templates" element={<RequireAuth admin><TemplatesPage /></RequireAuth>} />
+                <Route path="templates" element={<RequireAuth permissions={["templates.create", "templates.edit", "templates.delete"]}><TemplatesPage /></RequireAuth>} />
                 <Route path="connlog" element={<RequireAuth admin><ConnlogPage /></RequireAuth>} />
                 <Route path="account" element={<AccountPage />} />
-                <Route path="ai" element={<AIPage />} />
-                <Route path="manual" element={<ManualPage />} />
+                <Route path="ai" element={<RequireAuth permissions={["ai.access"]}><AIPage /></RequireAuth>} />
+                <Route path="manual" element={<RequireAuth admin><ManualPage /></RequireAuth>} />
                 <Route path="users" element={<RequireAuth admin><UsersPage /></RequireAuth>} />
                 <Route path="settings" element={<RequireAuth admin><SettingsPage /></RequireAuth>} />
                 <Route path="*" element={<Navigate to="/" replace />} />

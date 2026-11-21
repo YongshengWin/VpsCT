@@ -309,12 +309,14 @@ func (a *API) listUsers(w http.ResponseWriter, r *http.Request) error {
 }
 
 type userInput struct {
-	Username string      `json:"username"`
-	Nickname *string     `json:"nickname"`
-	Password string      `json:"password"`
-	Role     domain.Role `json:"role"`
-	Enabled  *bool       `json:"enabled"`
-	Avatar   *string     `json:"avatar"` // "", preset:<id> or image data URL
+	Username       string      `json:"username"`
+	Nickname       *string     `json:"nickname"`
+	Password       string      `json:"password"`
+	Role           domain.Role `json:"role"`
+	Enabled        *bool       `json:"enabled"`
+	Avatar         *string     `json:"avatar"` // "", preset:<id> or image data URL
+	ReauthPassword string      `json:"reauth_password"`
+	ReauthCode     string      `json:"reauth_code"`
 }
 
 func (a *API) createUser(w http.ResponseWriter, r *http.Request) error {
@@ -327,6 +329,11 @@ func (a *API) createUser(w http.ResponseWriter, r *http.Request) error {
 	}
 	if in.Role != domain.RoleAdmin {
 		in.Role = domain.RoleUser
+	}
+	if in.Role == domain.RoleAdmin {
+		if err := a.permissionReauth(w, r, in.ReauthPassword, in.ReauthCode); err != nil {
+			return err
+		}
 	}
 	hash, err := auth.HashPassword(in.Password)
 	if err != nil {
@@ -359,6 +366,9 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	if err := a.protectControllerOwner(r, id); err != nil {
+		return err
+	}
 	u, err := a.Store.GetUser(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
@@ -382,6 +392,11 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 		return httpx.BadRequest("角色无效")
 	}
 	if in.Role != "" {
+		if in.Role == domain.RoleAdmin && u.Role != domain.RoleAdmin {
+			if err := a.permissionReauth(w, r, in.ReauthPassword, in.ReauthCode); err != nil {
+				return err
+			}
+		}
 		if u.ID == me.ID && in.Role != domain.RoleAdmin {
 			return httpx.BadRequest("不能降级自己的角色")
 		}
@@ -409,12 +424,14 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		u.PasswordHash = hash
-		_ = a.Store.DeleteUserSessions(r.Context(), u.ID)
 	}
-	if err := a.Store.UpdateUser(r.Context(), &u); err != nil {
+	if err := a.Store.UpdateManagedUser(r.Context(), *me, &u, false); err != nil {
+		if errors.Is(err, store.ErrPermissionDenied) {
+			return httpx.ErrForbidden
+		}
 		return err
 	}
-	if in.Role != "" || in.Enabled != nil {
+	if in.Password != "" || in.Role != "" || in.Enabled != nil {
 		_ = a.Store.DeleteUserSessions(r.Context(), u.ID)
 	}
 	a.audit(r, "user.update", u.Username, map[string]any{"role": u.Role, "enabled": u.Enabled, "password_changed": in.Password != ""})
@@ -425,6 +442,9 @@ func (a *API) updateUser(w http.ResponseWriter, r *http.Request) error {
 func (a *API) deleteUser(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathInt64(r, "id")
 	if err != nil {
+		return err
+	}
+	if err := a.protectControllerOwner(r, id); err != nil {
 		return err
 	}
 	if id == userFrom(r.Context()).ID {

@@ -9,16 +9,30 @@ import (
 
 	"ctlvps/internal/domain"
 	"ctlvps/internal/natconfig"
+	"ctlvps/internal/networkconfig"
 )
 
-const serverCols = `id, name, region, public_host, tags, notes, quota_bytes, quota_reset_day, quota_billing, core_mode, ipv4_only, cert_mode, enabled, created_at, updated_at, is_nat`
+const serverCols = `id, name, region, public_host, tags, notes, quota_bytes, quota_reset_day, quota_billing, core_mode, ipv4_only, cert_mode, enabled, created_at, updated_at, is_nat, public_host_ipv6`
+
+var ErrIPv6IngressInUse = errors.New("服务器有依赖此设置的仅 IPv6 节点，请先调整这些节点的访问地址")
+
+func normalizeServerIPv6(v *domain.Server) error {
+	if v.PublicHostIPv6 == "" {
+		return nil
+	}
+	host, err := networkconfig.NormalizeIPv6Host(v.PublicHostIPv6)
+	if err == nil {
+		v.PublicHostIPv6 = host
+	}
+	return err
+}
 
 func scanServer(sc interface{ Scan(...any) error }) (domain.Server, error) {
 	var v domain.Server
 	var tags, created, updated string
 	var ipv4Only, enabled, isNAT int
 	if err := sc.Scan(&v.ID, &v.Name, &v.Region, &v.PublicHost, &tags, &v.Notes, &v.QuotaBytes, &v.QuotaResetDay, &v.QuotaBilling,
-		&v.CoreMode, &ipv4Only, &v.CertMode, &enabled, &created, &updated, &isNAT); err != nil {
+		&v.CoreMode, &ipv4Only, &v.CertMode, &enabled, &created, &updated, &isNAT, &v.PublicHostIPv6); err != nil {
 		return v, err
 	}
 	v.Tags = jsonList[string](tags)
@@ -43,6 +57,9 @@ func (s *Store) CreateServerWithCalibration(ctx context.Context, v *domain.Serve
 
 // CreateServerWithNATAndCalibration atomically stores onboarding intent before agent enrollment.
 func (s *Store) CreateServerWithNATAndCalibration(ctx context.Context, v *domain.Server, config *natconfig.Config, calibratedBytes *int64, periodStart time.Time, providerDirections ...[2]int64) error {
+	if err := normalizeServerIPv6(v); err != nil {
+		return err
+	}
 	c, err := normalizeNAT(config)
 	if err != nil {
 		return err
@@ -74,9 +91,9 @@ func (s *Store) CreateServerWithNATAndCalibration(ctx context.Context, v *domain
 		v.Tags = []string{}
 	}
 	return s.Tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO servers(name,region,public_host,tags,notes,quota_bytes,quota_reset_day,quota_billing,core_mode,ipv4_only,cert_mode,enabled,created_at,updated_at,is_nat)
-			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), fmtTime(now), b2i(v.IsNAT))
+		res, err := tx.ExecContext(ctx, `INSERT INTO servers(name,region,public_host,tags,notes,quota_bytes,quota_reset_day,quota_billing,core_mode,ipv4_only,cert_mode,enabled,created_at,updated_at,is_nat,public_host_ipv6)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), fmtTime(now), b2i(v.IsNAT), v.PublicHostIPv6)
 		if err != nil {
 			return err
 		}
@@ -102,6 +119,9 @@ func (s *Store) UpdateServer(ctx context.Context, v *domain.Server) error {
 // UpdateServerWithCalibration preserves the current calibration on ordinary
 // edits and clears it if the billing reset day or quota mode changes.
 func (s *Store) UpdateServerWithCalibration(ctx context.Context, v *domain.Server, calibratedBytes *int64, periodStart time.Time, providerDirections ...[2]int64) error {
+	if err := normalizeServerIPv6(v); err != nil {
+		return err
+	}
 	if v.QuotaBytes < 0 {
 		return errors.New("invalid server quota")
 	}
@@ -125,15 +145,26 @@ func (s *Store) UpdateServerWithCalibration(ctx context.Context, v *domain.Serve
 			}
 		}
 		var oldResetDay, oldNAT int
-		var oldBilling string
-		if err := tx.QueryRowContext(ctx, `SELECT quota_reset_day, quota_billing, is_nat FROM servers WHERE id=?`, v.ID).Scan(&oldResetDay, &oldBilling, &oldNAT); err != nil {
+		var oldBilling, oldIPv6Host string
+		if err := tx.QueryRowContext(ctx, `SELECT quota_reset_day, quota_billing, is_nat, public_host_ipv6 FROM servers WHERE id=?`, v.ID).Scan(&oldResetDay, &oldBilling, &oldNAT, &oldIPv6Host); err != nil {
 			return err
 		}
 		if oldNAT == 1 && !v.IsNAT && ((vnat.DesiredConfig != nil && len(vnat.DesiredConfig.Mappings) > 0) || (vnat.Report != nil && (vnat.Report.Configured || vnat.Report.Status == "error" || vnat.Report.Status == "pending")) || vnat.Pending) {
 			return fmt.Errorf("%w: 请先清除端口映射并等待生效，再改为独立公网", ErrNATResources)
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE servers SET name=?, region=?, public_host=?, tags=?, notes=?, quota_bytes=?, quota_reset_day=?, quota_billing=?, core_mode=?, ipv4_only=?, cert_mode=?, enabled=?, updated_at=?, is_nat=? WHERE id=?`,
-			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), b2i(v.IsNAT), v.ID); err != nil {
+		if oldIPv6Host != v.PublicHostIPv6 || v.IsNAT {
+			var depends bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM node_networks nn JOIN nodes n ON n.id=nn.node_id
+                WHERE nn.server_id=? AND n.revoked=0 AND json_extract(nn.policy,'$.ingress_family')='ipv6'
+                AND (? OR json_extract(nn.policy,'$.advertise_mode')='inherit_ipv6'))`, v.ID, v.IsNAT).Scan(&depends); err != nil {
+				return err
+			}
+			if depends {
+				return ErrIPv6IngressInUse
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE servers SET name=?, region=?, public_host=?, tags=?, notes=?, quota_bytes=?, quota_reset_day=?, quota_billing=?, core_mode=?, ipv4_only=?, cert_mode=?, enabled=?, updated_at=?, is_nat=?, public_host_ipv6=? WHERE id=?`,
+			v.Name, v.Region, v.PublicHost, jsonStr(v.Tags), v.Notes, v.QuotaBytes, v.QuotaResetDay, v.QuotaBilling, v.CoreMode, b2i(v.IPv4Only), v.CertMode, b2i(v.Enabled), fmtTime(now), b2i(v.IsNAT), v.PublicHostIPv6, v.ID); err != nil {
 			return err
 		}
 		if oldResetDay != v.QuotaResetDay || oldBilling != v.QuotaBilling {

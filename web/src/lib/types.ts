@@ -191,6 +191,7 @@ export interface Server {
   name: string;
   region: string;
   public_host: string;
+  public_host_ipv6?: string;
   tags: string[];
   notes: string;
   quota_bytes: number;
@@ -212,6 +213,8 @@ export interface Server {
 }
 
 export interface Node {
+  ipv6_ingress_ready?: boolean;
+  exit_region?: string;
   original_name?: string;
   network?: NodeNetworkPolicy | null;
   network_revision?: number;
@@ -363,6 +366,7 @@ export type ShareStatus = "active" | "exhausted" | "expired" | "paused" | "revok
 
 export interface Share {
   id: number;
+  public_id: string;
   name: string;
   user_id?: number | null;
   targets: ShareTarget[];

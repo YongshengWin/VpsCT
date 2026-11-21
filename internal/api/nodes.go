@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,7 +30,8 @@ func queryInt64Ptr(r *http.Request, name string) *int64 {
 
 // NodeView adds derived display fields.
 type NodeView struct {
-	Traffic *store.TrafficSummary `json:"traffic,omitempty"`
+	IPv6IngressReady *bool                 `json:"ipv6_ingress_ready,omitempty"`
+	Traffic          *store.TrafficSummary `json:"traffic,omitempty"`
 	domain.Node
 	URI            string `json:"uri,omitempty"`
 	ServerName     string `json:"server_name,omitempty"`
@@ -80,8 +82,18 @@ func (a *API) nodeViews(r *http.Request, nodes []domain.Node) []NodeView {
 		if n.ExternalSubID != nil {
 			v.ExternalName = exts[*n.ExternalSubID]
 		}
-		if uri, err := proxynode.ToURI(subscription.ProxyFor(n, hosts)); err == nil {
-			v.URI = uri
+		available := true
+		if n.Network != nil && n.Network.IngressFamily == "ipv6" {
+			_, available, _ = a.Store.AppliedSubscriptionNode(ctx, n)
+			v.IPv6IngressReady = &available
+			if !available {
+				v.Params = nil
+			}
+		}
+		if available {
+			if uri, err := proxynode.ToURI(subscription.ProxyFor(n, hosts)); err == nil {
+				v.URI = uri
+			}
 		}
 		out = append(out, v)
 	}
@@ -486,6 +498,38 @@ func (a *API) updateNode(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
+type nodeExitRegionInput struct {
+	ExitRegion string `json:"exit_region"`
+}
+
+func (a *API) setNodeExitRegion(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathInt64(r, "id")
+	if err != nil {
+		return err
+	}
+	var in nodeExitRegionInput
+	if err := httpx.Decode(r, &in); err != nil {
+		return err
+	}
+	region := strings.ToUpper(strings.TrimSpace(in.ExitRegion))
+	if region != "" && (len(region) != 2 || region[0] < 'A' || region[0] > 'Z' || region[1] < 'A' || region[1] > 'Z') {
+		return httpx.BadRequest("地区须为空或两位地区代码")
+	}
+	if err := a.Store.SetNodeExitRegion(r.Context(), id, region); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return httpx.ErrNotFound
+		}
+		return err
+	}
+	n, err := a.Store.GetNode(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	_ = a.audit(r, "node.exit_region.update", strconv.FormatInt(id, 10), map[string]any{"exit_region": region})
+	httpx.OK(w, a.nodeViews(r, []domain.Node{n})[0])
+	return nil
+}
+
 func (a *API) deleteNode(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathInt64(r, "id")
 	if err != nil {
@@ -517,6 +561,16 @@ func (a *API) nodeURI(w http.ResponseWriter, r *http.Request) error {
 	n, err := a.Store.GetNode(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
+	}
+	if n.Network != nil && n.Network.IngressFamily == "ipv6" {
+		var ready bool
+		n, ready, err = a.Store.AppliedSubscriptionNode(r.Context(), n)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return httpx.E(http.StatusConflict, "ipv6_ingress_pending", "等待仅 IPv6 监听应用后才能导出节点")
+		}
 	}
 	p := subscription.ProxyFor(n, a.serverHosts(r))
 	if p.Type == "ssh" || p.Type == "wireguard" || p.Type == "mieru" {

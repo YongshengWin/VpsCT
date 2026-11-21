@@ -47,6 +47,7 @@ dns:
   proxy-server-nameserver:
     - https://223.5.5.5/dns-query
 proxies: []
+x-vpsct-other-regions: true
 proxy-groups:
   - name: "⚡️ smart"
     type: url-test
@@ -57,7 +58,7 @@ proxy-groups:
   - name: "☑️ select"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Global.png"
-    proxies: ["⚡️ smart", DIRECT, "{{all}}"]
+    proxies: ["⚡️ smart", "🇭🇰 香港", "🇸🇬 新加坡", "🇯🇵 日本", "🇺🇸 美国", "🇳🇱 荷兰", "{{other-regions}}", "🌐 未分类", DIRECT, "{{all}}"]
   - name: "🔍 Google"
     type: select
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/Google.png"
@@ -107,31 +108,34 @@ proxy-groups:
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/HK.png"
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
-    proxies: ["{{all|(?i)(香港|HK|Hong ?Kong|🇭🇰)}}"]
+    proxies: ["{{region:HK}}"]
   - name: "🇸🇬 新加坡"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/SG.png"
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
-    proxies: ["{{all|(?i)(新加坡|SG|Singapore|🇸🇬)}}"]
+    proxies: ["{{region:SG}}"]
   - name: "🇯🇵 日本"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/JP.png"
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
-    proxies: ["{{all|(?i)(日本|JP|Japan|🇯🇵)}}"]
+    proxies: ["{{region:JP}}"]
   - name: "🇺🇸 美国"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/Orz-3/mini@0e2bab71d8dbe512db9b5e7a9000a5661dd0e327/Color/US.png"
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
-    proxies: ["{{all|(?i)(美国|US|United ?States|🇺🇸)}}"]
+    proxies: ["{{region:US}}"]
   - name: "🇳🇱 荷兰"
     type: url-test
     icon: "https://cdn.jsdelivr.net/gh/lipis/flag-icons@main/flags/1x1/nl.svg"
     url: "http://cp.cloudflare.com/generate_204"
     interval: 300
-    proxies: ["{{all|(?i)(荷兰|NL|Netherlands|🇳🇱)}}"]
+    proxies: ["{{region:NL}}"]
+  - name: "🌐 未分类"
+    type: select
+    proxies: ["{{region:UNKNOWN}}"]
 rule-providers:
   Gemini: { type: http, behavior: classical, format: text, interval: 86400, path: ./rules/Gemini.list, url: "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Surge/Gemini/Gemini.list" }
   AdBlock: { type: http, behavior: classical, format: text, interval: 86400, path: ./rules/Adblock4limbo.list, url: "https://limbopro.com/Adblock4limbo_surge.list" }
@@ -175,7 +179,7 @@ rules:
   - RULE-SET,Spotify,🎧 Spotify
   - RULE-SET,Microsoft,DIRECT
   - GEOIP,CN,DIRECT
-  - MATCH,🇺🇸 美国
+  - MATCH,☑️ select
 `
 
 // builtinSurgeTemplate is a managed fragment for a single #!include.
@@ -366,7 +370,7 @@ const builtinSingBoxTemplate = `{
 // BuiltinTemplates are seeded on first start.
 func BuiltinTemplates() []domain.RuleTemplate {
 	return []domain.RuleTemplate{
-		{Name: "默认 mihomo 模板", Kind: "mihomo", Description: "fake-ip + 1.1.1.1/8.8.8.8 DNS，smart/地区组 + blackmatrix7 RULE-SET 分流，节点用 {{all}} / {{all|正则}} 注入。", Content: builtinMihomoTemplate, IsBuiltin: true},
+		{Name: "默认 mihomo 模板", Kind: "mihomo", Description: "fake-ip DNS、自动测速与按实际出口地区分组；无法确认的节点归入未分类。", Content: builtinMihomoTemplate, IsBuiltin: true},
 		{Name: "默认 Surge 模板", Kind: "surge", Description: "一条 /surge 链接：带 [Proxy] 段。主配置 [Proxy] 只 #!include 这一条，新增节点会进订阅。不要用策略组 policy-path 拉链式。", Content: builtinSurgeTemplate, IsBuiltin: true},
 		{Name: "默认 Shadowrocket 模板", Kind: "shadowrocket", Description: "小火箭完整配置：yaml=true，地区组/App 组 + RULE-SET 分流，节点用 {{PROXIES}} / {{all}} 注入。", Content: builtinShadowrocketTemplate, IsBuiltin: true},
 		{Name: "默认 sing-box 模板", Kind: "singbox", Description: "sing-box 1.11+：mixed 7890 + tun，与 mihomo 同套 smart/地区组与 geosite 分流。", Content: builtinSingBoxTemplate, IsBuiltin: true},

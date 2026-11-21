@@ -7,14 +7,24 @@ container="ctlvps-boundary-test-$$"
 cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; rm -rf -- "$fixture"; }
 trap cleanup EXIT
 mode=${CTLVPS_BOUNDARY_MODE:-baseline}
+scenario=${CTLVPS_ACME_SCENARIO:-}
+case "$scenario" in ''|handshake|renewal) ;; *) echo 'unknown ACME scenario' >&2; exit 2;; esac
+if [[ -n "$scenario" && -z "${PEBBLE_BIN:-}" ]]; then
+ echo 'ACME scenarios require PEBBLE_BIN' >&2
+ exit 1
+fi
 if [[ -n "${PEBBLE_BIN:-}" && ( "$mode" != candidate || -z "${SINGBOX_BIN:-}" ) ]]; then
  echo 'PEBBLE_BIN requires candidate mode and SINGBOX_BIN' >&2
  exit 1
 fi
-go run ./scripts/security-boundary-test "$fixture" "$mode"
+if [[ -z "$scenario" ]]; then go run ./scripts/security-boundary-test "$fixture" "$mode"; fi
 arch=$(docker info --format '{{.Architecture}}')
 case "$arch" in aarch64|arm64) arch=arm64;; x86_64|amd64) arch=amd64;; *) exit 1;; esac
-CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$fixture/ctlvps-agent" ./scripts/proxy-hardening-test
+if [[ -n "${PROXY_HARDENING_BIN:-}" ]]; then
+ cp -- "$PROXY_HARDENING_BIN" "$fixture/ctlvps-agent"
+else
+ CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$fixture/ctlvps-agent" ./scripts/proxy-hardening-test
+fi
 if [[ -n "${SINGBOX_BIN:-}" ]]; then cp -- "$SINGBOX_BIN" "$fixture/sing-box"; fi
 if [[ -n "${SNELL_BIN:-}" ]]; then cp -- "$SNELL_BIN" "$fixture/snell-server"; fi
 if [[ -n "${SNELL_CLIENT_BIN:-}" ]]; then cp -- "$SNELL_CLIENT_BIN" "$fixture/snell-client"; fi
@@ -25,7 +35,11 @@ docker run -d --name "$container" --network none --privileged --cgroupns=private
  --mount "type=bind,src=$PWD,dst=/src,readonly" \
  --mount "type=bind,src=$fixture,dst=/fixtures,readonly" ctlvps-boundary-test:local >/dev/null
 bash scripts/wait-systemd-container.sh "$container"
-docker exec -e "CTLVPS_CANDIDATE=$([[ "$mode" == candidate ]] && echo 1 || echo 0)" "$container" python3 /src/scripts/security-boundary-test/run.py
+if [[ -z "$scenario" ]]; then
+ docker exec -e "CTLVPS_CANDIDATE=$([[ "$mode" == candidate ]] && echo 1 || echo 0)" "$container" python3 /src/scripts/security-boundary-test/run.py
+fi
 if [[ -n "${PEBBLE_BIN:-}" ]]; then
- docker exec "$container" python3 /src/scripts/security-boundary-test/acme_renewal.py
+ args=()
+ if [[ -n "$scenario" ]]; then args+=(--scenario "$scenario"); fi
+ docker exec "$container" python3 /src/scripts/security-boundary-test/acme_renewal.py "${args[@]}"
 fi

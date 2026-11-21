@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 
@@ -65,7 +66,7 @@ func resolveBindingSelection(n networkconfig.Node, direct *networkconfig.Direct,
 		if err != nil {
 			return i, err
 		}
-		if ipv4Only && !wanted.Is4() {
+		if ipv4Only && n.IngressFamily != "ipv6" && !wanted.Is4() {
 			return i, errors.New("服务器仅 IPv4 设置与所选地址冲突")
 		}
 		owner := ""
@@ -103,7 +104,26 @@ func resolveBindingSelection(n networkconfig.Node, direct *networkconfig.Direct,
 			return networkconfig.Resolved{}, fmt.Errorf("监听地址：%w", err)
 		}
 		a, _ := networkconfig.HostAddress(n.ListenAddress)
+		if n.IngressFamily == "ipv6" {
+			for _, raw := range interfaces[i.ID].TemporaryIPv6 {
+				p, _ := netip.ParsePrefix(raw)
+				if p.Addr() == a {
+					return networkconfig.Resolved{}, errors.New("仅 IPv6 节点不能绑定临时 IPv6 地址")
+				}
+			}
+		}
 		out.ListenAddress, out.ListenInterface = a.String(), &i
+	}
+	if n.ListenMode == "public_ipv6" {
+		ip, err := PublicIPv6Candidate(snapshot, n.ListenInterfaceID)
+		if err != nil {
+			return networkconfig.Resolved{}, err
+		}
+		i, err := address(ip.InterfaceID, ip.Address)
+		if err != nil {
+			return networkconfig.Resolved{}, err
+		}
+		out.ListenAddress, out.ListenInterface = ip.Address, &i
 	}
 	if direct == nil {
 		return out, nil
@@ -156,4 +176,35 @@ func resolveBindingSelection(n networkconfig.Node, direct *networkconfig.Direct,
 	}
 	out.Direct = rd
 	return out, nil
+}
+
+// PublicIPv6Candidate refuses to guess when a host has more than one eligible
+// address. A selected interface can disambiguate multi-homed hosts.
+func PublicIPv6Candidate(snapshot *agentproto.NetworkSnapshot, interfaceID string) (networkconfig.Address, error) {
+	var result networkconfig.Address
+	if snapshot != nil && snapshot.Status == "ok" {
+		for _, iface := range snapshot.Interfaces {
+			if !iface.Up || !iface.Carrier || iface.Kind == "loopback" || interfaceID != "" && iface.ID != interfaceID {
+				continue
+			}
+			for _, raw := range iface.UsableAddresses {
+				p, err := netip.ParsePrefix(raw)
+				if err != nil || !networkconfig.IsPublicIPv6(p.Addr().String()) || slices.Contains(iface.TemporaryIPv6, raw) {
+					continue
+				}
+				candidate := networkconfig.Address{InterfaceID: iface.ID, Address: p.Addr().String()}
+				if result == candidate {
+					continue
+				}
+				if result.Address != "" {
+					return networkconfig.Address{}, errors.New("有多个公网 IPv6 地址，请指定监听接口或具体地址")
+				}
+				result = candidate
+			}
+		}
+	}
+	if result.Address == "" {
+		return result, errors.New("监听接口没有可用的公网 IPv6")
+	}
+	return result, nil
 }

@@ -210,8 +210,8 @@ func (s *Store) UpdateTemplate(ctx context.Context, t *domain.RuleTemplate) erro
 	if len(t.Variables) == 0 {
 		t.Variables = []byte("{}")
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE rule_templates SET name=?, kind=?, description=?, content=?, variables=?, updated_at=? WHERE id=?`,
-		t.Name, t.Kind, t.Description, s.seal("rule_templates.content", t.Content), s.seal("rule_templates.variables", string(t.Variables)), fmtTime(now), t.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE rule_templates SET name=?, kind=?, description=?, content=?, variables=?, is_builtin=?, updated_at=? WHERE id=?`,
+		t.Name, t.Kind, t.Description, s.seal("rule_templates.content", t.Content), s.seal("rule_templates.variables", string(t.Variables)), b2i(t.IsBuiltin), fmtTime(now), t.ID)
 	t.UpdatedAt = now
 	return err
 }
@@ -231,9 +231,40 @@ func (s *Store) GetTemplate(ctx context.Context, id int64) (domain.RuleTemplate,
 	return t, err
 }
 
-// ListTemplates returns all templates.
+type TemplateVersion struct {
+	VersionID int64 `json:"version_id"`
+	domain.RuleTemplate
+}
+
+// TemplateVersions returns historical content already encrypted under the same
+// labels as its source; callers must authorize access to the owning template.
+func (s *Store) TemplateVersions(ctx context.Context, id int64) ([]TemplateVersion, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,template_id,name,kind,description,content,variables,is_builtin,created_at,updated_at FROM rule_template_versions WHERE template_id=? ORDER BY id DESC LIMIT 30`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	versions := []TemplateVersion{}
+	for rows.Next() {
+		var v TemplateVersion
+		var vars, created, updated string
+		var builtin int
+		if err := rows.Scan(&v.VersionID, &v.ID, &v.Name, &v.Kind, &v.Description, s.scanSecret("rule_templates.content", &v.Content), s.scanSecret("rule_templates.variables", &vars), &builtin, &created, &updated); err != nil {
+			return nil, err
+		}
+		v.Variables = rawOrEmpty(vars)
+		v.IsBuiltin = builtin == 1
+		v.CreatedAt = parseTime(created)
+		v.UpdatedAt = parseTime(updated)
+		versions = append(versions, v)
+	}
+	return versions, rows.Err()
+}
+
+// ListTemplates returns system templates; personal templates are private and
+// must only be listed through an account-scoped query.
 func (s *Store) ListTemplates(ctx context.Context) ([]domain.RuleTemplate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+tplCols+` FROM rule_templates ORDER BY is_builtin DESC, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+tplCols+` FROM rule_templates WHERE id NOT IN (SELECT template_id FROM personal_templates) ORDER BY is_builtin DESC, id`)
 	if err != nil {
 		return nil, err
 	}

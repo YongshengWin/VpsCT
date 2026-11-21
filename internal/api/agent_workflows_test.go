@@ -59,7 +59,7 @@ func TestAccessRouteBearerLifecycleBothTopologies(t *testing.T) {
 				in.LandingHost = "203.0.113.30"
 			}
 			member := c.do("POST", "/api/v1/users", map[string]any{"username": "member", "password": "password123", "role": "user"}, 201)
-			memberKey, _ := issueTestAPIKey(t, c, int64(member["id"].(float64)), "read", "write")
+			memberKey, _ := issueTestMemberSession(t, c, int64(member["id"].(float64)), "read", "write")
 			keyRequest(t, c, "GET", "/api/v1/access-routes/"+in.ID, memberKey, nil, nil, 403)
 			keyRequest(t, c, "POST", "/api/v1/access-routes/preview", memberKey, in, nil, 403)
 			keyRequest(t, c, "POST", "/api/v1/access-routes/preview", read, in, nil, 403)

@@ -117,9 +117,11 @@ sudo cat /opt/ctlvps/data/setup-token
 
 受管端支持 systemd，以及受支持的 Alpine/OpenRC 环境。代理服务端口仍需按配置开放；NAT 主机先配置商家端口映射。详见 [Alpine 与小内存主机](docs/operations.md#49-alpineopenrc-与小内存-vps)、[NAT 端口映射](docs/operations.md#48-nat-vps-的端口映射)。
 
+纯 IPv6 主机可以只填写「IPv6 公网地址」。部署时选择「仅 IPv6 接入」，预览监听网卡与发布地址，等 agent 确认后再导出节点。访问上游下载站受限时，可预先准备离线附件。[IPv6 接入与来源限制](docs/network.md) · [离线安装](docs/operations.md#410-纯-ipv6-被控机的离线附件)
+
 ### 3.3 生成第一份订阅
 
-在服务器详情部署节点，等待配置实际应用；打开「订阅链接」，选择节点和客户端格式，生成订阅。需要统一 DNS、代理组和分流时，先在「模板」中准备底稿。
+在服务器详情部署节点，等配置回执显示已应用，再打开「订阅链接」，选择节点和客户端格式。公共模板可以统一 DNS、代理组与分流。成员也可以在自己的分享详情复制模板，用实际节点预览草稿，再按客户端格式应用。Mihomo 地区组支持按实际出口地区归类。[模板、历史版本与分享](docs/subscriptions.md)
 
 登录后，点击右上角主题切换旁的**书本图标**进入内置使用手册：左侧按章节浏览，右侧定位当前小节，也可全文搜索。
 
@@ -140,10 +142,10 @@ UDP 固定转发按默认 256 MiB 代理预算，以 1024 个持续活跃会话�
 
 ## 5. 让 AI agent 接手操作
 
-打开「头像菜单 → AI 能力」，创建适当权限的 API key，并安装同版本 VpsCT Skill。支持页面提供的 Codex / Claude Code 安装方式，也可使用标准 HTTP 客户端。
+管理员可在「头像菜单 → AI 能力」创建 API key，并安装同版本 VpsCT Skill。普通成员需先获授 AI 接入权限。每把 key 可分别限制读写范围和允许调用的操作，读取分享链接及凭据需要相应的分享权限。支持页面提供的 Codex / Claude Code 安装方式，也可使用标准 HTTP 客户端。
 
 - **先发现**：查询实时能力、账户权限和 OpenAPI，请求字段以当前部署版本为准。
-- **再执行**：15 条主要操作流程覆盖接入、部署、线路、出口、订阅、分享、监控和维护。
+- **再执行**：按当前版本提供的流程接入服务器、部署节点、调整端口与入口来源，或管理订阅、分享和维护任务。
 - **查结果**：按资源或任务编号核对进展、失败原因与完成状态，保存成功不等于配置已应用。
 
 你可以这样描述任务：
@@ -159,7 +161,8 @@ UDP 固定转发按默认 256 MiB 代理预算，以 1024 个持续活跃会话�
 | 操作 | 入口与说明 |
 | --- | --- |
 | 看用量、校准账期 | 服务器详情 → 节点与概览；支持双向、仅入站、仅出站或两方向较大值，[公式与边界](docs/traffic-accounting.md) |
-| 管理访问与分享 | 分享页面管理凭据、配额和有效期；[订阅与分享说明](docs/subscriptions.md) |
+| 更换端口、限制直连 | 节点详情的「访问控制」可预览换端口，按中转 CIDR 或来源地区限制入口。服务器详情的「节点与概览」可记录特定网络不可用的端口。[网络策略](docs/network.md) · [端口管理](docs/operations.md#10-节点更换端口与不可用端口记录) |
+| 管理访问与分享 | 管理员可按资源委派操作，分别授权查看分享状态与订阅凭据。成员从自己的分享详情管理个人模板。[订阅与分享](docs/subscriptions.md) · [权限与自动化](docs/agent-api.md) |
 | 更新控制端与 agent | 原生安装使用安装器或受支持的网页维护；Docker 使用宿主机 Compose 脚本，[升级流程](docs/operations.md#5-更新) |
 | 备份与恢复 | 数据库、密钥与配置配套保存；回退需匹配的数据快照，[备份说明](docs/operations.md#43-备份数据) |
 | 卸载与清理 | 先确认控制端 / agent 和保留范围，默认保留数据，[卸载说明](docs/operations.md#7-卸载与清理) |
@@ -196,7 +199,8 @@ Compose 脚本停服备份数据库与密钥，更新后检查就绪，失败时
 | [AI agent 接口](docs/agent-api.md) | API key、能力发现、操作流程与 Skill |
 | [统一流量计算](docs/traffic-accounting.md) | 配额公式、账期、校准和计量对象 |
 | [隐私说明](docs/privacy.md) · [安全设计](docs/security-design.md) | 数据采集、权限和系统安全边界 |
-| [变更记录](CHANGELOG.md) · [发布流程](docs/releasing.md) | 版本变化、构建与发行 |
+| [变更记录](CHANGELOG.md) · [发布流程](docs/releasing.md) | 版本变化、并行 CI、完整发布验收与发行 |
+| [依赖维护](docs/dependency-maintenance.md) | 依赖按需集中更新，安全审计和告警独立运行 |
 | [贡献指南](CONTRIBUTING.md) · [社区约定](CODE_OF_CONDUCT.md) | 本地开发、验证与协作 |
 
 欢迎提交 [Issue](https://github.com/YongshengWin/VpsCT/issues) 或 [PR](https://github.com/YongshengWin/VpsCT/pulls)。安全问题请通过 [安全报告流程](SECURITY.md) 私密反馈。
