@@ -741,7 +741,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
         </dl>
       </div> : <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
         <Field label="协议">
-          <Select value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
+          <Select aria-label="协议" value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
             {list.map((p) => <option key={p} value={p} disabled={(ipv6 && !protocolSupportsIPv6(p)) || (!!natConfig?.mappings.length && !natCovers(natConfig, p, undefined, f.mieru_transport, f.ss_network))}>{PROTOCOL_LABELS[p] ?? p}</option>)}
           </Select>
         </Field>
@@ -790,7 +790,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
           <>
             <Field label="TLS 域名" hint={ipv6 ? "留空使用 IPv6 客户端访问域名" : "留空用服务器公网地址"}><Input value={f.domain} onChange={(e) => set("domain", e.target.value)} /></Field>
             <Field label="证书模式" hint="留空继承服务器">
-              <Select value={f.cert_mode} onChange={(e) => set("cert_mode", e.target.value)}>
+              <Select aria-label="证书模式" value={f.cert_mode} onChange={(e) => set("cert_mode", e.target.value)}>
                 <option value="">继承（{server.cert_mode}）</option>
                 <option value="self_signed">自签名</option>
                 <option value="acme">ACME</option>

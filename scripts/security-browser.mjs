@@ -36,7 +36,16 @@ try{
  const missing=await page.evaluate(async()=>{const r=await fetch('/api/v1/auth/profile',{method:'PUT',headers:{'Content-Type':'application/json'},body:'{"nickname":"tampered"}'});return r.status});assert.equal(missing,403);
  const csp=await page.evaluate(()=>new Promise(resolve=>{window.__injected=false;const el=document.createElement('script');el.textContent='window.__injected=true';document.body.append(el);setTimeout(()=>resolve(window.__injected),100)}));assert.equal(csp,false);
  const after=await inspect();assert.equal(after.servers.length,before.servers.length);assert.equal(after.me.nickname,before.me.nickname);assert.equal(violations.length,0);
- await page.goto(origin+'/servers/'+after.servers[0].id);await page.getByRole('button',{name:'部署节点',exact:true}).first().click();const dialog=page.getByRole('dialog');await dialog.getByRole('combobox').nth(0).click();await page.getByRole('option',{name:'Trojan',exact:true}).click();await dialog.getByRole('combobox').nth(1).click();await page.getByRole('option',{name:'外部证书',exact:true}).click();await dialog.getByText('外部证书 ID',{exact:true}).locator('..').locator('input').fill('fixture-cert');await dialog.getByRole('button',{name:'部署',exact:true}).click();await dialog.waitFor({state:'hidden'});
+ await page.goto(origin+'/servers/'+after.servers[0].id);
+ await page.getByRole('button',{name:'部署节点',exact:true}).first().click();
+ const dialog=page.getByRole('dialog');
+ await dialog.getByRole('combobox',{name:'协议',exact:true}).click();
+ await page.getByRole('option',{name:'Trojan',exact:true}).click();
+ await dialog.getByRole('combobox',{name:'证书模式',exact:true}).click();
+ await page.getByRole('option',{name:'外部证书',exact:true}).click();
+ await dialog.getByText('外部证书 ID',{exact:true}).locator('..').locator('input').fill('fixture-cert');
+ await dialog.getByRole('button',{name:'部署',exact:true}).click();
+ await dialog.waitFor({state:'hidden'});
  // A manually recovered agent retains failed history without a stale banner.
  const maintenanceURL=`**/api/v1/servers/${after.servers[0].id}/maintenance`;
  const failedJob={id:'fixture-maintenance',role:'agent',action:'update',status:'failed',version:'v0.1.5',message:'fixture download failure',updated_at:new Date().toISOString()};
