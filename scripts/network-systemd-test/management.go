@@ -57,7 +57,13 @@ func (a *fixtureAdmin) request(method, path string, body any, want int, out any)
 	must(err)
 	defer res.Body.Close()
 	if res.StatusCode != want {
-		panic(fmt.Sprintf("fixture management %s %s: status %d, want %d", method, path, res.StatusCode, want))
+		var failure struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(res.Body, 4096)).Decode(&failure)
+		panic(fmt.Sprintf("fixture management %s %s: status %d, want %d, code %q", method, path, res.StatusCode, want, failure.Error.Code))
 	}
 	if out != nil {
 		must(json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(out))

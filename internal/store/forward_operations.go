@@ -84,6 +84,12 @@ func (s *Store) requestPortForward(ctx context.Context, in PortForwardRequest, a
 	kind := "forward_" + in.Action
 	var op NetworkOperation
 	err = s.Tx(ctx, func(tx *sql.Tx) error {
+		// Reserve the SQLite writer before taking the review snapshot. Upgrading
+		// a read transaction can return SQLITE_BUSY immediately if an agent is
+		// writing. A zero-row write waits under busy_timeout and changes no rows.
+		if _, err := tx.ExecContext(ctx, `UPDATE network_operations SET status=status WHERE 0`); err != nil {
+			return err
+		}
 		previous, err := scanNetworkOperation(tx.QueryRowContext(ctx, `SELECT `+networkOperationCols+` FROM network_operations WHERE id=?`, in.ID))
 		if err == nil {
 			if previous.Kind != kind || previous.RequestHash != hash {

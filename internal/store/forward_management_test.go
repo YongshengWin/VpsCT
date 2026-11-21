@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/corecompat"
@@ -60,6 +61,51 @@ func TestUDPRequiresCapableAgentAndOfficialCore(t *testing.T) {
 	v, err = s.PreviewPortForward(ctx, in)
 	if err != nil || !v.Ready {
 		t.Fatal("disabled history rejected", v, err)
+	}
+}
+
+func TestReviewedForwardWaitsForUnrelatedWriter(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	node, diag, _ := readyNetworkFixture(t, s)
+	n, err := s.GetNode(ctx, node.NodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := forwardFixture(*n.ServerID, 25101)
+	f.Config.TargetHost = "203.0.113.10"
+	diag.NetworkForwardVersion = agentproto.NetworkForwardVersion
+	writeNetworkDiagnostics(t, s, f.ServerID, diag)
+	in := PortForwardRequest{ID: strings.Repeat("e", 32), Action: "create", ServerID: f.ServerID, Name: f.Name, Enabled: true, Config: &f.Config}
+	view, err := s.PreviewPortForward(ctx, in)
+	if err != nil || !view.Ready {
+		t.Fatal(view.Checks, err)
+	}
+	in.ExpectedImpact = view.Impact.Token
+
+	writer, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, err := writer.ExecContext(ctx, `INSERT INTO settings(key,value) VALUES('test_unrelated_write','1')`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.RequestReviewedPortForward(ctx, in, domain.AuditEvent{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("request returned while the unrelated writer held the lock: %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := writer.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
