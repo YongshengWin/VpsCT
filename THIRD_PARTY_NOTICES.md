@@ -19,7 +19,7 @@ VpsCT 的许可证适用于本项目原创代码，不替代第三方组件各�
 
 | 生态 | 组件 | 版本 | 许可与原始声明 |
 |---|---|---|---|
-| go-runtime | Go standard library and runtime | go1.26.10 | BSD-3-Clause; [LICENSE](third_party/go-runtime/go1.26.10/LICENSE), [PATENTS](third_party/go-runtime/go1.26.10/PATENTS) |
+| go-runtime | Go standard library and runtime | go1.26.11 | BSD-3-Clause; [LICENSE](third_party/go-runtime/go1.26.11/LICENSE), [PATENTS](third_party/go-runtime/go1.26.11/PATENTS) |
 | go | cloud.google.com/go/compute/metadata | v0.7.0 | See license text; [LICENSE](third_party/go/cloud.google.com_go_compute_metadata_v0.7.0/LICENSE) |
 | go | github.com/Microsoft/go-winio | v0.6.2 | See license text; [LICENSE](third_party/go/github.com_Microsoft_go-winio_v0.6.2/LICENSE) |
 | go | github.com/cenkalti/backoff/v5 | v5.0.3 | See license text; [LICENSE](third_party/go/github.com_cenkalti_backoff_v5_v5.0.3/LICENSE) |

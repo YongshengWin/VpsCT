@@ -6,7 +6,7 @@
 
 ## 1. 本地开发
 
-需要 Go 1.26.10、Node.js 24、npm；打发行包还需要 Python 3.11+。当前发行与容器仅支持 Linux AMD64，原生控制端安装器要求 systemd。
+需要 Go 1.26.11、Node.js 24、npm；打发行包还需要 Python 3.11+。当前发行与容器仅支持 Linux AMD64，原生控制端安装器要求 systemd。
 
 ```bash
 cd web

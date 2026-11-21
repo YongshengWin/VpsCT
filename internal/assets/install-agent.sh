@@ -188,8 +188,8 @@ download_agent() {
   agent_stage=$(mktemp "$BIN_DIR/.ctlvps-agent.XXXXXXXX")
   install -m 0755 "$TMP" "$agent_stage"
   if [[ -n "$ASSETS_DIR" ]]; then
-    local product version build
-    read -r product version build <<< "$("$agent_stage" version)"
+    local product version _
+    read -r product version _ <<< "$("$agent_stage" version)"
     [[ "$product" == ctlvps-agent && "$version" == "$RELEASE_VERSION" ]] || { echo 'offline agent does not match release version' >&2; exit 1; }
   fi
   install -d -m 0755 /usr/local/libexec
