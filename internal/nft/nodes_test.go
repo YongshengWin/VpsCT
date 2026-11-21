@@ -26,8 +26,11 @@ func fakeIPRules(t *testing.T, rules string) {
 // every apply (issue #57).
 func TestCheckMarkPrefixesSkipsForeignMaskWindows(t *testing.T) {
 	fakeIPRules(t, `[{"priority":5210,"fwmark":"0x80000","fwmask":"0xff0000","table":"main"},{"priority":5230,"fwmark":"0x80000","fwmask":"0xff0000","table":"default"},{"priority":5250,"fwmark":"0x80000","fwmask":"0xff0000","action":"unreachable"},{"priority":5270,"table":"52"}]`)
-	if err := checkMarkPrefixes(context.Background(), []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix}); err != nil {
+	if err := checkMarkPrefixes(context.Background(), []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix}, 1, 17); err != nil {
 		t.Fatalf("tailscale-style rules rejected: %v", err)
+	}
+	if err := checkMarkPrefixes(context.Background(), []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix}, 1, 0x80001); err == nil {
+		t.Fatal("resource ID matching the Tailscale mask accepted")
 	}
 	// A mask inside the prefix window that requires a different top byte
 	// never matches VpsCT marks either.

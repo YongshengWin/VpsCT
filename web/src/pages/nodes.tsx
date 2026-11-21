@@ -499,9 +499,9 @@ export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | 
   const [edit, setEdit] = React.useState(false);
   const [confirmDel, setConfirmDel] = React.useState(false);
   const [confirmRegen, setConfirmRegen] = React.useState(false);
-  const [showQR, setShowQR] = React.useState(false);
+  const [showQR, setShowQR] = React.useState(true);
  const [trafficDays,setTrafficDays]=React.useState(30);
-  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string; wireguard?: string; singbox?: Record<string, unknown>; singbox_endpoint?: Record<string, unknown> }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node });
+  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string; wireguard?: string; singbox?: Record<string, unknown>; singbox_endpoint?: Record<string, unknown> }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node && node.ipv6_ingress_ready !== false });
   const traffic = useQuery({ queryKey: ["nodes", node?.id, "traffic",trafficDays], queryFn: () => get<Series>(`/api/v1/nodes/${node!.id}/traffic?days=${trafficDays}`), refetchInterval:30000, enabled: !!node && node.source === "deployed" });
   const delM = useMutation({ mutationFn: () => del(`/api/v1/nodes/${node!.id}`), onSuccess: () => { toast.success("已删除"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (e) => toast.fromError(e) });
   const regen = useMutation({ mutationFn: () => post(`/api/v1/nodes/${node!.id}/regenerate`), onSuccess: () => { toast.success("凭据已重置，订阅将自动更新"); setConfirmRegen(false); qc.invalidateQueries({ queryKey: ["nodes"] }); }, onError: (e) => toast.fromError(e) });
@@ -518,10 +518,16 @@ export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | 
             <Button onClick={() => setEdit(true)}><Pencil className="h-4 w-4" /> 编辑</Button>
           </>
         }>
+        <div className="mb-4 space-y-2">
+          <div className="flex flex-wrap gap-2"><SourceBadge n={node} /><ProtocolBadge p={node.protocol} />{node.core && node.source === "deployed" && <Badge variant="outline">内核 {node.core}</Badge>}{node.chain_front_name && <Badge variant="info">经 {node.chain_front_name}</Badge>}{node.tags.map((t) => <Badge key={t} variant="secondary">{t}</Badge>)}</div>
+          <p className="text-xs text-muted-foreground">创建于 {fmtDate(node.created_at)}</p>
+        </div>
+        {node.ipv6_ingress_ready !== undefined && <p className="mb-3 text-sm text-muted-foreground">
+          {node.ipv6_ingress_ready ? "仅 IPv6 入口已应用" : "仅 IPv6 入口尚未就绪，应用确认后可导出连接"}
+        </p>}
+        {isAdmin && node.source === "deployed" && node.server_id && <NodeNetwork key={node.id} nodeID={node.id} serverID={node.server_id} onNavigate={onClose} />}
         <div className="grid gap-4 lg:grid-cols-2">
           <div className="space-y-3">
-            <div className="flex flex-wrap gap-2"><SourceBadge n={node} /><ProtocolBadge p={node.protocol} />{node.core && node.source === "deployed" && <Badge variant="outline">内核 {node.core}</Badge>}{node.chain_front_name && <Badge variant="info">经 {node.chain_front_name}</Badge>}{node.tags.map((t) => <Badge key={t} variant="secondary">{t}</Badge>)}</div>
-            <p className="text-xs text-muted-foreground">创建于 {fmtDate(node.created_at)}</p>
             {uri.data && (
               <>
                 {!uri.data.uri && <p className="text-xs text-muted-foreground">此协议使用客户端配置，不提供通用分享链接。</p>}
@@ -557,7 +563,6 @@ export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | 
             </div>}
           </div>
         </div>
-        {isAdmin && node.source === "deployed" && node.server_id && <NodeNetwork key={node.id} nodeID={node.id} serverID={node.server_id} onNavigate={onClose} />}
       </Dialog>
       <NodeEditDialog open={edit} onClose={() => { setEdit(false); onClose(); }} node={node} />
       <Confirm open={confirmDel} onClose={() => setConfirmDel(false)} onConfirm={() => delM.mutate()} loading={delM.isPending} destructive title="删除节点？" description={node.source === "deployed" ? "该节点会从服务器上撤下，使用它的订阅将不再包含它。" : "使用它的订阅将不再包含它。"} />

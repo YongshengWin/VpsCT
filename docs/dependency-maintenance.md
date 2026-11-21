@@ -4,10 +4,19 @@
 
 ## 1. 日常更新规则
 
-1. 常规更新按周执行：前端只自动提交补丁更新，Go 和 Actions 允许小版本与补丁。前端包含 `0.x` 依赖，其小版本可能超出现有兼容范围，需要维护者单独评估。使用 Dependabot 的 `allow.update-types`，不限制安全更新；参见 [GitHub 配置说明](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#update-types-allow)。
-2. React、React DOM 及类型包作为一组；Tailwind、tailwind-merge、PostCSS 和 Autoprefixer 作为一组；其他前端运行依赖、开发工具和 Go 依赖分别分组。安全更新单独成组。
+1. 停止 Dependabot 自动版本和安全更新 PR：默认分支不保留 `.github/dependabot.yml`，仓库设置关闭 Dependabot security updates，保留 Dependency graph、Dependabot alerts 与密钥扫描。`open-pull-requests-limit: 0` 只能停止版本更新，不能停止安全更新；参见 [GitHub 安全更新说明](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-security-updates)。设置生效后关闭现有机器人 PR，关闭 PR 不等于漏洞已修复。
+2. 按漏洞、兼容性和实际需求人工集中维护，不自动追最新。React、React DOM 及类型包一起验证；Tailwind、tailwind-merge、PostCSS 和 Autoprefixer 一起验证。前端包含 `0.x` 依赖，小版本也可能超出现有兼容范围。常规升级必须有明确收益，安全升级以实际告警和审计结果为准。
 3. 每个更新先通过安装、类型检查、构建及完整 CI。许可声明需要随依赖变更重新生成并提交，不能仅修改版本与锁文件。小版本也可能影响行为，通过检查后再合并，不启用自动合并。
 4. 跨大版本升级需要独立的迁移 PR，说明兼容要求，完成代码调整和浏览器验证。已经公开的版本标签与附件保持不变，后续变更进入下一版本。
+
+每周一新加坡时间 11:23（UTC 03:23）与手动安全审计只报告扫描结果，不修改依赖、不创建 PR 或 issue。PR 的安全门禁与发布前的新鲜审计继续保留；扫描失败不能用关闭告警、自动忽略或跳过检查解决。
+
+### 1.1 2026-10-31 维护调整
+
+1. 调查时开放的机器人 PR 为 #45、#47–#51，其中 #45 是 Vite 安全更新，其余为常规依赖更新。停止来源后关闭存量，必要修复纳入人工维护变更。
+2. 当前 Vite 8.3.0 存在 6 条依赖告警，本轮更新至 8.3.5 并重新执行完整依赖审计；开发依赖也参与审计。
+3. CI 实际发现 `GO-2026-6809`，修复版本为 Go 1.26.10。统一更新 Go 构建基线和 Docker 构建镜像，并用新工具链重新编译控制端与 agent；只更新 Go 模块版本不能修复标准库。参见 [官方漏洞记录](https://pkg.go.dev/vuln/GO-2026-6809)。
+4. 运行依赖更新须同步许可产物；#49、#51 的失败日志包含许可新鲜度检查失败，不通过删除检查解决。本轮不全量吸收这些 PR 的常规升级。
 
 ## 2. 首批自动更新核验
 

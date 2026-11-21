@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestMissingRegionUsesAvailableProxies(t *testing.T) {
+func TestMissingRegionUsesFormatSpecificFallback(t *testing.T) {
 	p := proxynode.Proxy{Name: "US fixture", Type: "ss", Server: "example.test", Port: 443, Params: map[string]any{"cipher": "aes-128-gcm", "password": "synthetic"}}
 	bundle := &Bundle{Name: "US-only share", Proxies: []proxynode.Proxy{p}}
 	m, e := RenderMihomo(bundle)
@@ -20,10 +20,13 @@ func TestMissingRegionUsesAvailableProxies(t *testing.T) {
 	}
 	for _, raw := range doc["proxy-groups"].([]any) {
 		g := raw.(map[string]any)
-		if g["type"] == "url-test" {
+		if g["name"] == "🇯🇵 日本" || g["name"] == "🇭🇰 香港" || g["name"] == "🇸🇬 新加坡" || g["name"] == "🇳🇱 荷兰" {
+			t.Fatalf("unmatched region group retained: %v", g["name"])
+		}
+		if g["name"] == "🇺🇸 美国" {
 			members := g["proxies"].([]any)
 			if len(members) != 1 || members[0] != p.Name {
-				t.Fatalf("empty region bypasses nodes: %v", g["name"])
+				t.Fatalf("region contains wrong nodes: %v", g["name"])
 			}
 		}
 	}

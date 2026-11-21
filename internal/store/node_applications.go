@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"reflect"
 
 	"ctlvps/internal/agentproto"
@@ -206,7 +207,7 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 			}
 			for _, n := range wanted.Nodes {
 				phase := "applied"
-				if n.Blocked {
+				if n.Blocked || n.Network != nil && n.Network.Policy.IngressFamily == "ipv6" {
 					phase = "blocked"
 				}
 				resources = append(resources, agentproto.NodeApplication{NodeID: n.NodeID, Core: n.Core, Status: phase})
@@ -217,6 +218,9 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 			if !ok || n.Core != receipt.Core || (n.Blocked && receipt.Status == "applied") {
 				return errors.New("节点应用回执与配置不符")
 			}
+			if !validIPv6Application(n, receipt) {
+				return errors.New("应用回执未确认该节点的 IPv6 监听")
+			}
 			var payload string
 			err := tx.QueryRowContext(ctx, `SELECT payload FROM node_application_candidates WHERE server_id=? AND revision=? AND node_id=?`, serverID, revision, n.NodeID).Scan(&payload)
 			if isNoRows(err) {
@@ -225,13 +229,28 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO node_applied_states(server_id,node_id,revision,hash,status,payload,sequence,updated_at) SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM nodes WHERE id=? AND server_id=?) ON CONFLICT(server_id,node_id) DO UPDATE SET revision=excluded.revision,hash=excluded.hash,status=excluded.status,payload=excluded.payload,sequence=excluded.sequence,updated_at=excluded.updated_at WHERE excluded.revision>node_applied_states.revision OR (excluded.revision=node_applied_states.revision AND (excluded.sequence>node_applied_states.sequence OR (excluded.sequence=node_applied_states.sequence AND excluded.status=node_applied_states.status)))`, serverID, n.NodeID, revision, hash, receipt.Status, payload, sequence, fmtTime(s.Now()), n.NodeID, serverID)
+			_, err = tx.ExecContext(ctx, `INSERT INTO node_applied_states(server_id,node_id,revision,hash,status,payload,sequence,updated_at,listen_ipv6) SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM nodes WHERE id=? AND server_id=?) ON CONFLICT(server_id,node_id) DO UPDATE SET revision=excluded.revision,hash=excluded.hash,status=excluded.status,payload=excluded.payload,sequence=excluded.sequence,updated_at=excluded.updated_at,listen_ipv6=excluded.listen_ipv6 WHERE excluded.revision>node_applied_states.revision OR (excluded.revision=node_applied_states.revision AND (excluded.sequence>node_applied_states.sequence OR (excluded.sequence=node_applied_states.sequence AND excluded.status=node_applied_states.status)))`, serverID, n.NodeID, revision, hash, receipt.Status, payload, sequence, fmtTime(s.Now()), receipt.ListenIPv6, n.NodeID, serverID)
 			if err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func validIPv6Application(spec agentproto.NodeSpec, receipt agentproto.NodeApplication) bool {
+	ipv6 := spec.Network != nil && spec.Network.Policy.IngressFamily == "ipv6"
+	if !ipv6 || receipt.Status != "applied" {
+		return receipt.ListenIPv6 == ""
+	}
+	if receipt.ListenIPv6 == "" {
+		return false
+	}
+	if spec.Network.Policy.ListenMode == "address" {
+		expected, err := netip.ParseAddr(spec.Network.Policy.ListenAddress)
+		return err == nil && expected.String() == receipt.ListenIPv6
+	}
+	return true
 }
 
 // The durable applied projection also authorizes later failure fences after
@@ -261,10 +280,10 @@ func (s *Store) recordRetainedApplications(ctx context.Context, tx *sql.Tx, serv
 		if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
 			return err
 		}
-		if snapshot.Spec.Core != receipt.Core || (snapshot.Spec.Blocked && receipt.Status == "applied") {
+		if snapshot.Spec.Core != receipt.Core || (snapshot.Spec.Blocked && receipt.Status == "applied") || !validIPv6Application(snapshot.Spec, receipt) {
 			return errors.New("节点应用回执与保留配置不符")
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE node_applied_states SET status=?,sequence=?,updated_at=? WHERE server_id=? AND node_id=? AND revision=? AND hash=? AND (sequence<? OR (sequence=? AND status=?))`, receipt.Status, sequence, fmtTime(s.Now()), serverID, receipt.NodeID, revision, hash, sequence, sequence, receipt.Status)
+		_, err = tx.ExecContext(ctx, `UPDATE node_applied_states SET status=?,sequence=?,updated_at=?,listen_ipv6=? WHERE server_id=? AND node_id=? AND revision=? AND hash=? AND (sequence<? OR (sequence=? AND status=?))`, receipt.Status, sequence, fmtTime(s.Now()), receipt.ListenIPv6, serverID, receipt.NodeID, revision, hash, sequence, sequence, receipt.Status)
 		if err != nil {
 			return err
 		}
@@ -343,8 +362,8 @@ func (s *Store) appliedSubscriptionNode(ctx context.Context, q querier, n domain
 		return n, false, nil
 	}
 	var revision int64
-	var payload, status string
-	err = q.QueryRowContext(ctx, `SELECT revision,status,payload FROM node_applied_states WHERE server_id=? AND node_id=?`, sv.ID, n.ID).Scan(&revision, &status, &payload)
+	var payload, status, listenIPv6 string
+	err = q.QueryRowContext(ctx, `SELECT revision,status,payload,listen_ipv6 FROM node_applied_states WHERE server_id=? AND node_id=?`, sv.ID, n.ID).Scan(&revision, &status, &payload, &listenIPv6)
 	if isNoRows(err) {
 		return n, false, nil
 	}
@@ -384,9 +403,16 @@ func (s *Store) appliedSubscriptionNode(ctx context.Context, q querier, n domain
 			return n, false, nil
 		}
 	}
+	if n.Network != nil && n.Network.IngressFamily == "ipv6" {
+		available, err := s.ipv6NodeAvailable(ctx, q, n, listenIPv6)
+		if err != nil || !available {
+			return n, false, err
+		}
+	}
 	// Return the stored credential projection with current display metadata.
 	old.Server = n.Server
 	old.Name = n.Name
+	old.ExitRegion = n.ExitRegion
 	old.Tags = n.Tags
 	old.ChainFrontNodeID = n.ChainFrontNodeID
 	return old, true, nil

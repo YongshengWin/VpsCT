@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -23,13 +24,18 @@ func TestOpenRCAgentInstallerAndRollback(t *testing.T) {
 		t.Skip("installer fixture requires a host SHA-256 command")
 	}
 	for _, tc := range []struct {
-		name                                                        string
-		update, init                                                bool
-		failStart, failReady, failRollbackReady, failLock, failStop bool
-		readyDelay                                                  int
-		failCheck                                                   bool
+		name                                                         string
+		update, init                                                 bool
+		failStart, failReady, failRollbackReady, failLock, failStop  bool
+		readyDelay                                                   int
+		failCheck                                                    bool
+		offline, offlineBadDigest, offlineMissing, offlineBadVersion bool
 	}{
 		{name: "install", init: true},
+		{name: "install from fixed local assets", init: true, offline: true},
+		{name: "offline rejects damaged agent", init: true, offline: true, offlineBadDigest: true},
+		{name: "offline rejects incomplete bundle", init: true, offline: true, offlineMissing: true},
+		{name: "offline rejects agent from another version", init: true, offline: true, offlineBadVersion: true},
 		{name: "install preflight failure cleans candidate", init: true, failCheck: true},
 		{name: "install waits for readiness", init: true, readyDelay: 3},
 		{name: "install rejects status without readiness", init: true, failReady: true},
@@ -57,7 +63,8 @@ func TestOpenRCAgentInstallerAndRollback(t *testing.T) {
 			agent := `#!/bin/sh
 # new-agent
 case "$1" in
-  version|capabilities|check-update|openrc-verify|openrc-sync) exit 0 ;;
+  version) printf 'ctlvps-agent v9.1.0 (fixture)\n' ;;
+  capabilities|check-update|openrc-verify|openrc-sync) exit 0 ;;
   openrc-check)
     test "$FIXTURE_FAIL_CHECK" = 0 || exit 95
     # A noexec temporary directory must never be used to execute a candidate.
@@ -87,7 +94,8 @@ esac
 			write("fixture-agent", agent, 0755)
 			helper := "#!/bin/sh\nexit 0\n"
 			write("fixture-helper", helper, 0755)
-			write("fixture-sums", fmt.Sprintf("%x  ctlvps-agent-linux-amd64\n%x  ctlvps-verify-linux-amd64\n%x  uninstall.sh\n", sha256.Sum256([]byte(agent)), sha256.Sum256([]byte(helper)), sha256.Sum256([]byte(helper))), 0600)
+			sums := fmt.Sprintf("%x  ctlvps-agent-linux-amd64\n%x  ctlvps-verify-linux-amd64\n%x  uninstall.sh\n", sha256.Sum256([]byte(agent)), sha256.Sum256([]byte(helper)), sha256.Sum256([]byte(helper)))
+			write("fixture-sums", sums, 0600)
 			for _, p := range []string{"etc/init.d", "temporary"} {
 				if err := os.MkdirAll(filepath.Join(dir, p), 0755); err != nil {
 					t.Fatal(err)
@@ -114,6 +122,11 @@ esac
 `,
 				"sleep":     "#!/bin/sh\nexit 0\n",
 				"apk":       "#!/bin/sh\nprintf 'apk %s\\n' \"$*\" >> \"$FIXTURE_ROOT/actions\"\n",
+				"nft":       "#!/bin/sh\nexit 0\n",
+				"findmnt":   "#!/bin/sh\nexit 0\n",
+				"setpriv":   "#!/bin/sh\nexit 0\n",
+				"bwrap":     "#!/bin/sh\nexit 0\n",
+				"useradd":   "#!/bin/sh\nexit 0\n",
 				"apt-get":   "#!/bin/sh\nexit 0\n",
 				"dnf":       "#!/bin/sh\nexit 0\n",
 				"yum":       "#!/bin/sh\nexit 0\n",
@@ -158,6 +171,27 @@ esac
 			script = strings.ReplaceAll(script, "RELEASE_VERSION='__VERSION__'", "RELEASE_VERSION='v9.1.0'")
 			write("installer.sh", script, 0700)
 			args := []string{filepath.Join(dir, "installer.sh"), "--server", "https://panel.example"}
+			if tc.offline {
+				version := "v9.1.0"
+				if tc.offlineBadVersion {
+					version = "v9.1.1"
+				}
+				args = append(args, "--version", version, "--assets-dir", filepath.Join(dir, "assets"))
+				write("mock-bin/curl", "#!/bin/sh\ntouch \"$FIXTURE_ROOT/unexpected-download\"\nexit 99\n", 0755)
+				if runtime.GOOS == "darwin" {
+					write("mock-bin/stat", "#!/bin/sh\nexec /usr/bin/stat -f %z \"$4\"\n", 0755)
+				}
+				write("assets/SHA256SUMS", sums, 0600)
+				write("assets/ctlvps-verify-linux-amd64", helper, 0600)
+				if !tc.offlineMissing {
+					write("assets/uninstall.sh", helper, 0600)
+				}
+				asset := agent
+				if tc.offlineBadDigest {
+					asset += "# corrupt\n"
+				}
+				write("assets/ctlvps-agent-linux-amd64", asset, 0600)
+			}
 			if tc.update {
 				args = append(args, "--update")
 			} else {
@@ -173,6 +207,17 @@ esac
 			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "mock-bin")+":"+os.Getenv("PATH"), "TMPDIR="+filepath.Join(dir, "temporary"), "FIXTURE_ROOT="+dir,
 				"FIXTURE_FAIL="+flag(tc.failStart), "FIXTURE_FAIL_READY="+flag(tc.failReady), "FIXTURE_FAIL_ROLLBACK_READY="+flag(tc.failRollbackReady), "FIXTURE_FAIL_LOCK="+flag(tc.failLock), "FIXTURE_FAIL_STOP="+flag(tc.failStop), "FIXTURE_FAIL_CHECK="+flag(tc.failCheck), fmt.Sprintf("FIXTURE_READY_DELAY=%d", tc.readyDelay))
 			out, err := cmd.CombinedOutput()
+			if tc.offline {
+				if _, err := os.Stat(filepath.Join(dir, "unexpected-download")); !os.IsNotExist(err) {
+					t.Fatal("offline installer attempted a release download")
+				}
+				if tc.offlineBadDigest || tc.offlineMissing || tc.offlineBadVersion {
+					if _, statErr := os.Stat(filepath.Join(dir, "usr/local/bin/ctlvps-agent")); !os.IsNotExist(statErr) || err == nil {
+						t.Fatalf("invalid offline bundle reached installation: %v\n%s", err, out)
+					}
+					return
+				}
+			}
 			if (err != nil) != (tc.failStart || tc.failReady || tc.failCheck || !tc.init) {
 				t.Fatalf("installer result: %v\n%s", err, out)
 			}

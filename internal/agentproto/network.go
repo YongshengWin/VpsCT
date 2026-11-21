@@ -43,6 +43,7 @@ type NetworkInterface struct {
 	// Older agents omit this field. Presence in Addresses alone is not proof
 	// that IPv6 DAD/lifetime checks permit a new listener or source binding.
 	UsableAddresses []string `json:"usable_addresses,omitempty"`
+	TemporaryIPv6   []string `json:"temporary_ipv6,omitempty"`
 	DefaultIPv4     bool     `json:"default_ipv4"`
 	DefaultIPv6     bool     `json:"default_ipv6"`
 	CountersValid   bool     `json:"counters_valid"`
@@ -80,7 +81,7 @@ func ValidateNetwork(s *NetworkSnapshot) error {
 			return errors.New("网卡身份或参数无效")
 		}
 		ids[n.ID], indexes[n.Index] = true, true
-		if n.Name == "" || len(n.Name) > 15 || strings.ContainsAny(n.Name, "/:\x00\r\n\t ") || n.Kind == "" || len(n.Kind) > 32 || strings.ContainsAny(n.Kind, "\x00\r\n") || len(n.Addresses) > MaxInterfaceAddresses || len(n.UsableAddresses) > MaxInterfaceAddresses {
+		if n.Name == "" || len(n.Name) > 15 || strings.ContainsAny(n.Name, "/:\x00\r\n\t ") || n.Kind == "" || len(n.Kind) > 32 || strings.ContainsAny(n.Kind, "\x00\r\n") || len(n.Addresses) > MaxInterfaceAddresses || len(n.UsableAddresses) > MaxInterfaceAddresses || len(n.TemporaryIPv6) > MaxInterfaceAddresses {
 			return errors.New("网卡名称或地址数量无效")
 		}
 		if n.MAC != "" {
@@ -98,6 +99,12 @@ func ValidateNetwork(s *NetworkSnapshot) error {
 		for _, raw := range n.UsableAddresses {
 			if !addresses[raw] {
 				return errors.New("可用地址不在接口地址清单中")
+			}
+		}
+		for _, raw := range n.TemporaryIPv6 {
+			prefix, err := netip.ParsePrefix(raw)
+			if err != nil || !prefix.Addr().Is6() || !addresses[raw] {
+				return errors.New("临时 IPv6 地址不在接口地址清单中")
 			}
 		}
 		for _, count := range []int64{n.Rx, n.Tx, n.RxRate, n.TxRate} {

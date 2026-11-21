@@ -173,6 +173,7 @@ func TestAPIKeyAccountSecurityChangesRevokeCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := openTest(t)
 			ctx := context.Background()
+			_ = apiKeyTestUser(t, s, "protected-owner")
 			u := apiKeyTestUser(t, s, "owner")
 			key := apiKeyFixture(u, tc.name)
 			if err := s.CreateAPIKey(ctx, &key); err != nil {

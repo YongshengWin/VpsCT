@@ -230,12 +230,19 @@ func (a *API) twoFAReset(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	owner, err := a.Store.ControllerOwner(r.Context())
+	if err != nil {
+		return err
+	}
+	if id == owner {
+		return httpx.ErrForbidden
+	}
 	u, err := a.Store.GetUser(r.Context(), id)
 	if err != nil {
 		return httpx.ErrNotFound
 	}
 	clearTOTP(&u)
-	if err := a.Store.UpdateUser(r.Context(), &u); err != nil {
+	if err := a.Store.UpdateManagedUser(r.Context(), *userFrom(r.Context()), &u, true); err != nil {
 		return err
 	}
 	_ = a.Store.DeleteUserSessions(r.Context(), u.ID)

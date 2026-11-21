@@ -71,11 +71,15 @@ func ForwardRules(meters []agentproto.ForwardMeterRule) (string, error) {
 }
 
 func (m *Manager) EnsureForwards(ctx context.Context, meters []agentproto.ForwardMeterRule) error {
-	if err := checkMarkPrefixes(ctx, []uint32{agentproto.ForwardMarkPrefix, agentproto.ForwardBootstrapMarkPrefix}); err != nil {
-		return err
-	}
 	rules, err := ForwardRules(meters)
 	if err != nil {
+		return err
+	}
+	ids := make([]uint32, 0, len(meters))
+	for _, meter := range meters {
+		ids = append(ids, uint32(meter.ForwardID))
+	}
+	if err := checkMarkPrefixes(ctx, []uint32{agentproto.ForwardMarkPrefix, agentproto.ForwardBootstrapMarkPrefix}, ids...); err != nil {
 		return err
 	}
 	if _, err := m.run(ctx, rules, "--check", "-f", "-"); err != nil {

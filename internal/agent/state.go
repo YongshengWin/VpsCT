@@ -37,6 +37,8 @@ type State struct {
 	ForwardPending          *forwardPending                  `json:"forward_pending,omitempty"`
 	ForwardAckRevision      int64                            `json:"forward_ack_revision,omitempty"`
 	NetworkBindingVersion   int                              `json:"network_binding_version,omitempty"`
+	IPv6IngressVersion      int                              `json:"ipv6_ingress_version,omitempty"`
+	NetworkIngressVersion   int                              `json:"network_ingress_version,omitempty"`
 	NetworkSSHVersion       int                              `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion int                              `json:"network_wireguard_version,omitempty"`
 	MitaVersion             int                              `json:"mita_version,omitempty"`
@@ -109,6 +111,12 @@ func LoadState(dir string) (*State, error) {
 	}
 	if s.NetworkBindingVersion != 0 && s.NetworkBindingVersion != agentproto.NetworkBindingVersion {
 		return nil, errors.New("unsupported persisted network binding version")
+	}
+	if s.IPv6IngressVersion != 0 && (s.IPv6IngressVersion != networkconfig.IPv6IngressVersion || s.NetworkBindingVersion != agentproto.NetworkBindingVersion) {
+		return nil, errors.New("本机仅 IPv6 接入协议版本不兼容")
+	}
+	if s.NetworkIngressVersion != 0 && (s.NetworkIngressVersion != agentproto.NetworkIngressVersion || s.NetworkBindingVersion != agentproto.NetworkBindingVersion) {
+		return nil, errors.New("unsupported persisted network ingress version")
 	}
 	if s.NATVersion < 0 || s.NATVersion > agentproto.NATVersion {
 		return nil, errors.New("unsupported persisted NAT version")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/core"
+	"ctlvps/internal/corecompat"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/nft"
 	"ctlvps/internal/provision"
@@ -53,10 +54,38 @@ func main() {
 	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "acme":
+		case "acme", "acme-invalid":
 			n.Cert = &agentproto.CertSpec{Mode: "acme", Domain: "acme-fixture.test", Email: "fixture@example.test"}
+			n.ConnlogEnabled = true
+			// Fixed fixture arguments only; this driver is never shipped.
+			if len(os.Args) > 2 {
+				if os.Args[2] != "anytls" && os.Args[2] != "trojan" {
+					panic("unsupported ACME fixture protocol")
+				}
+				n.Protocol = os.Args[2]
+			}
+			if len(os.Args) > 3 {
+				version := "1.12.14"
+				if os.Args[3] == "modern" {
+					version = corecompat.NetworkBaseline
+				} else if os.Args[3] != "legacy" {
+					panic("unsupported ACME fixture schema")
+				}
+				ds.Versions = map[string]agentproto.CoreVersion{"sing-box": {Version: version}}
+				n.Cert.Domain = "acme-" + n.Protocol + "-" + os.Args[3] + ".test"
+			}
+			if os.Args[1] == "acme-invalid" {
+				// Keep policy/credentials identical while failing certificate
+				// preflight, so recovery may safely retain the active service.
+				n.Cert = &agentproto.CertSpec{Mode: "external", Domain: n.Cert.Domain,
+					CertPath: "/missing/acme-fixture.crt", KeyPath: "/missing/acme-fixture.key"}
+			}
 		case "bad":
-			n.Protocol = "invalid"
+			// Invalid candidate data with unchanged resource authorization.
+			// A protocol/credential change correctly prevents restoring an old
+			// service, and belongs in the separate revocation tests instead.
+			n.Cert = &agentproto.CertSpec{Mode: "external", Domain: n.Cert.Domain,
+				CertPath: "/missing/fixture.crt", KeyPath: "/missing/fixture.key"}
 		case "collision":
 			n.ListenPort = 21999
 		case "private":
@@ -126,8 +155,12 @@ func main() {
 		if e = nft.New().EnsureEgress(ctx, []agentproto.NodeSpec{n}, map[int64]string{n.NodeID: g}); e != nil {
 			panic(e)
 		}
-		changed, e := core.NewSnell(paths, sd).Apply(ctx, ds, []agentproto.NodeSpec{n})
+		driver := core.NewSnell(paths, sd)
+		changed, e := driver.Apply(ctx, ds, []agentproto.NodeSpec{n})
 		if e != nil {
+			panic(e)
+		}
+		if e = driver.FinishActivation(ctx, true); e != nil {
 			panic(e)
 		}
 		fmt.Println("changed", changed)
@@ -146,6 +179,9 @@ func main() {
 	}
 	changed, e := d.Apply(ctx, ds, ds.Nodes)
 	if e != nil {
+		panic(e)
+	}
+	if e = d.FinishActivation(ctx, true); e != nil {
 		panic(e)
 	}
 	fmt.Println("changed", changed)

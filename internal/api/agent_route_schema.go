@@ -1,9 +1,35 @@
 package api
 
 import (
-	"ctlvps/internal/store"
+	"maps"
 	"reflect"
+
+	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/store"
 )
+
+func agentIPv6DeployRequestSchema(body map[string]any, preview bool) map[string]any {
+	result := maps.Clone(body)
+	props := maps.Clone(agentSchemaProperties(body))
+	policy := agentJSONTypeSchema(reflect.TypeFor[networkconfig.Node](), map[reflect.Type]bool{}, 0)
+	fields := agentSchemaProperties(policy)
+	fields["ingress_family"] = map[string]any{"const": "ipv6"}
+	fields["listen_mode"] = map[string]any{"type": "string", "enum": []string{"public_ipv6", "address"}}
+	fields["advertise_mode"] = map[string]any{"type": "string", "enum": []string{"inherit_ipv6", "override"}}
+	fields["on_unavailable"] = map[string]any{"const": "block"}
+	policy["required"] = []string{"ingress_family", "listen_mode", "advertise_mode", "on_unavailable"}
+	policy["description"] = "仅 IPv6 创建策略。address 要求公网 IPv6 listen_address 和 listen_interface_id。override 要求顶层 advertise_host。初次部署可在完成后再设置出口与来源限制。"
+	props["network"] = map[string]any{"anyOf": []any{policy, map[string]any{"type": "null"}}}
+	props["ingress_family"] = map[string]any{"type": "string", "enum": []string{"", "default", "ipv6"}}
+	props["operation_id"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{32}$", "description": "仅 IPv6 提交时必填。重试使用同一个 ID 和请求。"}
+	props["expected_ipv6"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "仅 IPv6 提交时必填。使用最近一次预览的 confirmation 和 port。"}
+	result["properties"] = props
+	if preview {
+		props["ingress_family"], props["network"] = map[string]any{"const": "ipv6"}, policy
+		result["required"] = []string{"protocol", "ingress_family", "network"}
+	}
+	return result
+}
 
 func agentAccessRouteRequestSchema(create bool) map[string]any {
 	shape := agentJSONTypeSchema(reflect.TypeFor[store.AccessRouteRequest](), map[reflect.Type]bool{}, 0)
@@ -29,6 +55,28 @@ func agentAccessRouteRequestSchema(create bool) map[string]any {
 func agentRouteResponseSchema(handler string) map[string]any {
 	var shape map[string]any
 	switch handler {
+	case "getShareByPublicID":
+		shape = agentJSONTypeSchema(reflect.TypeFor[ShareView](), map[reflect.Type]bool{}, 0)
+		shape["description"] = "按分享的公开标识查询，仍须通过账户或委派授权；标识不是访问凭证。"
+	case "previewShareTemplateDraft", "previewAdminShareTemplateDraft":
+		shape = agentJSONTypeSchema(reflect.TypeFor[personalTemplateDraftResult](), map[reflect.Type]bool{}, 0)
+		shape["description"] = "预览不保存模板；body 包含节点连接信息。nodes 的 source 表示地区来源，groups 表示实际生成的成员。"
+	case "listTemplateVersions", "listPersonalTemplateVersions":
+		shape = agentJSONTypeSchema(reflect.TypeFor[[]store.TemplateVersion](), map[reflect.Type]bool{}, 0)
+	case "setNodeExitRegion", "getNode":
+		shape = agentJSONTypeSchema(reflect.TypeFor[NodeView](), map[reflect.Type]bool{}, 0)
+		shape["properties"].(map[string]any)["ipv6_ingress_ready"] = map[string]any{"type": "boolean", "description": "仅 IPv6 节点可见。为 true 时，当前配置已收到 IPv6 监听回执并通过地址检查，可导出客户端配置。"}
+	case "previewIPv6Node":
+		shape = agentJSONTypeSchema(reflect.TypeFor[ipv6DeployPreview](), map[reflect.Type]bool{}, 0)
+		shape["description"] = "预检不创建节点。readiness.ready 为 true 时，提交本次 port、confirmation 和固定 operation_id。"
+	case "checkServerIPv6Endpoint", "getServerIPv6Endpoint":
+		shape = agentJSONTypeSchema(reflect.TypeFor[ipv6EndpointStatus](), map[reflect.Type]bool{}, 0)
+		shape["description"] = "检查 IPv6 地址草稿。matched 表示匹配本机可用接口，该操作不保存地址或探测公网端口。"
+	case "listUnavailablePorts":
+		shape = agentJSONTypeSchema(reflect.TypeFor[[]store.UnavailablePort](), map[reflect.Type]bool{}, 0)
+	case "getUnavailablePort", "saveUnavailablePort":
+		shape = agentJSONTypeSchema(reflect.TypeFor[store.UnavailablePort](), map[reflect.Type]bool{}, 0)
+		shape["description"] = "人工记录，唯一键为 server_id+port。PUT 覆盖同一端口的传输、网络和原因；updated_at 为最后保存时间。记录仅用于提醒，不代表全网封禁，不触发探测或节点配置变更。"
 	case "previewAccessRoute":
 		shape = agentJSONTypeSchema(reflect.TypeFor[store.AccessRoutePreview](), map[reflect.Type]bool{}, 0)
 	case "getAccessRoute", "createAccessRoute", "stopAccessRoute", "retryAccessRoute":

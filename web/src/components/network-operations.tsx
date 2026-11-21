@@ -1,3 +1,4 @@
+import { UnavailablePortWarning } from "@/components/unavailable-ports";
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { get, post } from "@/lib/api";
@@ -8,6 +9,7 @@ import { useToast } from "@/components/toast";
 
 export function NetworkChecks({ view }: { view: NetworkReadiness }) {
   return <div className="space-y-2 rounded-lg border p-3 text-sm" role="status">
+    <UnavailablePortWarning record={view.unavailable_port} />
     <p className="font-medium">{view.ready ? "当前条件检查通过" : "当前条件尚不满足"}</p>
     {!view.ready && <ul className="list-disc space-y-1 pl-5 text-amber-700 dark:text-amber-300">{view.checks.filter((c) => !c.ready).map((c) => <li key={c.code}>{c.message}</li>)}</ul>}
     <p className="text-xs text-muted-foreground">架构：{view.architecture || "未知"} · 锁定内核：{view.pinned_core_version || "未知"}。提交时会再次检查；最终以服务器应用回执为准。</p>

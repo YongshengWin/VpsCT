@@ -212,3 +212,39 @@ func TestChainOriginCannotBypassCredentialRotationOrDeletion(t *testing.T) {
 	}
 	assert(0)
 }
+
+func TestExitRegionUsesCurrentAppliedNodeAndChainOrigin(t *testing.T) {
+	st, svc, sv, landing := applicationFixture(t)
+	ctx := context.Background()
+	front := domain.Node{Name: "front", Protocol: "ss", Server: "front.example.test", Port: 21002, Params: json.RawMessage(`{"cipher":"aes-128-gcm","password":"fixture"}`), Source: domain.NodeManual, Enabled: true}
+	if err := st.CreateNode(ctx, &front); err != nil {
+		t.Fatal(err)
+	}
+	chain := landing
+	chain.ID, chain.ServerID, chain.ShareID = 0, nil, nil
+	chain.Name, chain.Source, chain.ChainFrontNodeID = "fixture-chain", domain.NodeChain, &front.ID
+	if err := st.CreateChainNode(ctx, &chain, landing.ID); err != nil {
+		t.Fatal(err)
+	}
+	acknowledgeApplication(t, st, sv)
+	if err := st.SetNodeExitRegion(ctx, landing.ID, "JP"); err != nil {
+		t.Fatal(err)
+	}
+	sub := domain.Subscription{Kind: domain.SubGenerated, NodeSelection: domain.NodeSelection{NodeIDs: []int64{landing.ID, chain.ID}}}
+	b, err := svc.Build(ctx, sub)
+	if err != nil || len(b.Chains) != 1 {
+		t.Fatalf("chain missing: %v", err)
+	}
+	if b.Chains[0].Proxy.Region != "JP" || b.Chains[0].Proxy.RegionSource != "manual" {
+		t.Fatal("chain did not inherit landing region")
+	}
+	found := false
+	for _, p := range b.Proxies {
+		if p.Region == "JP" && p.RegionSource == "manual" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("applied node used stale region metadata")
+	}
+}

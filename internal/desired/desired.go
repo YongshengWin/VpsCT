@@ -47,6 +47,10 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 	if err != nil {
 		return nil, err
 	}
+	ipv6IngressVersion, err := b.Store.IPv6IngressVersion(ctx, server.ID)
+	if err != nil {
+		return nil, err
+	}
 	egressVersion, err := b.Store.NetworkEgressVersion(ctx, server.ID)
 	if err != nil {
 		return nil, err
@@ -83,6 +87,7 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 		NetworkWireGuardVersion: wgVersion,
 		NetworkGeneration:       generation,
 		NetworkBindingVersion:   networkVersion,
+		IPv6IngressVersion:      ipv6IngressVersion,
 		NetworkEgressVersion:    egressVersion,
 		NetworkForwardVersion:   forwardVersion,
 		ServerID:                server.ID,
@@ -199,6 +204,12 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 			// A binding can be created between reading the sticky requirement
 			// and the node snapshot; it still must carry the wire contract.
 			ds.NetworkBindingVersion = agentproto.NetworkBindingVersion
+			if n.Network.IngressFamily == "ipv6" {
+				ds.IPv6IngressVersion = networkconfig.IPv6IngressVersion
+			}
+			if n.Network.Ingress != nil {
+				ds.NetworkIngressVersion = agentproto.NetworkIngressVersion
+			}
 			policy := *n.Network
 			spec.Network = &agentproto.NodeNetworkSpec{Policy: policy}
 			if policy.EgressProfileID != 0 {

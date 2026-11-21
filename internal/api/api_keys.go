@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"ctlvps/internal/auth"
+	"ctlvps/internal/authorization"
 	"ctlvps/internal/domain"
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/store"
@@ -61,7 +63,81 @@ func (a *API) apiKeyIdentity(r *http.Request) (*domain.APIKey, *domain.User, err
 	if err != nil || !u.Enabled || u.SecurityVersion != k.SecurityVersion {
 		return nil, nil, invalid
 	}
+	if u.Role != domain.RoleAdmin {
+		e, err := a.Store.PermissionSnapshot(r.Context())
+		if err != nil {
+			return nil, nil, httpx.E(503, "auth_unavailable", "身份验证暂时不可用")
+		}
+		if !e.Allows(u.ID, "ai.access", authorization.Scope{Kind: "all"}) {
+			return nil, nil, invalid
+		}
+	}
 	return &k, &u, nil
+}
+
+// Discovery remains available for every key so a restricted agent can inspect
+// its current limits. Other operations require an explicit allowlist match.
+func agentOperationID(pattern string) string {
+	method, path, _ := strings.Cut(pattern, " ")
+	return strings.ToLower(method) + "_" + strings.NewReplacer("/", "_", "{", "", "}", "", "-", "_", ".", "_").Replace(strings.TrimPrefix(path, "/api/v1/"))
+}
+
+// Ordinary-user AI access follows the share/detail product boundary. Keep this
+// list explicit: adding a member-access route does not silently expose it to AI.
+func (a *API) memberAIOperationAllowed(ctx context.Context, u *domain.User, pattern string) bool {
+	if pattern == "GET /api/v1/templates/{id}/versions" {
+		e, err := a.Store.PermissionSnapshot(ctx)
+		return err == nil && (e.Allows(u.ID, "templates.create", authorization.Scope{Kind: "all"}) || e.Allows(u.ID, "templates.edit", authorization.Scope{Kind: "all"}) || e.Allows(u.ID, "templates.delete", authorization.Scope{Kind: "all"}))
+	}
+	if delegatedGlobalRoutes[pattern] != "" || delegatedShareRoutes[pattern] != "" || pattern == "POST /api/v1/shares" {
+		return true
+	}
+	switch pattern {
+	case "GET /api/v1/shares", "GET /api/v1/shares/{id}", "GET /api/v1/share-pages/{public_id}",
+		"GET /api/v1/shares/{id}/events", "GET /api/v1/shares/{id}/traffic",
+		"GET /api/v1/shares/{id}/personal-templates", "POST /api/v1/shares/{id}/personal-templates/preview",
+		"POST /api/v1/shares/{id}/personal-templates/preview-draft", "PUT /api/v1/shares/{id}/personal-templates/{format}",
+		"DELETE /api/v1/shares/{id}/personal-templates/{format}",
+		"GET /api/v1/me/templates", "POST /api/v1/me/templates", "GET /api/v1/me/templates/{id}",
+		"GET /api/v1/me/templates/{id}/versions", "PUT /api/v1/me/templates/{id}", "DELETE /api/v1/me/templates/{id}",
+		"GET /api/v1/templates", "GET /api/v1/events":
+		return true
+	}
+	return false
+}
+
+func apiKeyAllowsOperation(k *domain.APIKey, pattern string) bool {
+	if k == nil || k.Operations == nil {
+		return true
+	}
+	switch pattern {
+	case "GET /api/v1/agent/capabilities", "GET /api/v1/agent/openapi.json", "GET /api/v1/agent/skill", "GET /api/v1/agent/skill.zip", "GET /api/v1/agent/client.py", "GET /api/v1/agent/reference":
+		return true
+	}
+	return slices.Contains(k.Operations, agentOperationID(pattern))
+}
+
+func (a *API) validateKeyOperations(r *http.Request, operations []string) error {
+	if operations == nil {
+		return nil
+	}
+	if len(operations) > 512 {
+		return httpx.BadRequest("选择的功能过多")
+	}
+	allowed := map[string]bool{}
+	for _, op := range a.visibleAgentOperations(r) {
+		if op.Available && !op.SessionOnly && !strings.HasPrefix(op.Path, "/api/v1/agent/") {
+			allowed[op.OperationID] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, id := range operations {
+		if !allowed[id] || seen[id] {
+			return httpx.BadRequest("功能无效、重复或超出当前账户权限")
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 func hasAPIKeyScope(k *domain.APIKey, scope string) bool {
@@ -96,13 +172,14 @@ func (a *API) listAPIKeys(w http.ResponseWriter, r *http.Request) error {
 
 func (a *API) createAPIKey(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
-		Name      string     `json:"name"`
-		Scopes    []string   `json:"scopes"`
-		ExpiresAt *time.Time `json:"expires_at"`
-		Password  string     `json:"password"`
-		Code      string     `json:"code"`
+		Name       string     `json:"name"`
+		Scopes     []string   `json:"scopes"`
+		Operations []string   `json:"operations"`
+		ExpiresAt  *time.Time `json:"expires_at"`
+		Password   string     `json:"password"`
+		Code       string     `json:"code"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	r.Body = http.MaxBytesReader(w, r.Body, 65536)
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
 	}
@@ -118,6 +195,9 @@ func (a *API) createAPIKey(w http.ResponseWriter, r *http.Request) error {
 		if (scope != "read" && scope != "write") || (i > 0 && in.Scopes[i-1] == scope) {
 			return httpx.BadRequest("API key 权限无效")
 		}
+	}
+	if err := a.validateKeyOperations(r, in.Operations); err != nil {
+		return err
 	}
 	if in.ExpiresAt != nil && !in.ExpiresAt.After(a.Store.Now()) {
 		return httpx.BadRequest("有效期必须晚于当前时间")
@@ -144,9 +224,9 @@ func (a *API) createAPIKey(w http.ResponseWriter, r *http.Request) error {
 	}
 	plain := apiKeyPrefix + auth.RandomToken(32)
 	k := domain.APIKey{UserID: u.ID, SecurityVersion: u.SecurityVersion, Name: in.Name, Scopes: in.Scopes,
-		TokenHash: auth.HashToken(plain), TokenHint: plain[:12], ExpiresAt: in.ExpiresAt}
+		TokenHash: auth.HashToken(plain), TokenHint: plain[:12], ExpiresAt: in.ExpiresAt, Operations: in.Operations}
 	// Persist the intent without credentials before issuing a new capability.
-	if err := a.audit(r, "api_key.create.request", "self", map[string]any{"name": k.Name, "scopes": k.Scopes, "expires_at": k.ExpiresAt}); err != nil {
+	if err := a.audit(r, "api_key.create.request", "self", map[string]any{"name": k.Name, "scopes": k.Scopes, "operations": k.Operations, "expires_at": k.ExpiresAt}); err != nil {
 		return httpx.E(503, "audit_unavailable", "无法持久化安全审计，未创建 API key")
 	}
 	if err := a.Store.CreateAPIKey(r.Context(), &k); err != nil {
@@ -177,5 +257,42 @@ func (a *API) revokeAPIKey(w http.ResponseWriter, r *http.Request) error {
 	}
 	a.audit(r, "api_key.revoke", fmt.Sprintf("api_key:%d", id), nil)
 	httpx.NoContent(w)
+	return nil
+}
+
+func (a *API) updateAPIKeyOperations(w http.ResponseWriter, r *http.Request) error {
+	id, err := httpx.PathInt64(r, "id")
+	if err != nil {
+		return err
+	}
+	var in struct {
+		Operations json.RawMessage `json:"operations"`
+		Password   string          `json:"password"`
+		Code       string          `json:"code"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 65536)
+	if err := httpx.Decode(r, &in); err != nil {
+		return err
+	}
+	if len(in.Operations) == 0 {
+		return httpx.BadRequest("必须提供 operations")
+	}
+	var operations []string
+	if err := json.Unmarshal(in.Operations, &operations); err != nil {
+		return httpx.BadRequest("功能列表无效")
+	}
+	if err := a.validateKeyOperations(r, operations); err != nil {
+		return err
+	}
+	if err := a.permissionReauth(w, r, in.Password, in.Code); err != nil {
+		return err
+	}
+	if err := a.Store.UpdateAPIKeyOperations(r.Context(), *userFrom(r.Context()), id, operations, a.auditIdentity(r)); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return httpx.ErrNotFound
+		}
+		return err
+	}
+	httpx.OK(w, map[string]any{"operations": operations})
 	return nil
 }

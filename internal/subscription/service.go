@@ -36,7 +36,9 @@ func (s *Service) Seed(ctx context.Context) error {
 	}
 	existing := make(map[string]domain.RuleTemplate, len(tpls))
 	for _, t := range tpls {
-		existing[t.Name] = t
+		if t.IsBuiltin {
+			existing[t.Name] = t
+		}
 	}
 	for _, want := range BuiltinTemplates() {
 		want := want
@@ -253,9 +255,16 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 		}
 	}
 	hosts := s.serverHosts(ctx)
+	servers, err := s.Store.ListServers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverRegions := make(map[int64]string, len(servers))
+	for _, server := range servers {
+		serverRegions[server.ID] = server.Region
+	}
 	nameByID := map[int64]string{}
 	var nodes []domain.Node
-	var err error
 	switch sub.Kind {
 	case domain.SubImported:
 		if sub.SourceExternalID == nil {
@@ -370,7 +379,9 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 				continue
 			}
 			standalones = append(standalones, n)
-			b.Proxies = append(b.Proxies, ProxyFor(n, hosts))
+			proxy := ProxyFor(n, hosts)
+			setProxyRegion(&proxy, n, serverRegions)
+			b.Proxies = append(b.Proxies, proxy)
 		}
 		b.Proxies = proxynode.DedupeNames(b.Proxies)
 		for i, n := range standalones {
@@ -379,13 +390,13 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 			}
 		}
 		for _, c := range sub.Chains {
-			s.appendChain(ctx, b, hosts, byID, nameByID, c.FrontNodeID, c.LandingNodeID, c.Name)
+			s.appendChain(ctx, b, hosts, serverRegions, byID, nameByID, c.FrontNodeID, c.LandingNodeID, c.Name)
 		}
 		for _, n := range nodes {
 			if n.Source != domain.NodeChain || n.ChainFrontNodeID == nil || *n.ChainFrontNodeID == 0 {
 				continue
 			}
-			s.appendChain(ctx, b, hosts, byID, nameByID, *n.ChainFrontNodeID, n.ID, n.Name)
+			s.appendChain(ctx, b, hosts, serverRegions, byID, nameByID, *n.ChainFrontNodeID, n.ID, n.Name)
 		}
 		if len(sub.ProxyGroups) > 0 && !subscriptionFollowsTemplate(sub) {
 			b.Groups = ResolveGroups(sub.ProxyGroups, b.Proxies, b.Chains, nameByID)
@@ -413,7 +424,19 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 				}
 			}
 			if usable {
-				b.Proxies = append(b.Proxies, ProxyFor(n, nil))
+				proxy := ProxyFor(n, nil)
+				// The projected route's name describes the entry, not necessarily
+				// the final exit. Resolve its landing node before assigning region.
+				route, routeErr := s.Store.AccessRoute(ctx, id)
+				if routeErr != nil {
+					return nil, routeErr
+				}
+				landing, landingErr := s.Store.GetNode(ctx, route.Request.LandingNodeID)
+				if landingErr != nil {
+					return nil, landingErr
+				}
+				setProxyRegion(&proxy, landing, serverRegions)
+				b.Proxies = append(b.Proxies, proxy)
 			}
 		}
 		b.Proxies = proxynode.DedupeNames(b.Proxies)
@@ -427,7 +450,7 @@ func (s *Service) Build(ctx context.Context, sub domain.Subscription) (*Bundle, 
 	return b, nil
 }
 
-func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]string, byID map[int64]domain.Node, nameByID map[int64]string, frontID, landingID int64, chainName string) {
+func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]string, serverRegions map[int64]string, byID map[int64]domain.Node, nameByID map[int64]string, frontID, landingID int64, chainName string) {
 	if frontID == 0 || landingID == 0 || frontID == landingID {
 		return
 	}
@@ -442,6 +465,7 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 			return
 		}
 		fp := ProxyFor(fn, hosts)
+		setProxyRegion(&fp, fn, serverRegions)
 		b.Proxies = append(b.Proxies, fp)
 		b.Proxies = proxynode.DedupeNames(b.Proxies)
 		frontName = b.Proxies[len(b.Proxies)-1].Name
@@ -467,12 +491,25 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 		return
 	}
 	if landing.Source == domain.NodeChain {
-		for _, n := range byID {
-			if n.Source == domain.NodeChain || n.Protocol != landing.Protocol || n.Server != landing.Server || n.Port != landing.Port {
-				continue
+		// Resolve the recorded origin rather than guessing by endpoint: several
+		// nodes can share an address and have different exit metadata.
+		seen := map[int64]bool{}
+		for landing.Source == domain.NodeChain {
+			if seen[landing.ID] {
+				return
 			}
-			landing = n
-			break
+			seen[landing.ID] = true
+			origin, found, err := s.Store.ChainLanding(ctx, landing.ID)
+			if err != nil || !found {
+				return
+			}
+			landing = origin
+		}
+		var usable bool
+		var err error
+		landing, usable, err = s.subscriptionNode(ctx, landing)
+		if err != nil || !usable {
+			return
 		}
 	}
 	landingName := nameByID[landing.ID]
@@ -480,6 +517,7 @@ func (s *Service) appendChain(ctx context.Context, b *Bundle, hosts map[int64]st
 		landingName = landing.Name
 	}
 	lp := ProxyFor(landing, hosts)
+	setProxyRegion(&lp, landing, serverRegions)
 	lp.Name = strings.TrimSpace(chainName)
 	if lp.Name == "" {
 		lp.Name = fmt.Sprintf("%s → %s", frontName, landingName)
@@ -584,6 +622,21 @@ func (s *Service) Render(ctx context.Context, sub domain.Subscription, format st
 	b, err := s.Build(ctx, sub)
 	if err != nil {
 		return nil, nil, err
+	}
+	// Share selections are resolved after the output format is known. The
+	// underlying lookup verifies the share's current owner, so transfer and
+	// deletion immediately stop applying the previous owner's configuration.
+	if sub.Kind == domain.SubShare && sub.ShareID != nil {
+		f := NormalizeFormat(format)
+		if f == FormatMihomo || f == FormatSurge || f == FormatShadowrocket || f == FormatSingBox {
+			t, lookupErr := s.Store.GetSharePersonalTemplate(ctx, *sub.ShareID, f)
+			switch {
+			case lookupErr == nil:
+				b.Template = &t
+			case !errors.Is(lookupErr, store.ErrNotFound):
+				return nil, nil, lookupErr
+			}
+		}
 	}
 	r, err := RenderBundle(b, format)
 	return r, b, err

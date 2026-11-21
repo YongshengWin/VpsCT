@@ -3,7 +3,7 @@ import type { NetworkImpact } from "@/lib/network";
 import { Badge, Button } from "@/components/ui";
 
 const effectLabels: Record<NetworkImpact["nodes"][number]["effect"], string> = {
-  binding: "修改网络", clear: "恢复默认网络", disable: "停用出口", resume: "恢复原出口", pinned: "保留固定版本", restart: "可能随进程重启",
+  port: "更换端口", binding: "修改网络", clear: "恢复默认网络", disable: "停用出口", resume: "恢复原出口", pinned: "保留固定版本", restart: "可能随进程重启",
 };
 
 export function NetworkImpactPreview({ impact }: { impact: NetworkImpact }) {

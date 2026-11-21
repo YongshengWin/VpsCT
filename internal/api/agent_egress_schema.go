@@ -41,6 +41,54 @@ func agentEgressConfigSchema() map[string]any {
 // agentDescribeRequestBody returns a fresh outer schema so registering one
 // route cannot mutate the shared generated contract used by another route.
 func agentDescribeRequestBody(handler string, body map[string]any) map[string]any {
+	if handler == "deployNode" || handler == "previewIPv6Node" {
+		return agentIPv6DeployRequestSchema(body, handler == "previewIPv6Node")
+	}
+	if handler == "checkServerIPv6Endpoint" {
+		return map[string]any{"type": "object", "required": []string{"host"}, "properties": map[string]any{
+			"host": map[string]any{"type": "string", "maxLength": 254, "description": "公网 IPv6 字面量或仅有 AAAA 的公开域名。"},
+		}}
+	}
+	if handler == "createAPIKey" || handler == "updateAPIKeyOperations" {
+		result, props := map[string]any{}, map[string]any{}
+		for k, v := range body {
+			result[k] = v
+		}
+		if old, ok := body["properties"].(map[string]any); ok {
+			for k, v := range old {
+				props[k] = v
+			}
+		}
+		props["operations"] = map[string]any{"anyOf": []any{map[string]any{"type": "array", "maxItems": 512, "uniqueItems": true, "items": map[string]any{"type": "string"}}, map[string]any{"type": "null"}}, "description": "能力目录中当前账户可用的非会话专用 operation_id；null 表示全部授权操作，空数组只保留发现接口。"}
+		result["properties"] = props
+		if handler == "updateAPIKeyOperations" {
+			result["required"] = []string{"operations", "password"}
+		}
+		return result
+	}
+
+	if handler == "saveUnavailablePort" {
+		return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"transport"}, "properties": map[string]any{
+			"transport": map[string]any{"type": "string", "enum": []string{"tcp", "udp", "both"}},
+			"network":   map[string]any{"type": "string", "description": "可选，适用的本地网络、运营商或地区，去除首尾空格后最多 120 UTF-8 字节；不需要本地 IP。"},
+			"reason":    map[string]any{"type": "string", "description": "可选，人工观察到的不可用原因，去除首尾空格后最多 500 UTF-8 字节。"},
+		}, "description": "URL 端口须为 1–65535。同一服务器同一端口只保存一条记录，重复 PUT 更新该条记录；不修改节点或执行网络探测。每台服务器最多 512 条。"}
+	}
+	if handler == "previewNodeNetwork" || handler == "updateNodeNetwork" {
+		result, props := map[string]any{}, map[string]any{}
+		for k, v := range body {
+			result[k] = v
+		}
+		if old, ok := body["properties"].(map[string]any); ok {
+			for k, v := range old {
+				props[k] = v
+			}
+		}
+		props["listen_port"] = map[string]any{"type": "integer", "minimum": 1, "maximum": 65535, "description": "可选。更换监听端口并同步节点连接端口；mieru 至少 1025。须保留原 network、预览并提交 expected_impact。NAT 使用已确认映射，线路占用时拒绝。省略则保留。"}
+		props["network"] = map[string]any{"anyOf": []any{agentJSONTypeSchema(reflect.TypeFor[networkconfig.Node](), map[reflect.Type]bool{}, 0), map[string]any{"type": "null"}}, "description": "必须明确提交当前或目标网络策略；null 表示清除绑定。仅换端口时原样保留 GET 节点返回的 network。"}
+		result["properties"] = props
+		return result
+	}
 	if handler == "previewAccessRoute" || handler == "createAccessRoute" {
 		return agentAccessRouteRequestSchema(handler == "createAccessRoute")
 	}
@@ -111,6 +159,21 @@ func agentJSONTypeSchema(typ reflect.Type, seen map[reflect.Type]bool, depth int
 	}
 	if typ == reflect.TypeFor[time.Time]() {
 		return map[string]any{"type": "string", "format": "date-time"}
+	}
+	if typ == reflect.TypeFor[networkconfig.IngressPolicy]() {
+		return map[string]any{
+			"type": "object", "additionalProperties": false,
+			"properties": map[string]any{
+				"mode":           map[string]any{"type": "string", "enum": []string{networkconfig.IngressRelayOnly, networkconfig.IngressDenyCountries}},
+				"source_cidrs":   map[string]any{"type": "array", "maxItems": 256, "uniqueItems": true, "items": map[string]any{"type": "string", "description": "规范 IPv4/IPv6 网段；地区拒绝模式中作为中转出口例外。"}},
+				"countries":      map[string]any{"type": "array", "maxItems": 64, "uniqueItems": true, "items": map[string]any{"type": "string", "pattern": "^[A-Za-z]{2}$", "description": "ISO 3166-1 alpha-2 国家代码。"}},
+				"geo_ipv4_cidrs": map[string]any{"type": "array", "maxItems": 200000, "items": map[string]any{"type": "string"}, "description": "由控制端 preview 返回的固定 GeoIP IPv4 地址集合；不要自行生成。"},
+				"geo_ipv6_cidrs": map[string]any{"type": "array", "maxItems": 200000, "items": map[string]any{"type": "string"}, "description": "由控制端 preview 返回的固定 GeoIP IPv6 地址集合；不要自行生成。"},
+				"geo_provider":   map[string]any{"type": "string", "enum": []string{networkconfig.GeoIPProviderDBIP, networkconfig.GeoIPProviderMaxMind}},
+				"geo_version":    map[string]any{"type": "string", "description": "控制端固定的数据版本。"},
+			},
+			"description": "relay_only 只允许实际源地址命中 source_cidrs；deny_countries 按控制端物化的 GeoIP 集合拒绝实际源地址。必须先 preview，不能把被中转前的客户端地区当作实际源地址。",
+		}
 	}
 	if typ == reflect.TypeFor[json.RawMessage]() {
 		return agentUnresolvedJSONSchema()

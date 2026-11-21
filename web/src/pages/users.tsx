@@ -8,17 +8,21 @@ import { Badge, Button, Card, Confirm, Dialog, Empty, Field, Input, PageHeader, 
 import { Avatar } from "@/components/avatar";
 import { useToast } from "@/components/toast";
 import { useAuth } from "@/lib/auth";
+import { UserPermissionsDialog } from "@/components/user-permissions";
 
 export function UsersPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const { user: me } = useAuth();
   const q = useQuery({ queryKey: ["users"], queryFn: () => get<User[]>("/api/v1/users") });
+  const owner = useQuery({ queryKey: ["controller-owner"], queryFn: () => get<{ user_id: number; is_owner: boolean }>("/api/v1/system/owner") });
   const shares = useQuery({ queryKey: ["shares"], queryFn: () => get<Share[]>("/api/v1/shares") });
   const subs = useQuery({ queryKey: ["subscriptions"], queryFn: () => get<Subscription[]>("/api/v1/subscriptions") });
   const [edit, setEdit] = React.useState<User | null | "new">(null);
   const [confirmDel, setConfirmDel] = React.useState<User | null>(null);
   const [reset2fa, setReset2fa] = React.useState<User | null>(null);
+  const [permissions, setPermissions] = React.useState<User | null>(null);
+  const [transfer, setTransfer] = React.useState<User | null>(null);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["users"] });
   const delM = useMutation({ mutationFn: (id: number) => del(`/api/v1/users/${id}`), onSuccess: () => { toast.success("已删除"); setConfirmDel(null); invalidate(); }, onError: (e) => toast.fromError(e) });
   const toggle = useMutation({ mutationFn: (u: User) => put(`/api/v1/users/${u.id}`, { enabled: !u.enabled }), onSuccess: invalidate, onError: (e) => toast.fromError(e) });
@@ -49,13 +53,13 @@ export function UsersPage() {
                         </span>
                       </div>
                     </Td>
-                    <Td><Badge variant={u.role === "admin" ? "default" : "secondary"}>{u.role === "admin" ? "管理员" : "普通用户"}</Badge></Td>
-                    <Td><Switch checked={u.enabled} disabled={me?.id === u.id} onChange={() => toggle.mutate(u)} /></Td>
+                    <Td><Badge variant={u.role === "admin" ? "default" : "secondary"}>{owner.data?.user_id === u.id ? "系统所有者" : u.role === "admin" ? "管理员" : "普通用户"}</Badge></Td>
+                    <Td><Switch checked={u.enabled} disabled={me?.id === u.id || owner.data?.user_id === u.id} onChange={() => toggle.mutate(u)} /></Td>
                     <Td>
                       {u.totp_enabled ? (
                         <span className="inline-flex items-center gap-1.5">
                           <Badge variant="success"><ShieldCheck className="mr-1 h-3 w-3" />已开启</Badge>
-                          <button className="text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => setReset2fa(u)} title="用户丢失验证器时由管理员关闭">重置</button>
+                          {owner.data?.user_id !== u.id && <button className="text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => setReset2fa(u)} title="用户丢失验证器时由管理员关闭">重置</button>}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><ShieldOff className="h-3.5 w-3.5" />未开启</span>
@@ -66,8 +70,10 @@ export function UsersPage() {
                     <Td className="text-xs text-muted-foreground">{fmtAgo(u.last_login_at)}</Td>
                     <Td className="text-xs text-muted-foreground">{fmtDate(u.created_at, false)}</Td>
                     <Td className="text-right">
-                      <Button size="icon" variant="ghost" onClick={() => setEdit(u)}><Pencil className="h-4 w-4" /></Button>
-                      {me?.id !== u.id && <Button size="icon" variant="ghost" className="text-red-500" onClick={() => setConfirmDel(u)}><Trash2 className="h-4 w-4" /></Button>}
+                      {u.role !== "admin" && <Button size="sm" variant="ghost" onClick={() => setPermissions(u)}>权限</Button>}
+                      {owner.data?.is_owner && u.role === "admin" && u.enabled && u.id !== me?.id && <Button size="sm" variant="ghost" onClick={() => setTransfer(u)}>移交所有权</Button>}
+                      {(owner.data?.user_id !== u.id || owner.data?.is_owner) && <Button size="icon" variant="ghost" onClick={() => setEdit(u)}><Pencil className="h-4 w-4" /></Button>}
+                      {me?.id !== u.id && owner.data?.user_id !== u.id && <Button size="icon" variant="ghost" className="text-red-500" onClick={() => setConfirmDel(u)}><Trash2 className="h-4 w-4" /></Button>}
                     </Td>
                   </Tr>
                 );
@@ -77,18 +83,41 @@ export function UsersPage() {
         </Card>
       )}
       <UserDialog u={edit} onClose={() => setEdit(null)} />
+      <UserPermissionsDialog target={permissions} onClose={() => setPermissions(null)} />
+      <OwnerTransferDialog target={transfer} onClose={() => setTransfer(null)} />
       <Confirm open={!!confirmDel} onClose={() => setConfirmDel(null)} onConfirm={() => confirmDel && delM.mutate(confirmDel.id)} loading={delM.isPending} destructive title={`删除用户「${displayName(confirmDel)}」？`} description="其绑定的分享会解除绑定（不删除），授权订阅会移除该用户。" />
       <Confirm open={!!reset2fa} onClose={() => setReset2fa(null)} onConfirm={() => reset2fa && resetM.mutate(reset2fa.id)} loading={resetM.isPending} destructive title={`重置「${displayName(reset2fa)}」的两步验证？`} description="将关闭其两步验证并退出其所有会话；之后仅凭密码即可登录，用户可自行重新开启。" />
     </div>
   );
 }
 
+function OwnerTransferDialog({ target, onClose }: { target: User | null; onClose: () => void }) {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [password, setPassword] = React.useState("");
+  const [code, setCode] = React.useState("");
+  React.useEffect(() => { setPassword(""); setCode(""); }, [target?.id]);
+  const save = useMutation({
+    mutationFn: () => post("/api/v1/system/owner", { user_id: target!.id, password, code }),
+    onSuccess: () => { setPassword(""); setCode(""); qc.invalidateQueries({ queryKey: ["controller-owner"] }); toast.success("所有权已移交"); onClose(); },
+    onError: e => { setCode(""); toast.fromError(e); },
+  });
+  return <Dialog open={!!target} onClose={onClose} title={`移交所有权给「${displayName(target)}」？`} description="对方将成为系统所有者，只有新的所有者可以再次移交。你的管理员权限保持不变。" footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={!password} loading={save.isPending} onClick={() => save.mutate()}>确认移交</Button></>}>
+    <div className="grid gap-4"><Field label="你的密码"><Input type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)} /></Field>{user?.totp_enabled && <Field label="两步验证码"><Input autoComplete="one-time-code" value={code} onChange={e => setCode(e.target.value)} /></Field>}</div>
+  </Dialog>;
+}
+
 function UserDialog({ u, onClose }: { u: User | null | "new"; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const isNew = u === "new";
+  const { user: me } = useAuth();
+  const [reauthPassword, setReauthPassword] = React.useState("");
+  const [reauthCode, setReauthCode] = React.useState("");
   const [f, setF] = React.useState({ username: "", nickname: "", password: "", role: "user" as User["role"], enabled: true });
   React.useEffect(() => {
+    setReauthPassword(""); setReauthCode("");
     if (u && u !== "new") setF({ username: u.username, nickname: u.nickname ?? "", password: "", role: u.role, enabled: u.enabled });
     else setF({ username: "", nickname: "", password: "", role: "user", enabled: true });
   }, [u]);
@@ -96,6 +125,7 @@ function UserDialog({ u, onClose }: { u: User | null | "new"; onClose: () => voi
     mutationFn: () => {
       const body: Record<string, unknown> = { username: f.username, nickname: f.nickname, role: f.role, enabled: f.enabled };
       if (f.password) body.password = f.password;
+      if (f.role === "admin" && (isNew || u && u.role !== "admin")) { body.reauth_password = reauthPassword; body.reauth_code = reauthCode; }
       return isNew ? post<User>("/api/v1/users", body) : put<User>(`/api/v1/users/${(u as User).id}`, body);
     },
     onSuccess: () => { toast.success(isNew ? "已添加" : "已保存"); qc.invalidateQueries({ queryKey: ["users"] }); onClose(); },
@@ -113,6 +143,7 @@ function UserDialog({ u, onClose }: { u: User | null | "new"; onClose: () => voi
             <option value="admin">管理员</option>
           </Select>
         </Field>
+        {f.role === "admin" && (isNew || u && u.role !== "admin") && <><Field label="你的密码" hint="授予完整管理员权限需要再次验证"><Input type="password" value={reauthPassword} onChange={e => setReauthPassword(e.target.value)} autoComplete="current-password" /></Field>{me?.totp_enabled && <Field label="两步验证码"><Input value={reauthCode} onChange={e => setReauthCode(e.target.value)} autoComplete="one-time-code" /></Field>}</>}
         <Switch checked={f.enabled} onChange={(v) => setF({ ...f, enabled: v })} label="启用（停用后无法登录，现有会话失效）" />
       </div>
     </Dialog>

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	mrand "math/rand/v2"
+	"net/netip"
 	"regexp"
 	"strings"
 
@@ -166,6 +167,15 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 			host = opts.AdvertiseHost
 		} else if opts.AdvertiseHost != "" {
 			return domain.Node{}, errors.New("独立访问地址需要选择 override 模式")
+		} else if copy.AdvertiseMode == "inherit_ipv6" {
+			host = server.PublicHostIPv6
+		}
+		if copy.IngressFamily == "ipv6" {
+			var err error
+			host, err = networkconfig.NormalizeIPv6Host(host)
+			if err != nil {
+				return domain.Node{}, err
+			}
 		}
 	} else if opts.AdvertiseHost != "" {
 		return domain.Node{}, errors.New("独立访问地址需要显式网络策略")
@@ -199,6 +209,15 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 	}
 	client := map[string]any{}
 	srv := map[string]any{"cert_mode": certMode, "tls_domain": tlsDomain}
+	switch opts.Protocol {
+	case domain.ProtocolAnyTLS, domain.ProtocolHysteria2, domain.ProtocolTUIC, domain.ProtocolTrojan:
+		if network != nil && network.IngressFamily == "ipv6" && certMode == "acme" {
+			_, ipErr := netip.ParseAddr(tlsDomain)
+			if ipErr == nil || !strings.Contains(tlsDomain, ".") || networkconfig.ValidateAdvertiseHost(tlsDomain) != nil {
+				return domain.Node{}, errors.New("仅 IPv6 节点使用 ACME 时需要有效的 TLS 域名")
+			}
+		}
+	}
 	if certMode == "external" && (opts.Protocol == "anytls" || opts.Protocol == "hysteria2" || opts.Protocol == "tuic" || opts.Protocol == "trojan") {
 		if !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(opts.CertID) {
 			return domain.Node{}, errors.New("外部证书需要本机策略中登记的证书 ID")

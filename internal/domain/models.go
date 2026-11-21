@@ -84,22 +84,23 @@ const (
 
 // Server is a VPS managed (or at least observed) by ctlvps.
 type Server struct {
-	IsNAT         bool      `json:"is_nat"`
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	Region        string    `json:"region"` // two-letter country/region code
-	PublicHost    string    `json:"public_host"`
-	Tags          []string  `json:"tags"`
-	Notes         string    `json:"notes"`
-	QuotaBytes    int64     `json:"quota_bytes"`     // 0 = unlimited
-	QuotaResetDay int       `json:"quota_reset_day"` // 1..28, or 31 = last day (29/30/31 normalize to 31)
-	QuotaBilling  string    `json:"quota_billing"`   // dual, up (inbound), down (outbound), or max
-	CoreMode      CoreMode  `json:"core_mode"`
-	IPv4Only      bool      `json:"ipv4_only"`
-	CertMode      string    `json:"cert_mode"` // self_signed|acme|external
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	IsNAT          bool      `json:"is_nat"`
+	ID             int64     `json:"id"`
+	Name           string    `json:"name"`
+	Region         string    `json:"region"` // two-letter country/region code
+	PublicHost     string    `json:"public_host"`
+	PublicHostIPv6 string    `json:"public_host_ipv6,omitempty"`
+	Tags           []string  `json:"tags"`
+	Notes          string    `json:"notes"`
+	QuotaBytes     int64     `json:"quota_bytes"`     // 0 = unlimited
+	QuotaResetDay  int       `json:"quota_reset_day"` // 1..28, or 31 = last day (29/30/31 normalize to 31)
+	QuotaBilling   string    `json:"quota_billing"`   // dual, up (inbound), down (outbound), or max
+	CoreMode       CoreMode  `json:"core_mode"`
+	IPv4Only       bool      `json:"ipv4_only"`
+	CertMode       string    `json:"cert_mode"` // self_signed|acme|external
+	Enabled        bool      `json:"enabled"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // AgentStatus is derived from the last heartbeat.
@@ -159,6 +160,7 @@ const (
 // secrets (reality private key, certificate mode) and is never rendered to
 // subscriptions.
 type Node struct {
+	ExitRegion       string              `json:"exit_region,omitempty"`
 	Network          *networkconfig.Node `json:"network,omitempty"`
 	NetworkRevision  int64               `json:"network_revision,omitempty"`
 	ID               int64               `json:"id"`
@@ -351,6 +353,7 @@ type ShareTarget struct {
 // a metered quota and a subscription.
 type Share struct {
 	ID             int64              `json:"id"`
+	PublicID       string             `json:"public_id"`
 	Name           string             `json:"name"`
 	UserID         *int64             `json:"user_id,omitempty"`
 	Targets        []ShareTarget      `json:"targets"`
@@ -570,26 +573,32 @@ type ConnEvent struct {
 
 // Settings keys.
 const (
-	SettingSiteName         = "site.name"
-	SettingSiteURL          = "site.url"
-	SettingShortLinks       = "subscription.short_links"
-	SettingUserinfoDefault  = "subscription.userinfo_default"
-	SettingTelegramToken    = "telegram.bot_token"
-	SettingTelegramChatID   = "telegram.chat_id"
-	SettingTelegramDaily    = "telegram.daily_report"
-	SettingTelegramHour     = "telegram.daily_hour"
-	SettingConnlogRetention = "connlog.retention_days"
-	SettingAggRetention     = "connlog.aggregate_retention_days"
-	SettingConnlogSelf      = "connlog.self_enabled"
-	SettingSampleRetention  = "traffic.sample_retention_hours"
-	SettingHourlyRetention  = "traffic.hourly_retention_days"
-	SettingAccessRetention  = "access_log.retention_days"
-	SettingAgentOfflineSec  = "agent.offline_after_seconds"
-	SettingQuotaAlertPct    = "quota.alert_percent"
-	SettingSingBoxVersion   = "core.singbox_version"
-	SettingSnellVersion     = "core.snell_version"
-	SettingMitaVersion      = "core.mita_version"
-	SettingRateLimitPerMin  = "security.subscription_rate_per_min"
+	SettingSiteName           = "site.name"
+	SettingSiteURL            = "site.url"
+	SettingShortLinks         = "subscription.short_links"
+	SettingUserinfoDefault    = "subscription.userinfo_default"
+	SettingTelegramToken      = "telegram.bot_token"
+	SettingTelegramChatID     = "telegram.chat_id"
+	SettingTelegramDaily      = "telegram.daily_report"
+	SettingTelegramHour       = "telegram.daily_hour"
+	SettingConnlogRetention   = "connlog.retention_days"
+	SettingAggRetention       = "connlog.aggregate_retention_days"
+	SettingConnlogSelf        = "connlog.self_enabled"
+	SettingSampleRetention    = "traffic.sample_retention_hours"
+	SettingHourlyRetention    = "traffic.hourly_retention_days"
+	SettingAccessRetention    = "access_log.retention_days"
+	SettingAgentOfflineSec    = "agent.offline_after_seconds"
+	SettingQuotaAlertPct      = "quota.alert_percent"
+	SettingSingBoxVersion     = "core.singbox_version"
+	SettingSnellVersion       = "core.snell_version"
+	SettingMitaVersion        = "core.mita_version"
+	SettingRateLimitPerMin    = "security.subscription_rate_per_min"
+	SettingGeoCountryProvider = "geoip.country_provider"
+	SettingGeoMaxMindAccount  = "geoip.maxmind_account_id"
+	SettingGeoMaxMindKey      = "geoip.maxmind_license_key"
+	SettingGeoOnlineEnabled   = "geoip.online_enabled"
+	SettingGeoIPV4Mirror      = "geoip.ip2region_v4_mirror"
+	SettingGeoIPV6Mirror      = "geoip.ip2region_v6_mirror"
 )
 
 // Protocol identifiers (Clash/mihomo spelling).

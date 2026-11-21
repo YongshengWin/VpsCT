@@ -91,6 +91,7 @@ func (s *Store) RequireNoNetworkMaintenance(ctx context.Context, serverID int64)
 }
 
 type NodeNetworkRequest struct {
+	ListenPort       *int                `json:"listen_port,omitempty"`
 	ID               string              `json:"operation_id"`
 	NodeID           int64               `json:"node_id"`
 	ExpectedRevision int64               `json:"expected_revision"`
@@ -115,6 +116,9 @@ func (in NodeNetworkRequest) fingerprint() (string, error) {
 		if err := networkconfig.ValidateAdvertiseHost(*in.AdvertiseHost); err != nil {
 			return "", err
 		}
+	}
+	if in.ListenPort != nil && (*in.ListenPort < 1 || *in.ListenPort > 65535) {
+		return "", ErrNodePortRequest
 	}
 	b, err := json.Marshal(in)
 	if err != nil {
@@ -183,6 +187,11 @@ func (s *Store) requestNodeNetwork(ctx context.Context, in NodeNetworkRequest, a
 		if n.Source != domain.NodeDeployed || n.ServerID == nil {
 			return errors.New("只有受管部署节点可以设置服务器网络")
 		}
+		if in.ListenPort != nil {
+			if err := s.validateNodePort(ctx, tx, n, *in.ListenPort); err != nil {
+				return err
+			}
+		}
 		if requireReview && in.ExpectedImpact == "" {
 			return ErrNetworkImpactRequired
 		}
@@ -220,6 +229,15 @@ func (s *Store) requestNodeNetwork(ctx context.Context, in NodeNetworkRequest, a
 		n, err = s.setNodeNetwork(ctx, tx, in.NodeID, in.ExpectedRevision, in.Network, in.AdvertiseHost)
 		if err != nil {
 			return err
+		}
+		if in.ListenPort != nil && *in.ListenPort != n.ListenPort {
+			if err := s.backfillChainOrigins(ctx, tx); err != nil {
+				return err
+			}
+			n.Port, n.ListenPort = *in.ListenPort, *in.ListenPort
+			if err := s.updateNode(ctx, tx, &n); err != nil {
+				return forwardStoreError(err)
+			}
 		}
 		generation, err := networkGeneration(ctx, tx, *n.ServerID)
 		if err != nil {

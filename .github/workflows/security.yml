@@ -1,0 +1,40 @@
+name: Security audit
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 3 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    name: Audit (${{ matrix.kind }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [secrets, go, npm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: ${{ matrix.kind == 'secrets' && '0' || '1' }}
+          persist-credentials: false
+      - uses: ./.github/actions/ci-env
+        with:
+          bundle: 'false'
+          go: ${{ matrix.kind != 'npm' }}
+          node: ${{ matrix.kind == 'npm' }}
+      - name: Secret scan (redacted)
+        if: matrix.kind == 'secrets'
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
+      - name: Go vulnerability scan
+        if: matrix.kind == 'go'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Frontend dependency audit
+        if: matrix.kind == 'npm'
+        working-directory: web
+        run: npm audit --audit-level=high

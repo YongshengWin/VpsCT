@@ -8,7 +8,7 @@ COPY web/ .
 RUN npm run build
 
 # ---- go ----
-FROM golang:1.26.9-alpine AS build
+FROM golang:1.26.10-alpine AS build
 ARG VERSION=dev
 ARG COMMIT=
 WORKDIR /src

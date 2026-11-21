@@ -93,14 +93,21 @@ func (a *Agent) finishNodeApplications(ds *agentproto.DesiredState, nodes []agen
 		if !attempted[n.Core] {
 			continue
 		}
-		status := "failed"
+		receipt := agentproto.NodeApplication{NodeID: n.NodeID, Core: n.Core, Status: "failed"}
 		if ready[n.Core] {
-			status = "applied"
-			if actual, ok := prepared[n.NodeID]; !ok || actual.Blocked {
-				status = "blocked"
+			receipt.Status = "applied"
+			actual, ok := prepared[n.NodeID]
+			if !ok || actual.Blocked {
+				receipt.Status = "blocked"
+			} else if actual.Network != nil && actual.Network.Policy.IngressFamily == "ipv6" {
+				if actual.RuntimeNetwork == nil {
+					receipt.Status = "failed"
+				} else {
+					receipt.ListenIPv6 = actual.RuntimeNetwork.ListenAddress
+				}
 			}
 		}
-		a.State.NodeApplications = append(a.State.NodeApplications, agentproto.NodeApplication{NodeID: n.NodeID, Core: n.Core, Status: status})
+		a.State.NodeApplications = append(a.State.NodeApplications, receipt)
 	}
 	if err := a.State.Save(a.StateDir); err != nil {
 		// Never publish an undurable sequence, or resurrect the previous

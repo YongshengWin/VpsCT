@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"ctlvps/internal/domain"
+	"ctlvps/internal/geoip"
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/safehttp"
 	"ctlvps/internal/store"
@@ -68,7 +70,7 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 			if sh.Status == domain.ShareActive {
 				activeShares++
 			} else if sh.Status == domain.ShareExhausted {
-				alerts = append(alerts, map[string]any{"level": "info", "kind": "share_exhausted", "share_id": sh.ID, "message": fmt.Sprintf("分享 %s 流量已用尽", sh.Name)})
+				alerts = append(alerts, map[string]any{"level": "info", "kind": "share_exhausted", "share_id": sh.ID, "share_public_id": sh.PublicID, "message": fmt.Sprintf("分享 %s 流量已用尽", sh.Name)})
 			}
 		}
 		for _, e := range exts {
@@ -113,7 +115,7 @@ func (a *API) dashboard(w http.ResponseWriter, r *http.Request) error {
 		subs, _ := a.Store.ListSubscriptions(ctx)
 		mine := []SubscriptionView{}
 		for _, s := range subs {
-			if a.canSeeSubscription(u, s) {
+			if a.canSeeSubscription(r.Context(), u, s) {
 				mine = append(mine, a.subView(r, s, true))
 			}
 		}
@@ -176,6 +178,8 @@ var editableSettings = map[string]bool{
 	domain.SettingAccessRetention: true, domain.SettingAgentOfflineSec: true, domain.SettingQuotaAlertPct: true,
 	domain.SettingSingBoxVersion: true, domain.SettingSnellVersion: true, domain.SettingMitaVersion: true, "core.mita_sha256": true, domain.SettingRateLimitPerMin: true,
 	"core.singbox_sha256": true, "core.snell_sha256": true, "quota.action": true, "site.default_template_id": true,
+	domain.SettingGeoCountryProvider: true, domain.SettingGeoMaxMindAccount: true, domain.SettingGeoMaxMindKey: true,
+	domain.SettingGeoOnlineEnabled: true, domain.SettingGeoIPV4Mirror: true, domain.SettingGeoIPV6Mirror: true,
 }
 
 // SettingDefaults are returned when unset.
@@ -185,6 +189,7 @@ var SettingDefaults = map[string]string{
 	domain.SettingConnlogRetention: "7", domain.SettingAggRetention: "90", domain.SettingConnlogSelf: "1", domain.SettingSampleRetention: "48", domain.SettingHourlyRetention: "14",
 	domain.SettingAccessRetention: "30", domain.SettingAgentOfflineSec: "120", domain.SettingQuotaAlertPct: "80",
 	domain.SettingRateLimitPerMin: "60", "quota.action": "alert",
+	domain.SettingGeoCountryProvider: geoip.CountryProviderDBIP, domain.SettingGeoOnlineEnabled: "0",
 }
 
 func (a *API) coreVersions(w http.ResponseWriter, r *http.Request) error {
@@ -208,6 +213,9 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) error {
 	if v := out[domain.SettingTelegramToken]; len(v) > 8 {
 		out[domain.SettingTelegramToken] = v[:4] + "••••" + v[len(v)-4:]
 	}
+	if v := out[domain.SettingGeoMaxMindKey]; len(v) > 8 {
+		out[domain.SettingGeoMaxMindKey] = v[:4] + "••••" + v[len(v)-4:]
+	}
 	httpx.OK(w, out)
 	return nil
 }
@@ -223,17 +231,23 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) error {
 		if !editableSettings[k] {
 			return httpx.BadRequest("不允许修改的设置: " + k)
 		}
-		if k == domain.SettingTelegramToken && strings.Contains(v, "••••") {
+		if (k == domain.SettingTelegramToken || k == domain.SettingGeoMaxMindKey) && strings.Contains(v, "••••") {
 			continue // masked value echoed back
 		}
 		values[k] = strings.TrimSpace(v)
 		changed = append(changed, k)
+	}
+	if err := a.validateGeoSettings(r.Context(), values); err != nil {
+		return httpx.BadRequest(err.Error())
 	}
 	if err := a.Store.SetSettings(r.Context(), values); err != nil {
 		if errors.Is(err, store.ErrNetworkCoreVersion) {
 			return httpx.E(409, "network_core_version", err.Error())
 		}
 		return err
+	}
+	if err := a.syncGeoSettings(r.Context()); err != nil {
+		return httpx.BadRequest(err.Error())
 	}
 	for _, k := range changed {
 		if k == domain.SettingSingBoxVersion || k == domain.SettingSnellVersion || k == domain.SettingMitaVersion || k == "core.mita_sha256" || k == "core.singbox_sha256" || k == "core.snell_sha256" || k == domain.SettingConnlogSelf {
@@ -243,6 +257,73 @@ func (a *API) putSettings(w http.ResponseWriter, r *http.Request) error {
 	}
 	a.audit(r, "settings.update", "", map[string]any{"keys": changed})
 	return a.getSettings(w, r)
+}
+
+func (a *API) validateGeoSettings(ctx context.Context, values map[string]string) error {
+	provider := a.Store.GetSetting(ctx, domain.SettingGeoCountryProvider, geoip.CountryProviderDBIP)
+	account := a.Store.GetSetting(ctx, domain.SettingGeoMaxMindAccount, "")
+	key := a.Store.GetSetting(ctx, domain.SettingGeoMaxMindKey, "")
+	if value, ok := values[domain.SettingGeoCountryProvider]; ok {
+		provider = value
+	}
+	if value, ok := values[domain.SettingGeoMaxMindAccount]; ok {
+		account = value
+	}
+	if value, ok := values[domain.SettingGeoMaxMindKey]; ok {
+		key = value
+	}
+	if err := geoip.ValidateCountrySource(geoip.CountrySourceConfig{Provider: provider, MaxMindAccount: account, MaxMindKey: key}); err != nil {
+		return err
+	}
+	v4, v6 := geoip.DefaultMirrors()
+	if value := a.Store.GetSetting(ctx, domain.SettingGeoIPV4Mirror, ""); value != "" {
+		v4 = splitSettingList(value)
+	}
+	if value := a.Store.GetSetting(ctx, domain.SettingGeoIPV6Mirror, ""); value != "" {
+		v6 = splitSettingList(value)
+	}
+	if value, ok := values[domain.SettingGeoIPV4Mirror]; ok {
+		v4 = splitSettingList(value)
+	}
+	if value, ok := values[domain.SettingGeoIPV6Mirror]; ok {
+		v6 = splitSettingList(value)
+	}
+	if err := geoip.ValidateMirrors(append(append([]string{}, v4...), v6...)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *API) syncGeoSettings(ctx context.Context) error {
+	if a.GeoCountry != nil {
+		if err := a.GeoCountry.SetSource(geoip.CountrySourceConfig{
+			Provider:       a.Store.GetSetting(ctx, domain.SettingGeoCountryProvider, geoip.CountryProviderDBIP),
+			MaxMindAccount: a.Store.GetSetting(ctx, domain.SettingGeoMaxMindAccount, ""),
+			MaxMindKey:     a.Store.GetSetting(ctx, domain.SettingGeoMaxMindKey, ""),
+		}); err != nil {
+			return err
+		}
+	}
+	if a.Geo != nil {
+		v4, v6 := geoip.DefaultMirrors()
+		if value := a.Store.GetSetting(ctx, domain.SettingGeoIPV4Mirror, ""); value != "" {
+			v4 = splitSettingList(value)
+		}
+		if value := a.Store.GetSetting(ctx, domain.SettingGeoIPV6Mirror, ""); value != "" {
+			v6 = splitSettingList(value)
+		}
+		if err := a.Geo.SetMirrors(v4, v6); err != nil {
+			return err
+		}
+		if value := a.Store.GetSetting(ctx, domain.SettingGeoOnlineEnabled, ""); value != "" {
+			a.Geo.SetOnlineEnabled(value == "1")
+		}
+	}
+	return nil
+}
+
+func splitSettingList(value string) []string {
+	return strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' || r == ' ' || r == '\t' })
 }
 
 func (a *API) testTelegram(w http.ResponseWriter, r *http.Request) error {
@@ -480,23 +561,27 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) error {
 		return httpx.E(500, "no_stream", "streaming unsupported")
 	}
 	u := userFrom(r.Context())
+	if u == nil {
+		return httpx.ErrUnauthorized
+	}
+	streamUserID := u.ID
 	a.streamMu.Lock()
 	if a.streams == nil {
 		a.streams = map[int64]int{}
 	}
-	if a.streamTotal >= 100 || a.streams[u.ID] >= 5 {
+	if a.streamTotal >= 100 || a.streams[streamUserID] >= 5 {
 		a.streamMu.Unlock()
 		return httpx.E(429, "stream_limit", "实时连接过多")
 	}
-	a.streams[u.ID]++
+	a.streams[streamUserID]++
 	a.streamTotal++
 	a.streamMu.Unlock()
 	defer func() {
 		a.streamMu.Lock()
-		a.streams[u.ID]--
+		a.streams[streamUserID]--
 		a.streamTotal--
-		if a.streams[u.ID] == 0 {
-			delete(a.streams, u.ID)
+		if a.streams[streamUserID] == 0 {
+			delete(a.streams, streamUserID)
 		}
 		a.streamMu.Unlock()
 	}()
@@ -553,7 +638,7 @@ func (a *API) events(w http.ResponseWriter, r *http.Request) error {
 					continue
 				}
 				sh, err := a.Store.GetShare(r.Context(), id)
-				if err != nil || !a.canSeeShare(u, sh) {
+				if err != nil || !a.canSeeShare(r.Context(), u, sh) {
 					continue
 				}
 			}

@@ -22,7 +22,8 @@
 | 可选 HTTPS | Caddy 官方软件源；证书机构需要验证配置的域名 |
 | 安装服务组件 | sing-box / Snell 的上游下载服务；请求指定版本与架构 |
 | 内核版本下拉 | 上游版本信息服务；只查询列表，保存选择后才升级 |
-| GeoIP 数据初始化 | ip2region 数据的 jsDelivr / GitHub 镜像；下载 XDB 文件，不上传用户 IP 列表 |
+| GeoIP 数据初始化 | 管理员在“设置 → IP 数据”选择的 ip2region HTTPS 镜像；默认使用内置镜像。下载 XDB 文件，不上传用户 IP 列表 |
+| 节点入口地区策略 | 管理员在“设置 → IP 数据”选择的 DB-IP Country Lite 或 MaxMind GeoLite2 Country 官方数据库；下载国家地址段数据库，不上传客户端 IP。DB-IP 使用时需保留 CC BY 4.0 归属，MaxMind 使用时需遵守 GeoLite2 许可协议 |
 | 在线 GeoIP（默认关闭） | 先尝试太平洋电脑网 IP 查询，失败后尝试 ip-api.com；发送待查询的公网客户端 IP。当前 ip-api 备用入口使用 HTTP |
 | agent 诊断 | 公网出口 IP 与 IPv4/IPv6 连通性检测服务，可观察发起请求的 VPS 出口地址 |
 | 外部订阅同步 | 管理员配置的来源 URL，包括该 URL 携带的令牌 |

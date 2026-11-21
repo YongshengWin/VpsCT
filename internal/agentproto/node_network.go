@@ -14,6 +14,8 @@ const NetworkBindingVersion = networkconfig.BindingVersion
 // Each desired fetch must declare support. Cached heartbeat metadata is not
 // sufficient: the executable may have been replaced since the last heartbeat.
 const NetworkBindingHeader = networkconfig.BindingHeader
+const NetworkIngressVersion = networkconfig.IngressVersion
+const NetworkIngressHeader = networkconfig.IngressHeader
 
 const NetworkProxyInboundVersion = 1
 

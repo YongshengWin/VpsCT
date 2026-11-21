@@ -343,7 +343,7 @@ func TestNetworkGenerationBracketsLegacyDesiredInputsWithoutHeartbeatChurn(t *te
 	assertChanged(`INSERT INTO settings(key,value) VALUES('connlog.self_enabled','false')`)
 	assertChanged(`UPDATE settings SET value='true' WHERE key='connlog.self_enabled'`)
 	assertChanged(`DELETE FROM settings WHERE key='connlog.self_enabled'`)
-	if _, err = s.db.Exec(`INSERT INTO shares(id,name,status,period_start,created_at,updated_at) VALUES(100,'fixture','active','','','')`); err != nil {
+	if _, err = s.db.Exec(`INSERT INTO shares(id,name,status,period_start,created_at,updated_at,public_id) VALUES(100,'fixture','active','','','','s_0123456789abcdef0123456789abcdef')`); err != nil {
 		t.Fatal(err)
 	}
 	assertChanged(`UPDATE nodes SET share_id=100 WHERE id=?`, in.NodeID)

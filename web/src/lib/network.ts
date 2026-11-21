@@ -1,3 +1,4 @@
+import type { UnavailablePort } from "@/lib/unavailable-ports";
 import type { NetworkView, Node } from "./types";
 
 export interface NetworkAddress { interface_id: string; address: string }
@@ -47,13 +48,24 @@ export function egressSummary(config: EgressConfig, inventory?: NetworkView) {
   return `${prefix}${interfaceName(inventory, outer.interface_id)} · 业务 ${config.family} · DNS ${config.dns.address}:${config.dns.port}`;
 }
 export interface NodeNetworkPolicy {
-  listen_mode: "all" | "address";
+  ingress_family?: "default" | "ipv6";
+  listen_mode: "all" | "address" | "public_ipv6";
   listen_address?: string;
   listen_interface_id?: string;
-  advertise_mode: "inherit" | "override";
+  advertise_mode: "inherit" | "override" | "inherit_ipv6";
   egress_profile_id?: number;
   egress_revision?: number;
   on_unavailable: "block";
+  ingress?: IngressPolicy;
+}
+export interface IngressPolicy {
+  mode: "relay_only" | "deny_countries";
+  source_cidrs?: string[];
+  countries?: string[];
+  geo_ipv4_cidrs?: string[];
+  geo_ipv6_cidrs?: string[];
+  geo_provider?: string;
+  geo_version?: string;
 }
 export interface EgressProfile {
  managed_stage?: string; id: number; server_id: number; name: string; kind: "direct" | "socks5" | "ssh" | "wireguard" | "ss2022"; enabled: boolean; current_revision: number }
@@ -69,6 +81,8 @@ export interface EgressView {
   offset: number;
 }
 export interface NetworkReadiness {
+ network?: NodeNetworkPolicy;
+ unavailable_port?: UnavailablePort;
 	impact?: NetworkImpact;
   egress_version?: number;
 	forward_version?: number;
@@ -80,6 +94,8 @@ export interface NetworkReadiness {
   checks: { code: string; ready: boolean; message: string }[];
 }
 export interface NetworkImpact {
+  before_port?: number;
+  after_port?: number;
   token: string;
   server_id: number;
   server_enabled: boolean;
@@ -95,7 +111,7 @@ export interface NetworkImpact {
   after_listen?: string;
   before_host?: string;
   after_host?: string;
-  nodes: { node_id: number; name: string; protocol: string; core: string; listen_port: number; enabled: boolean; revoked: boolean; share_id?: number; share_name?: string; share_status?: string; network_revision: number; egress_profile_id?: number; egress_revision?: number; egress_enabled: boolean; blocked: boolean; effect: "binding" | "clear" | "disable" | "resume" | "pinned" | "restart"; restart_possible: boolean }[];
+  nodes: { node_id: number; name: string; protocol: string; core: string; listen_port: number; enabled: boolean; revoked: boolean; share_id?: number; share_name?: string; share_status?: string; network_revision: number; egress_profile_id?: number; egress_revision?: number; egress_enabled: boolean; blocked: boolean; effect: "port" | "binding" | "clear" | "disable" | "resume" | "pinned" | "restart"; restart_possible: boolean }[];
 }
 export interface EgressPreview { ready: boolean; issues: string[]; impact: NetworkImpact }
 export interface NetworkOperation {

@@ -670,6 +670,7 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 	}
 	if runtime.GOOS == "linux" {
 		d.NetworkBillingVersion = agentproto.NetworkBillingVersion
+		d.IPv6IngressVersion = networkconfig.IPv6IngressVersion
 		d.NetworkBindingVersion = agentproto.NetworkBindingVersion
 		d.ListenBindingVersion = 1
 		d.ForwardDNSVersion = 1
@@ -793,7 +794,7 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 	// Capture the remote representation before local certificate paths/private
 	// permissions are resolved. Those local decisions must be reevaluated later.
 	var recovery []byte
-	if ds.NetworkEgressVersion > 0 || ds.NetworkForwardVersion > 0 {
+	if ds.NetworkEgressVersion > 0 || ds.NetworkForwardVersion > 0 || ds.IPv6IngressVersion > 0 {
 		recovery, err = json.Marshal(ds)
 		if err != nil || len(recovery) > agentbudget.ConfigBytes {
 			return

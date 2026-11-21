@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Pause, Play, Plus, RotateCcw, Trash2, Pencil, Ban, KeyRound, ScrollText } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
 import type { Share, ShareStatus, Server, Node, RuleTemplate, User, Series, ShareTarget } from "@/lib/types";
@@ -14,6 +14,7 @@ import { TrafficIO } from "@/components/traffic-ways";
 import { BILLING_OPTIONS, billingLabel, billingMode, trafficUsage, trafficPeriodDate, validGiB, type BillingMode } from "@/lib/traffic-billing";
 import { SubscriptionLinks } from "@/pages/subscriptions";
 import { NodeRow, NodeDetailDialog } from "@/pages/nodes";
+import { PersonalTemplates } from "@/components/personal-templates";
 
 export function StatusBadge({ s }: { s: ShareStatus }) {
   const v = s === "active" ? "success" : s === "paused" ? "warning" : s === "exhausted" ? "destructive" : "secondary";
@@ -48,7 +49,7 @@ export function ShareCard({ share, link = true }: { share: Share; link?: boolean
       </div>
     </Card>
   );
-  return link ? <Link to={`/shares/${share.id}`} className="block min-w-0">{body}</Link> : body;
+  return link ? <Link to={`/shares/${share.public_id}`} className="block min-w-0">{body}</Link> : body;
 }
 
 export function SharesPage() {
@@ -57,6 +58,7 @@ export function SharesPage() {
   const [create, setCreate] = React.useState(false);
   const [filter, setFilter] = React.useState<"" | ShareStatus>("");
   const list = (q.data ?? []).filter((s) => !filter || s.status === filter);
+  if (!admin && q.data?.length) return <Navigate to={`/shares/${q.data[0].public_id}`} replace />;
   return (
     <div>
       <PageHeader title="分享" description={admin ? "独立入口、独立配额、独立订阅链接" : undefined} actions={admin && <Button onClick={() => setCreate(true)}><Plus className="h-4 w-4" /> 新建分享</Button>} />
@@ -124,7 +126,7 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       toast.success(share ? "已保存，节点变更将在下次心跳生效" : "分享已创建");
       onClose();
-      if (!share) nav(`/shares/${r.id}`);
+      if (!share) nav(`/shares/${r.public_id}`);
     },
     onError: (e) => toast.fromError(e),
   });
@@ -252,22 +254,24 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
 export function ShareDetailPage() {
   const { id } = useParams();
   const admin = useIsAdmin();
+  const { user } = useAuth();
   const nav = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
-  const q = useQuery({ queryKey: ["shares", id], queryFn: () => get<Share>(`/api/v1/shares/${id}`), refetchInterval: 20000 });
-  const traffic = useQuery({ queryKey: ["shares", id, "traffic"], queryFn: () => get<Series>(`/api/v1/shares/${id}/traffic?days=30`) });
-  const events = useQuery({ queryKey: ["shares", id, "events"], queryFn: () => get<{ id: number; ts: string; kind: string; detail: string }[]>(`/api/v1/shares/${id}/events?limit=50`) });
+  const q = useQuery({ queryKey: ["shares", id], queryFn: () => get<Share>(`/api/v1/share-pages/${encodeURIComponent(id ?? "")}`), enabled: !!id, refetchInterval: 20000 });
+  const shareID = q.data?.id;
+  const traffic = useQuery({ queryKey: ["shares", shareID, "traffic"], queryFn: () => get<Series>(`/api/v1/shares/${shareID}/traffic?days=30`), enabled: !!shareID && admin });
+  const events = useQuery({ queryKey: ["shares", shareID, "events"], queryFn: () => get<{ id: number; ts: string; kind: string; detail: string }[]>(`/api/v1/shares/${shareID}/events?limit=50`), enabled: !!shareID && admin });
   const [edit, setEdit] = React.useState(false);
   const [confirm, setConfirm] = React.useState<null | "revoke" | "delete" | "reset" | "reissue">(null);
   const [nodeDetail, setNodeDetail] = React.useState<Node | null>(null);
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["shares"] }); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["subscriptions"] }); };
   const action = useMutation({
-    mutationFn: (a: string) => post<{ share: Share; token?: string }>(`/api/v1/shares/${id}/${a}`),
+    mutationFn: (a: string) => post<{ share: Share; token?: string }>(`/api/v1/shares/${shareID}/${a}`),
     onSuccess: (_r, a) => { toast.success({ pause: "已暂停", resume: "已恢复", reset: "用量已重置", revoke: "已撤销", reissue: "已重新签发：新端口、新凭据、新订阅链接" }[a] ?? "完成"); setConfirm(null); invalidate(); },
     onError: (e) => toast.fromError(e),
   });
-  const delM = useMutation({ mutationFn: () => del(`/api/v1/shares/${id}`), onSuccess: () => { toast.success("已删除"); invalidate(); nav("/shares"); }, onError: (e) => toast.fromError(e) });
+  const delM = useMutation({ mutationFn: () => del(`/api/v1/shares/${shareID}`), onSuccess: () => { toast.success("已删除"); invalidate(); nav("/shares"); }, onError: (e) => toast.fromError(e) });
   if (q.isLoading) return <Spinner />;
   const s = q.data;
   if (!s) return <Empty title="分享不存在" />;
@@ -276,7 +280,7 @@ export function ShareDetailPage() {
   return (
     <div>
       <PageHeader
-        back={{ to: "/shares", label: "分享" }}
+        back={admin ? { to: "/shares", label: "分享" } : undefined}
         title={s.name}
         description={`${s.user_name ? `用户 ${s.user_name} · ` : ""}创建于 ${fmtDate(s.created_at, false)}${s.notes ? ` · ${s.notes}` : ""}`}
         actions={
@@ -321,11 +325,12 @@ export function ShareDetailPage() {
           </CardContent>
         </Card>
       </div>
-      <Card className="mt-4">
+      {s.user_id === user?.id && <PersonalTemplates shareID={s.id} />}
+      {admin && <Card className="mt-4">
         <CardHeader><CardTitle>近 30 天流量（柱为入站/出站）</CardTitle></CardHeader>
         <CardContent>{traffic.isLoading ? <Spinner /> : traffic.isError ? <p className="text-sm text-destructive">流量加载失败，请稍后重试</p> : traffic.data?.has_data ? <><TrafficIO inbound={traffic.data.total_up} outbound={traffic.data.total_down} /><TrafficBars points={traffic.data.points} /><p className="text-xs text-muted-foreground">仅汇总这份分享已采集的节点流量；计费方式不改变原始入站、出站和汇总。</p></> : <p className="text-sm text-muted-foreground">近 30 天暂无采集记录</p>}</CardContent>
-      </Card>
-      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+      </Card>}
+      {admin && <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader><CardTitle>专属节点（{s.nodes?.length ?? 0}）</CardTitle></CardHeader>
           <CardContent>
@@ -361,7 +366,7 @@ export function ShareDetailPage() {
             )}
           </CardContent>
         </Card>
-      </div>
+      </div>}
       <ShareDialog open={edit} onClose={() => setEdit(false)} share={s} />
       <Confirm open={confirm === "revoke"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("revoke")} loading={action.isPending} destructive title="撤销分享？" description="专属入口从服务器上撤下、订阅链接失效。撤销后可「重新签发」恢复。" />
       <Confirm open={confirm === "reset"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("reset")} loading={action.isPending} title="重置本期用量？" description="用量归零并开始新的周期；若状态为「流量用尽」会恢复为正常。" />

@@ -52,6 +52,15 @@ case "$category" in
    NETWORK_SYSTEMD_CASE="$network_case" bash scripts/test-network-systemd-container.sh
   done
   ;;
+ acme)
+  case "$scenario" in handshake|renewal) ;; *) exit 2;; esac
+  python3 scripts/fetch-network-test-fixtures.py "$fixtures" --arch amd64 --catalog "$fixtures/catalog.json" --only sing-box
+  python3 scripts/fetch-pebble.py "$fixtures" --arch amd64
+  CTLVPS_BOUNDARY_MODE=candidate CTLVPS_ACME_SCENARIO="$scenario" \
+   SINGBOX_BIN="$fixtures/sing-box" PEBBLE_BIN="$fixtures/pebble" \
+   PROXY_HARDENING_BIN="$PWD/bin/proxy-hardening-test-linux-amd64" \
+   bash scripts/test-security-boundary-container.sh
+  ;;
  alpine)
   export SINGBOX_MUSL_BIN="$fixtures/sing-box-musl" MITA_BIN="$fixtures/mita" MIERU_BIN="$fixtures/mieru"
   if [[ "$scenario" != install ]]; then

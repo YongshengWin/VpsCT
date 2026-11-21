@@ -92,11 +92,15 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 }
 
 func (m *Manager) EnsureNodes(ctx context.Context, nodes []agentproto.NodeSpec) error {
-	if err := checkMarkRoutes(ctx); err != nil {
-		return err
-	}
 	rules, err := NodeRules(nodes)
 	if err != nil {
+		return err
+	}
+	ids := make([]uint32, 0, len(nodes))
+	for _, node := range nodes {
+		ids = append(ids, uint32(node.NodeID))
+	}
+	if err := checkMarkPrefixes(ctx, []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix}, ids...); err != nil {
 		return err
 	}
 	if _, err = m.run(ctx, rules, "--check", "-f", "-"); err != nil {
@@ -165,11 +169,7 @@ func (m *Manager) NodesExist(ctx context.Context) bool {
 }
 
 // A packet mark must not accidentally select an existing policy-routing table.
-func checkMarkRoutes(ctx context.Context) error {
-	return checkMarkPrefixes(ctx, []uint32{MarkPrefix, agentproto.BootstrapMarkPrefix})
-}
-
-func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
+func checkMarkPrefixes(ctx context.Context, prefixes []uint32, resourceIDs ...uint32) error {
 	for _, family := range []string{"-4", "-6"} {
 		raw, err := exec.CommandContext(ctx, "ip", family, "-j", "rule", "show").Output()
 		if err != nil {
@@ -207,12 +207,14 @@ func checkMarkPrefixes(ctx context.Context, prefixes []uint32) error {
 				}
 				continue
 			}
-			// A rule whose mask tests none of the prefix bits never routes on
-			// the VpsCT mark namespace (bits 24-31). tailscaled's
-			// "fwmark 0x80000/0xff0000" rules fall here: the old
-			// (mark^prefix)&mask&MarkMask==0 test degenerated to constant
-			// zero for them and rejected every apply (issue #57).
+			// Low-bit-only rules select resource IDs, independently of the
+			// accounting prefix. Recheck the current IDs on each apply.
 			if mask&MarkMask == 0 {
+				for _, id := range resourceIDs {
+					if (mark^id)&mask == 0 {
+						return fmt.Errorf("policy routing overlaps VpsCT accounting marks; existing routing left unchanged")
+					}
+				}
 				continue
 			}
 			for _, prefix := range prefixes {

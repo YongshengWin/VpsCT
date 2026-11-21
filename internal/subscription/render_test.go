@@ -176,14 +176,14 @@ func TestRenderMihomoTemplateMarkers(t *testing.T) {
 		t.Fatal("missing 🇭🇰 香港")
 	}
 	hkMembers := hk["proxies"].([]any)
-	if len(hkMembers) != 2 { // HK Reality, HK → US 落地
+	if len(hkMembers) != 1 || hkMembers[0] != "HK Reality" { // ambiguous chain must not be guessed as HK
 		t.Fatalf("hk filter: %v", hkMembers)
 	}
 	if _, ok := doc["rule-providers"]; !ok {
 		t.Fatal("rule-providers missing")
 	}
 	rules := doc["rules"].([]any)
-	if rules[len(rules)-1] != "MATCH,🇺🇸 美国" {
+	if rules[len(rules)-1] != "MATCH,☑️ select" {
 		t.Fatalf("template final: %v", rules[len(rules)-1])
 	}
 }

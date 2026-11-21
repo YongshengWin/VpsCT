@@ -556,11 +556,20 @@ func TestDirectAccessRouteRejectsRelayFieldsAndSelfLanding(t *testing.T) {
 func TestAccessRouteV40UpgradePreservesRelayAndOwnership(t *testing.T) {
 	s, path := historicalStore(t, 40)
 	ctx := context.Background()
+	// The fixture is built through current node readers, which expect the new
+	// metadata column. Remove it before reopening so the actual v40 upgrade
+	// still exercises migration 47 on a historical schema.
+	if _, err := s.db.Exec(`ALTER TABLE nodes ADD COLUMN exit_region TEXT NOT NULL DEFAULT ''; ALTER TABLE servers ADD COLUMN public_host_ipv6 TEXT NOT NULL DEFAULT ''`); err != nil {
+		t.Fatal(err)
+	}
 	before := createTestRoute(t, s, accessRouteFixture(t, s))
 	if _, err := s.db.Exec(`UPDATE access_routes SET stage='pending_ix' WHERE id=?`, before.ID); err != nil {
 		t.Fatal(err)
 	}
 	before, _ = s.AccessRoute(ctx, before.ID)
+	if _, err := s.db.Exec(`ALTER TABLE nodes DROP COLUMN exit_region; ALTER TABLE servers DROP COLUMN public_host_ipv6`); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}

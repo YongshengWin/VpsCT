@@ -84,6 +84,9 @@ func (s *Store) setNodeNetwork(ctx context.Context, q querier, nodeID, expected 
 	if n.Source != domain.NodeDeployed || n.ServerID == nil {
 		return empty, errors.New("只有受管部署节点可以设置服务器网络")
 	}
+	if n.Network != nil && n.Network.IngressFamily == "ipv6" && (policy == nil || policy.IngressFamily == "") {
+		return empty, errors.New("仅 IPv6 节点需要明确选择接入地址族，不能隐式放宽监听")
+	}
 	if n.NetworkRevision != expected {
 		return empty, ErrNetworkConflict
 	}
@@ -108,6 +111,22 @@ func (s *Store) setNodeNetwork(ctx context.Context, q querier, nodeID, expected 
 	n.Server, err = s.nodeNetworkHost(ctx, q, n, policy, advertiseHost)
 	if err != nil {
 		return empty, err
+	}
+	if policy != nil && policy.IngressFamily == "ipv6" {
+		if n.Core != domain.CoreSingBox {
+			return empty, ErrNetworkCoreVersion
+		}
+		var isNAT bool
+		if err := q.QueryRowContext(ctx, `SELECT is_nat FROM servers WHERE id=?`, *n.ServerID).Scan(&isNAT); err != nil {
+			return empty, err
+		}
+		if isNAT {
+			return empty, errors.New("目前仅独立公网支持仅 IPv6 接入")
+		}
+		if _, err := q.ExecContext(ctx, `INSERT INTO server_network_requirements(server_id,binding_version,ipv6_ingress_version) VALUES(?,?,?)
+            ON CONFLICT(server_id) DO UPDATE SET ipv6_ingress_version=excluded.ipv6_ingress_version`, *n.ServerID, networkconfig.BindingVersion, networkconfig.IPv6IngressVersion); err != nil {
+			return empty, err
+		}
 	}
 	n.Network = policy
 	if n.Enabled && !n.Revoked {
@@ -174,6 +193,18 @@ func (s *Store) nodeNetworkHost(ctx context.Context, q querier, n domain.Node, p
 			return "", err
 		}
 	}
+	if policy != nil && policy.IngressFamily == "ipv6" {
+		host := n.Server
+		if policy.AdvertiseMode == "inherit_ipv6" {
+			if err := q.QueryRowContext(ctx, `SELECT public_host_ipv6 FROM servers WHERE id=?`, *n.ServerID).Scan(&host); err != nil {
+				return "", err
+			}
+			if host == "" {
+				return "", errors.New("请先配置服务器的 IPv6 公网地址 / DDNS")
+			}
+		}
+		return networkconfig.NormalizeIPv6Host(host)
+	}
 	if policy == nil || policy.AdvertiseMode == "inherit" {
 		var inherited string
 		if err := q.QueryRowContext(ctx, `SELECT COALESCE(NULLIF(public_host,''),(SELECT COALESCE(NULLIF(public_ipv4,''),NULLIF(public_ipv6,'')) FROM agents WHERE server_id=servers.id),'') FROM servers WHERE id=?`, *n.ServerID).Scan(&inherited); err != nil {
@@ -192,6 +223,6 @@ func (s *Store) UpdateInheritedNodeHosts(ctx context.Context, serverID int64, ho
 	if host == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET server=?,updated_at=? WHERE server_id=? AND source='deployed' AND server<>? AND NOT EXISTS(SELECT 1 FROM node_networks WHERE node_id=nodes.id AND json_extract(policy,'$.advertise_mode')='override')`, host, fmtTime(s.Now()), serverID, host)
+	_, err := s.db.ExecContext(ctx, `UPDATE nodes SET server=?,updated_at=? WHERE server_id=? AND source='deployed' AND server<>? AND NOT EXISTS(SELECT 1 FROM node_networks WHERE node_id=nodes.id AND json_extract(policy,'$.advertise_mode') IN ('override','inherit_ipv6'))`, host, fmtTime(s.Now()), serverID, host)
 	return err
 }

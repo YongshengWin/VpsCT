@@ -15,7 +15,7 @@ import { SubscriptionLinks } from "@/pages/subscriptions";
 interface AdminDash {
   counts: { servers: number; servers_online: number; nodes: number; shares: number; shares_active: number; subscriptions: number; externals: number };
   traffic: { servers_30d: Series; externals_30d: Series; today_up: number; today_down: number; month_up: number; month_down: number };
-  alerts: { level: string; kind: string; message: string; server_id?: number; share_id?: number }[];
+  alerts: { level: string; kind: string; message: string; server_id?: number; share_id?: number; share_public_id?: string }[];
   servers: Server[];
 }
 interface UserDash {
@@ -145,7 +145,7 @@ function AdminDashboard({ d }: { d: AdminDash }) {
       {d.alerts.length > 0 && (
         <Card className="divide-y divide-border/60 overflow-hidden border-rose-200/80 dark:divide-border dark:border-rose-500/30">
           {d.alerts.map((a, i) => {
-            const to = a.server_id ? `/servers/${a.server_id}` : a.share_id ? `/shares/${a.share_id}` : undefined;
+            const to = a.server_id ? `/servers/${a.server_id}` : a.share_public_id ? `/shares/${a.share_public_id}` : undefined;
             const row = (
               <>
                 <Badge variant={a.level === "error" ? "destructive" : a.level === "warn" ? "warning" : "info"} className="shrink-0">

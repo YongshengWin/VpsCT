@@ -22,7 +22,7 @@ import {
   BookOpen,
 } from "lucide-react";
 import { cn, displayName } from "@/lib/utils";
-import { useAuth, useTheme } from "@/lib/auth";
+import { useAuth, useTheme, useProductPermissions } from "@/lib/auth";
 import { LogoMark, Wordmark } from "@/components/logo";
 import { Avatar } from "@/components/avatar";
 import { CoreUpgradeNotice } from "@/components/core-upgrade";
@@ -32,6 +32,7 @@ interface Item {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   admin?: boolean;
+  permission?: string;
 }
 
 // Primary navigation shown in the header. Account-level pages live in the
@@ -48,7 +49,7 @@ const items: Item[] = [
 ];
 const accountItems: Item[] = [
   { to: "/account", label: "账户设置", icon: UserCog },
-  { to: "/ai", label: "AI 能力", icon: Bot },
+  { to: "/ai", label: "AI 能力", icon: Bot, permission: "ai.access" },
   { to: "/users", label: "用户", icon: Users2, admin: true },
   { to: "/settings", label: "设置", icon: Settings, admin: true },
 ];
@@ -94,9 +95,10 @@ export function Layout() {
   }, [menu]);
 
   const isAdmin = user?.role === "admin";
+	const permissions = useProductPermissions();
   const isManual = loc.pathname === "/manual" || loc.pathname === "/manual/";
-  const visible = items.filter((i) => !i.admin || isAdmin);
-  const account = accountItems.filter((i) => !i.admin || isAdmin);
+  const visible = isAdmin ? items.filter((i) => !i.admin || isAdmin || i.to === "/templates" && ["templates.create", "templates.edit", "templates.delete"].some(permissions.can)) : [];
+  const account = accountItems.filter((i) => (!i.admin || isAdmin) && (!i.permission || permissions.can(i.permission)));
   const mobileItems = visible.slice(0, 4);
   const siteName = meta?.site_name ?? "VpsCT";
 
@@ -152,13 +154,13 @@ export function Layout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-1 lg:ml-0">
-            <HeaderHint label="使用手册"><NavLink
+            {isAdmin && <HeaderHint label="使用手册"><NavLink
               to="/manual"
               aria-label="使用手册"
               className={({ isActive }) => cn("inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-accent focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-primary/40", isActive ? "text-primary" : "text-muted-foreground hover:text-foreground")}
             >
               <BookOpen className="h-[18px] w-[18px]" aria-hidden="true" />
-            </NavLink></HeaderHint>
+            </NavLink></HeaderHint>}
             <HeaderHint label="切换主题"><IconButton onClick={toggle} aria-label="切换主题">
               {isDark ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
             </IconButton></HeaderHint>

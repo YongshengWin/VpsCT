@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net/netip"
 	"regexp"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -13,6 +15,10 @@ import (
 // dependency from the low-privilege transport to maintenance/control types.
 const BindingVersion = 1
 const BindingHeader = "X-Ctlvps-Network-Binding-Version"
+const IngressVersion = 1
+const IngressHeader = "X-Ctlvps-Network-Ingress-Version"
+const IPv6IngressVersion = 1
+const IPv6IngressHeader = "X-Ctlvps-IPv6-Ingress-Version"
 
 // Transit has its own contract: understanding direct bindings does not imply
 // understanding upstream transports. Keep direct-only payloads unchanged.
@@ -22,13 +28,29 @@ const EgressHeader = "X-Ctlvps-Network-Egress-Version"
 // Node is persisted with a node or an automatic share-deployment target. A nil
 // policy preserves legacy behavior; an explicit policy always fails closed.
 type Node struct {
-	ListenMode        string `json:"listen_mode"` // all | address
-	ListenAddress     string `json:"listen_address,omitempty"`
-	ListenInterfaceID string `json:"listen_interface_id,omitempty"`
-	AdvertiseMode     string `json:"advertise_mode"` // inherit | override
-	EgressProfileID   int64  `json:"egress_profile_id,omitempty"`
-	EgressRevision    int64  `json:"egress_revision,omitempty"`
-	OnUnavailable     string `json:"on_unavailable"` // block
+	IngressFamily     string         `json:"ingress_family,omitempty"` // IPv6 nodes use ipv6
+	ListenMode        string         `json:"listen_mode"`              // all | address | public_ipv6
+	ListenAddress     string         `json:"listen_address,omitempty"`
+	ListenInterfaceID string         `json:"listen_interface_id,omitempty"`
+	AdvertiseMode     string         `json:"advertise_mode"` // inherit | override | inherit_ipv6
+	EgressProfileID   int64          `json:"egress_profile_id,omitempty"`
+	EgressRevision    int64          `json:"egress_revision,omitempty"`
+	OnUnavailable     string         `json:"on_unavailable"` // block
+	Ingress           *IngressPolicy `json:"ingress,omitempty"`
+}
+
+// IngressPolicy controls who may open the node listener. It is evaluated by
+// the agent's network guard before the general port allow rule. GeoIP fields
+// are materialized by the controller from a pinned country database; an
+// agent never performs online IP lookups.
+type IngressPolicy struct {
+	Mode         string   `json:"mode"` // relay_only | deny_countries
+	SourceCIDRs  []string `json:"source_cidrs,omitempty"`
+	Countries    []string `json:"countries,omitempty"`
+	GeoIPv4CIDRs []string `json:"geo_ipv4_cidrs,omitempty"`
+	GeoIPv6CIDRs []string `json:"geo_ipv6_cidrs,omitempty"`
+	GeoProvider  string   `json:"geo_provider,omitempty"`
+	GeoVersion   string   `json:"geo_version,omitempty"`
 }
 
 // Address retains its owner even when it is used without SO_BINDTODEVICE. An
@@ -70,7 +92,17 @@ func HostAddress(raw string) (netip.Addr, error) {
 }
 
 func (n Node) Validate() error {
-	if n.AdvertiseMode != "inherit" && n.AdvertiseMode != "override" {
+	if n.IngressFamily != "" && n.IngressFamily != "default" && n.IngressFamily != "ipv6" {
+		return errors.New("节点接入地址族无效")
+	}
+	if n.IngressFamily == "ipv6" {
+		if n.AdvertiseMode != "inherit_ipv6" && n.AdvertiseMode != "override" {
+			return errors.New("仅 IPv6 节点需要独立 IPv6 访问地址")
+		}
+		if n.ListenMode == "all" || n.ListenMode == "address" && !IsPublicIPv6(n.ListenAddress) {
+			return errors.New("仅 IPv6 节点必须绑定公网 IPv6")
+		}
+	} else if n.AdvertiseMode != "inherit" && n.AdvertiseMode != "override" {
 		return errors.New("节点访问地址模式无效")
 	}
 	if n.OnUnavailable != "block" {
@@ -88,13 +120,92 @@ func (n Node) Validate() error {
 		if _, err := HostAddress(n.ListenAddress); err != nil {
 			return err
 		}
+	case "public_ipv6":
+		if n.IngressFamily != "ipv6" || n.ListenAddress != "" || n.ListenInterfaceID != "" && !ValidIdentity(n.ListenInterfaceID) {
+			return errors.New("自动 IPv6 监听参数无效")
+		}
 	default:
 		return errors.New("监听模式无效")
 	}
 	if n.EgressProfileID < 0 || n.EgressRevision < 0 || n.EgressProfileID > 1<<53-1 || n.EgressRevision > 1<<53-1 || (n.EgressProfileID == 0) != (n.EgressRevision == 0) {
 		return errors.New("出口配置和不可变版本必须同时指定")
 	}
+	if err := n.Ingress.Validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+const (
+	IngressRelayOnly     = "relay_only"
+	IngressDenyCountries = "deny_countries"
+	GeoIPProviderDBIP    = "dbip-country-lite"
+	GeoIPProviderMaxMind = "maxmind-geolite2-country"
+)
+
+func (p *IngressPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	switch p.Mode {
+	case IngressRelayOnly:
+		if len(p.SourceCIDRs) == 0 || len(p.SourceCIDRs) > 256 {
+			return errors.New("仅允许中转模式必须包含 1–256 个来源网段")
+		}
+		if len(p.Countries) != 0 || len(p.GeoIPv4CIDRs) != 0 || len(p.GeoIPv6CIDRs) != 0 || p.GeoProvider != "" || p.GeoVersion != "" {
+			return errors.New("仅允许中转模式不能携带 GeoIP 数据")
+		}
+	case IngressDenyCountries:
+		if len(p.Countries) == 0 || len(p.Countries) > 64 {
+			return errors.New("地区拒绝模式必须包含 1–64 个国家代码")
+		}
+		seen := map[string]bool{}
+		for i, country := range p.Countries {
+			country = strings.ToUpper(strings.TrimSpace(country))
+			if len(country) != 2 || country[0] < 'A' || country[0] > 'Z' || country[1] < 'A' || country[1] > 'Z' || seen[country] {
+				return errors.New("国家代码必须是不重复的 ISO 3166-1 两位大写代码")
+			}
+			p.Countries[i] = country
+			seen[country] = true
+		}
+		if (p.GeoProvider != GeoIPProviderDBIP && p.GeoProvider != GeoIPProviderMaxMind) || strings.TrimSpace(p.GeoVersion) == "" {
+			return errors.New("地区拒绝模式缺少已固定版本的 GeoIP 数据源")
+		}
+		if len(p.GeoIPv4CIDRs) == 0 && len(p.GeoIPv6CIDRs) == 0 {
+			return errors.New("地区拒绝模式缺少已物化的 IPv4/IPv6 地址集合")
+		}
+		if len(p.GeoIPv4CIDRs) > 200000 || len(p.GeoIPv6CIDRs) > 200000 {
+			return errors.New("GeoIP 地址集合超过 agent 预算，请改用仅允许中转模式或减少地区")
+		}
+		bytes := 0
+		for _, value := range append(append([]string{}, p.GeoIPv4CIDRs...), p.GeoIPv6CIDRs...) {
+			bytes += len(value)
+		}
+		if bytes > 700000 {
+			return errors.New("GeoIP 地址集合超过 desired 配置预算，请改用仅允许中转模式或减少地区")
+		}
+	default:
+		return errors.New("入口来源模式无效")
+	}
+	for _, raw := range append(append([]string{}, p.SourceCIDRs...), append(p.GeoIPv4CIDRs, p.GeoIPv6CIDRs...)...) {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil || prefix != prefix.Masked() || prefix.Addr().IsUnspecified() || prefix.Addr().IsMulticast() {
+			return errors.New("入口来源地址集合包含无效或非规范网段")
+		}
+	}
+	return nil
+}
+
+// NormalizeCountries returns a stable copy for fingerprints and desired-state
+// hashes. It does not add or remove any policy entries.
+func (p *IngressPolicy) NormalizeCountries() {
+	if p == nil {
+		return
+	}
+	for i := range p.Countries {
+		p.Countries[i] = strings.ToUpper(strings.TrimSpace(p.Countries[i]))
+	}
+	sort.Strings(p.Countries)
 }
 
 func (d Direct) Validate() error {

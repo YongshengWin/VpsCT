@@ -14,7 +14,7 @@ import (
 
 const nodeCols = `id, name, protocol, server, port, params, server_params, source, server_id, listen_port, core, share_id, external_sub_id, chain_front_node_id, enabled, owner_user_id, tags, sort_order, revoked, created_at, updated_at,
  (SELECT policy FROM node_networks WHERE node_id=nodes.id),
- (SELECT revision FROM node_networks WHERE node_id=nodes.id), original_name`
+ (SELECT revision FROM node_networks WHERE node_id=nodes.id), original_name, exit_region`
 
 func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error) {
 	var n domain.Node
@@ -24,7 +24,7 @@ func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error
 	var network sql.NullString
 	var networkRevision sql.NullInt64
 	if err := sc.Scan(&n.ID, &n.Name, &n.Protocol, &n.Server, &n.Port, s.scanSecret("nodes.params", &params), s.scanSecret("nodes.server_params", &serverParams), &n.Source, &serverID, &n.ListenPort, &n.Core,
-		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated, &network, &networkRevision, &n.OriginalName); err != nil {
+		&shareID, &extID, &chainID, &enabled, &n.OwnerUserID, &tags, &n.SortOrder, &revoked, &created, &updated, &network, &networkRevision, &n.OriginalName, &n.ExitRegion); err != nil {
 		return n, err
 	}
 	n.Params = rawOrEmpty(params)
@@ -49,6 +49,23 @@ func (s *Store) scanNode(sc interface{ Scan(...any) error }) (domain.Node, error
 		}
 	}
 	return n, nil
+}
+
+// SetNodeExitRegion changes subscription metadata only, leaving the running
+// node and its independently versioned network policy untouched.
+func (s *Store) SetNodeExitRegion(ctx context.Context, id int64, region string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE nodes SET exit_region=?,updated_at=? WHERE id=?`, region, fmtTime(s.Now()), id)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 func (s *Store) nodeArgs(n *domain.Node) []any {
@@ -357,7 +374,11 @@ func (s *Store) ReplaceExternalNodes(ctx context.Context, extID int64, fresh []d
 
 // UsedListenPorts returns ports already allocated on a server.
 func (s *Store) UsedListenPorts(ctx context.Context, serverID int64) (map[int]bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT listen_port FROM server_listener_reservations WHERE server_id=?`, serverID)
+	return s.usedListenPorts(ctx, s.db, serverID)
+}
+
+func (s *Store) usedListenPorts(ctx context.Context, q querier, serverID int64) (map[int]bool, error) {
+	rows, err := q.QueryContext(ctx, `SELECT listen_port FROM server_listener_reservations WHERE server_id=?`, serverID)
 	if err != nil {
 		return nil, err
 	}
