@@ -2,11 +2,11 @@
   {
     "ecosystem": "go-runtime",
     "name": "Go standard library and runtime",
-    "version": "go1.26.9",
+    "version": "go1.26.11",
     "license": "BSD-3-Clause",
     "notices": [
-      "third_party/go-runtime/go1.26.9/LICENSE",
-      "third_party/go-runtime/go1.26.9/PATENTS"
+      "third_party/go-runtime/go1.26.11/LICENSE",
+      "third_party/go-runtime/go1.26.11/PATENTS"
     ]
   },
   {
