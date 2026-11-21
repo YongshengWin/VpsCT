@@ -72,7 +72,7 @@ sudo bash /opt/ctlvps/uninstall.sh --controller --dry-run
 
 ## 4. 附件
 
-每个控制端压缩包包含对应架构的控制端、两种架构的 agent、systemd 单元、卸载脚本和许可证。
+Linux AMD64 压缩包包含控制端、AMD64 agent、校验器、systemd 单元、卸载脚本和许可证。归档中旧安装器所需的 ARM 文件名仅对应停用提示脚本，不是 ARM 二进制。
 `SHA256SUMS` 用于检查下载完整性，不替代发布者身份验证。
 
 {changes}
