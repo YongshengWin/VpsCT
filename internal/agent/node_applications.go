@@ -97,11 +97,15 @@ func (a *Agent) finishNodeApplications(ds *agentproto.DesiredState, nodes []agen
 		if ready[n.Core] {
 			receipt.Status = "applied"
 			actual, ok := prepared[n.NodeID]
-			if !ok {
-				receipt.Status = "failed"
-			} else if actual.Blocked {
+			switch {
+			case !ok && n.Blocked && n.Network != nil:
+				// Network preparation omits disabled listeners from the runtime configuration.
 				receipt.Status = "blocked"
-			} else if actual.Network != nil && actual.Network.Policy.IngressFamily == "ipv6" {
+			case !ok:
+				receipt.Status = "failed"
+			case actual.Blocked:
+				receipt.Status = "blocked"
+			case actual.Network != nil && actual.Network.Policy.IngressFamily == "ipv6":
 				if actual.RuntimeNetwork == nil {
 					receipt.Status = "failed"
 				} else {
