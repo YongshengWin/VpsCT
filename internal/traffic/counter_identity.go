@@ -45,6 +45,11 @@ func nodeCounterBaselines(counters []agentproto.PortCounter, byID map[int64]doma
 			node, known = byID[counter.NodeID]
 		}
 		if known {
+			// Xray only bills the client TCP leg. Process/legacy meters also
+			// include the origin leg and cannot substitute for the ingress meter.
+			if node.Core == domain.CoreXray && (counter.NodeID != node.ID || counter.Source != "nft-node-v1") {
+				return nil, errors.New("Xray requires an identified TCP ingress meter")
+			}
 			byNode[node.ID] = append(byNode[node.ID], counter)
 		}
 	}

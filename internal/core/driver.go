@@ -70,3 +70,10 @@ type RetainedActivation interface {
 
 // LogPath returns the sing-box log file (used by conntail).
 func (p Paths) LogPath() string { return filepath.Join(p.LogDir, "sing-box.log") }
+
+// PartialRestorer is used only after a driver has rolled back a failed apply.
+// It may stage a second activation for exactly matching, still-authorized old
+// endpoints. An empty result means nothing can be kept; no mismatch is admitted.
+type PartialRestorer interface {
+	RestoreUnchanged(context.Context, *agentproto.DesiredState, []agentproto.NodeSpec) (map[int64]bool, error)
+}

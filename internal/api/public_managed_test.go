@@ -17,6 +17,8 @@ func TestSurgeManagedBody(t *testing.T) {
 		{"/s/test-capability/surge", "https://panel.example.test/s/test-capability/surge"},
 		{"/s/test-capability?format=surge&ignored=value", "https://panel.example.test/s/test-capability?format=surge"},
 		{"/r/test-short", "https://panel.example.test/r/test-short?format=surge"},
+		{"/s/test-capability/surge?profile=surge-vless", "https://panel.example.test/s/test-capability/surge?profile=surge-vless"},
+		{"/r/test-short?format=surge&profile=surge-vless&ignored=1", "https://panel.example.test/r/test-short?format=surge&profile=surge-vless"},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			u, _ := url.Parse(tc.path)
@@ -38,6 +40,9 @@ func TestSurgeManagedBody(t *testing.T) {
 
 func TestPublicSurgeManagedSubscription(t *testing.T) {
 	c := newTestAPI(t)
+	if err := c.api.Store.CreateNode(t.Context(), &domain.Node{Name: "managed-fixture", Protocol: "http", Server: "fixture.invalid", Port: 8080, Source: domain.NodeManual, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	c.api.Config.SiteURL = "https://panel.example.test"
 	token := auth.NewSubscriptionToken()
 	sub := domain.Subscription{Name: "managed", Kind: "generated", Enabled: true, Token: token, TokenHash: auth.HashToken(token), ShortCode: "managed-short", NodeSelection: domain.NodeSelection{IncludeAll: true}}

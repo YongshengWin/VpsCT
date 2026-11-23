@@ -100,6 +100,7 @@ func (a *API) listShares(w http.ResponseWriter, r *http.Request) error {
 }
 
 type shareInput struct {
+	EntryVersion   int                  `json:"entry_version,omitempty"` // 1 acknowledges that PUT replaces the full combination selection
 	Name           string               `json:"name"`
 	UserID         *int64               `json:"user_id"`
 	Targets        []domain.ShareTarget `json:"targets"`
@@ -122,6 +123,16 @@ func (in shareInput) apply(sh *domain.Share) error {
 		sh.UserID = nil
 	} else {
 		sh.UserID = in.UserID
+	}
+	if in.EntryVersion != 0 && in.EntryVersion != 1 {
+		return httpx.BadRequest("不支持的分享入口合约版本")
+	}
+	if in.EntryVersion == 0 && sh.ID != 0 {
+		for _, t := range sh.Targets {
+			if len(t.Entries) > 0 {
+				return httpx.E(409, "share_entry_version_required", "此分享含组合入口，更新时须发送 entry_version: 1 和完整目标列表")
+			}
+		}
 	}
 	sh.Targets = in.Targets
 	if sh.Targets == nil {
@@ -184,6 +195,21 @@ func (in shareInput) apply(sh *domain.Share) error {
 	return nil
 }
 
+func shareAPIError(err error) error {
+	switch {
+	case errors.Is(err, store.ErrXrayUnavailable):
+		return httpx.E(409, "xray_unavailable", err.Error())
+	case errors.Is(err, store.ErrShareSnapshot):
+		return httpx.E(409, "share_entry_snapshot_conflict", err.Error())
+	case errors.Is(err, store.ErrShareChanged):
+		return httpx.E(409, "share_changed", err.Error())
+	case errors.Is(err, share.ErrEntryConfig):
+		return httpx.BadRequest(err.Error())
+	default:
+		return natAPIError(err)
+	}
+}
+
 func (a *API) createShare(w http.ResponseWriter, r *http.Request) error {
 	var in shareInput
 	if err := httpx.Decode(r, &in); err != nil {
@@ -218,7 +244,7 @@ func (a *API) createShare(w http.ResponseWriter, r *http.Request) error {
 			// partially created: report but keep record for inspection
 			a.Logger.Warn("share created with provisioning error", "share", sh.ID, "err", err)
 		} else {
-			return natAPIError(err)
+			return shareAPIError(err)
 		}
 	}
 	a.audit(r, "share.create", sh.Name, map[string]any{"quota": sh.QuotaBytes, "targets": sh.Targets})
@@ -283,7 +309,7 @@ func (a *API) updateShare(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := a.Shares.Update(r.Context(), &sh); err != nil {
-		return natAPIError(err)
+		return shareAPIError(err)
 	}
 	a.audit(r, "share.update", sh.Name, nil)
 	a.Events.Publish("share.changed", map[string]any{"id": sh.ID})
@@ -365,6 +391,9 @@ func (a *API) shareAction(action string) httpx.Handler {
 			token, err = a.Shares.Reissue(r.Context(), id)
 		}
 		if err != nil {
+			if errors.Is(err, store.ErrShareSnapshot) || errors.Is(err, store.ErrShareChanged) || errors.Is(err, store.ErrXrayUnavailable) || errors.Is(err, store.ErrTLSTransportUnavailable) || errors.Is(err, store.ErrCoreModeInUse) {
+				return shareAPIError(err)
+			}
 			return httpx.BadRequest(err.Error())
 		}
 		a.audit(r, "share."+action, sh.Name, nil)

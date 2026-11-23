@@ -13,6 +13,43 @@ import (
 	"time"
 )
 
+func TestXraySettlementRejectsProcessMeters(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "traffic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv := domain.Server{Name: "fixture", PublicHost: "192.0.2.1", Enabled: true, CoreMode: domain.CoreModeStable}
+	if err = st.CreateServer(ctx, &srv); err != nil {
+		t.Fatal(err)
+	}
+	// A retired identity is enough to settle; no live node or real credential.
+	if _, err = st.DB().Exec(`INSERT INTO node_meter_identities(node_id,server_id,listen_port,core) VALUES(?,?,?,?)`, 42, srv.ID, 24443, "xray"); err != nil {
+		t.Fatal(err)
+	}
+	ing := traffic.New(st)
+	now := ing.Now()
+	for _, source := range []string{"systemd-v1", "openrc-cgroup-v1", "nft-node-v1"} {
+		batch := agentproto.MeterSettlement{TS: now, Counters: []agentproto.PortCounter{{NodeID: 42, Port: 24443, Source: source, Epoch: "test", FromZero: true, Rx: 11, Tx: 22}}}
+		batch.ID = batch.Digest()
+		hb := agentproto.Heartbeat{FinalMeters: &batch}
+		res, err := ing.Ingest(ctx, srv, hb)
+		if source != "nft-node-v1" {
+			if err == nil || res.FinalMeterAck != "" {
+				t.Fatal("accepted process meter", source)
+			}
+			continue
+		}
+		if err != nil || res.FinalMeterAck != batch.ID || res.NodeDeltas[42] != [2]int64{11, 22} {
+			t.Fatal(res, err)
+		}
+		if res, err = ing.Ingest(ctx, srv, hb); err != nil || res.FinalMeterAck != batch.ID || len(res.NodeDeltas) != 0 {
+			t.Fatal("replay double billed", res, err)
+		}
+	}
+}
+
 func TestAtomicNodeAccounting(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "traffic.db"))

@@ -10,7 +10,7 @@ func TestProxyEnvironmentBoundsMemoryWithoutInheritingRuntimeOverrides(t *testin
 	t.Setenv("GODEBUG", "madvdontneed=0")
 	t.Setenv("HTTP_PROXY", "http://untrusted.fixture.invalid")
 	t.Setenv("MITA_CONFIG_JSON_FILE", "/etc/ctlvps-proxy/mita-30001/config.json")
-	for _, bin := range []string{"/opt/ctlvps/bin/sing-box", "/opt/ctlvps/bin/mita", "/opt/ctlvps/bin/snell-server"} {
+	for _, bin := range []string{"/opt/ctlvps/bin/sing-box", "/opt/ctlvps/bin/mita", "/opt/ctlvps/bin/snell-server", "/opt/ctlvps/bin/xray"} {
 		t.Run(bin, func(t *testing.T) {
 			values := map[string]string{}
 			for _, item := range proxyEnvironment(bin) {

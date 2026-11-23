@@ -15,10 +15,12 @@ import (
 
 // Rendered is a client-ready subscription payload.
 type Rendered struct {
-	Body        []byte
-	ContentType string
-	Filename    string
-	Format      string
+	// EmittedNames excludes policy names and status comments. Not part of the client payload.
+	EmittedNames []string `json:"-"`
+	Body         []byte
+	ContentType  string
+	Filename     string
+	Format       string
 }
 
 var allMarker = regexp.MustCompile(`^\{\{\s*all(?:\|(.*?))?\s*\}\}$|^__ALL(?:_PROXIES)?__$`)
@@ -59,6 +61,9 @@ func expandAllMarkers(items, allNames []string) []string {
 // RenderMihomo produces a Clash/mihomo YAML config.
 func RenderMihomo(b *Bundle) (*Rendered, error) {
 	b, omitted := mihomoCompatibleBundle(b)
+	if len(omitted) > 0 && len(b.Proxies)+len(b.Chains) == 0 {
+		return nil, noRenderPath(FormatMihomo)
+	}
 	tpl := builtinMihomoTemplate
 	if b.Template != nil && b.Template.Kind == "mihomo" && strings.TrimSpace(b.Template.Content) != "" {
 		tpl = b.Template.Content
@@ -68,7 +73,7 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 		return nil, fmt.Errorf("模板 YAML 解析失败: %w", err)
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+		return nil, fmt.Errorf("Mihomo 模板必须为 YAML 映射")
 	}
 	root := doc.Content[0]
 
@@ -90,6 +95,27 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 	omittedGroups := map[string]bool{}
 	if len(b.Groups) > 0 {
 		groupsNode := &yaml.Node{Kind: yaml.SequenceNode}
+		// A groups-only override must keep template policies used by the
+		// untouched rules. Override matching names, rather than deleting them.
+		if prior := getMapKey(root, "proxy-groups"); len(b.Rules) == 0 && prior != nil && prior.Kind == yaml.SequenceNode {
+			names := map[string]bool{}
+			for _, g := range b.Groups {
+				names[g.Name] = true
+			}
+			for _, g := range prior.Content {
+				if n := getMapKey(g, "name"); n != nil && !names[n.Value] {
+					groupsNode.Content = append(groupsNode.Content, g)
+				}
+			}
+			other, err := buildOtherRegionGroups(root, groupsNode, b)
+			if err != nil {
+				return nil, err
+			}
+			omittedGroups, err = expandMihomoGroupMarkers(groupsNode, b, other)
+			if err != nil {
+				return nil, err
+			}
+		}
 		for _, g := range b.Groups {
 			groupsNode.Content = append(groupsNode.Content, groupMapNode(g))
 		}
@@ -112,7 +138,7 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 					i--
 				}
 				if i >= 0 && omittedGroups[strings.TrimSpace(parts[i])] {
-					return nil, fmt.Errorf("规则引用没有匹配节点的分组 %q，请选择其他策略", strings.TrimSpace(parts[i]))
+					return nil, fmt.Errorf("%w：规则引用没有匹配节点的分组 %q，请选择其他策略", ErrNoRenderPath, strings.TrimSpace(parts[i]))
 				}
 			}
 		}
@@ -120,7 +146,10 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 		groupsNode := &yaml.Node{Kind: yaml.SequenceNode}
 		def := domain.ProxyGroup{Name: "PROXY", Type: "select", Proxies: append([]string{}, allNames...)}
 		if len(def.Proxies) == 0 {
-			def.Proxies = []string{"DIRECT"}
+			if !b.ValidationOnly {
+				return nil, noRenderPath(FormatMihomo)
+			}
+			def.Proxies = []string{"REJECT"}
 		}
 		groupsNode.Content = append(groupsNode.Content, groupMapNode(def))
 		setMapKey(root, "proxy-groups", groupsNode)
@@ -134,7 +163,7 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 				i--
 			}
 			if i >= 0 && omittedGroups[strings.TrimSpace(parts[i])] {
-				return nil, fmt.Errorf("规则引用没有匹配节点的分组 %q，请选择其他策略", strings.TrimSpace(parts[i]))
+				return nil, fmt.Errorf("%w：规则引用没有匹配节点的分组 %q，请选择其他策略", ErrNoRenderPath, strings.TrimSpace(parts[i]))
 			}
 		}
 		rulesNode := &yaml.Node{Kind: yaml.SequenceNode}
@@ -152,36 +181,50 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 			setMapKey(root, "rule-providers", &rp)
 		}
 	}
-	// Templates may contain explicit references as well as {{all}} markers.
+	// Validate the actual emitted policies, not just the names in the input.
+	known := map[string]bool{}
+	for _, name := range allNames {
+		known[name] = true
+	}
 	if groups := getMapKey(root, "proxy-groups"); groups != nil {
 		for _, group := range groups.Content {
-			if members := getMapKey(group, "proxies"); members != nil && members.Kind == yaml.SequenceNode {
-				kept := members.Content[:0]
-				for _, member := range members.Content {
-					if !omitted[member.Value] {
-						kept = append(kept, member)
-					}
-				}
-				if len(kept) == 0 {
-					kept = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
-				}
-				members.Content = kept
+			if n := getMapKey(group, "name"); n != nil {
+				known[n.Value] = true
 			}
+		}
+		for _, group := range groups.Content {
+			members := getMapKey(group, "proxies")
+			if members == nil || members.Kind != yaml.SequenceNode {
+				if !b.ValidationOnly && !dynamicMihomoGroup(group) {
+					return nil, noRenderPath(FormatMihomo)
+				}
+				continue
+			}
+			kept := members.Content[:0]
+			for _, member := range members.Content {
+				if omitted[member.Value] {
+					if t := getMapKey(group, "type"); t != nil && t.Value == "relay" {
+						return nil, fmt.Errorf("%w：Mihomo relay 缺少必要成员", ErrNoRenderPath)
+					}
+					continue
+				}
+				if !b.ValidationOnly && !builtinPolicies[member.Value] && !known[member.Value] {
+					return nil, fmt.Errorf("%w：Mihomo 代理组引用不可用的策略 %q", ErrNoRenderPath, member.Value)
+				}
+				kept = append(kept, member)
+			}
+			if len(kept) == 0 && !dynamicMihomoGroup(group) && !b.ValidationOnly {
+				return nil, fmt.Errorf("%w：Mihomo 代理组没有可用成员", ErrNoRenderPath)
+			}
+			members.Content = kept
 		}
 	}
-	if rules := getMapKey(root, "rules"); rules != nil && rules.Kind == yaml.SequenceNode {
-		kept := rules.Content[:0]
-		for _, rule := range rules.Content {
-			parts := strings.Split(rule.Value, ",")
-			i := len(parts) - 1
-			if i > 0 && strings.TrimSpace(parts[i]) == "no-resolve" {
-				i--
-			}
-			if !omitted[strings.TrimSpace(parts[i])] {
-				kept = append(kept, rule)
+	if rules := getMapKey(root, "rules"); rules != nil && !b.ValidationOnly {
+		for _, r := range rules.Content {
+			if target := rulePolicy(r.Value); target != "" && !known[target] && !builtinPolicies[target] {
+				return nil, fmt.Errorf("%w：Mihomo 规则引用不可用的策略 %q", ErrNoRenderPath, target)
 			}
 		}
-		rules.Content = kept
 	}
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
@@ -190,48 +233,30 @@ func RenderMihomo(b *Bundle) (*Rendered, error) {
 		return nil, err
 	}
 	enc.Close()
-	return &Rendered{Body: buf.Bytes(), ContentType: "text/yaml; charset=utf-8", Filename: b.Name + ".yaml", Format: FormatMihomo}, nil
+	return &Rendered{EmittedNames: allNames, Body: buf.Bytes(), ContentType: "text/yaml; charset=utf-8", Filename: b.Name + ".yaml", Format: FormatMihomo}, nil
 }
 
 // Filter only the rendered copy: the node library and other formats keep their
 // original versions. Version zero/omitted uses mihomo's default.
 func mihomoCompatibleBundle(b *Bundle) (*Bundle, map[string]bool) {
-	omitted := map[string]bool{}
-	all := append([]proxynode.Proxy{}, b.Proxies...)
-	via := map[string]string{}
-	for _, c := range b.Chains {
-		all = append(all, c.Proxy)
-		via[c.Proxy.Name] = c.Via
-	}
-	for _, p := range all {
-		if p.Type == "snell" && (p.Int("version") < 0 || p.Int("version") > 5) {
-			omitted[p.Name] = true
+	return projectNodes(b, func(p proxynode.Proxy, _ string) bool {
+		if ambiguousSimpleTLS(p) || surgeOnlyFingerprint(p) || p.Str("network") == "xhttp" && p.Type != "vless" {
+			return false
 		}
-	}
-	// Remove dependent chains too, regardless of their ordering.
-	for changed := true; changed; {
-		changed = false
-		for _, p := range all {
-			if !omitted[p.Name] && (omitted[via[p.Name]] || omitted[p.Str("dialer-proxy")]) {
-				omitted[p.Name] = true
-				changed = true
-			}
+		switch p.Type {
+		case "socks5":
+			// Mihomo always sends the server hostname as SNI; name-cert-verify only changes certificate verification.
+			sni := nonempty(p.Str("sni"), p.Str("servername"))
+			return (sni == "" || strings.EqualFold(sni, p.Server)) && !p.Bool("remote-dns-resolve") && p.Params["headers"] == nil
+		case "http":
+			return p.Str("servername") == "" || p.Str("servername") == p.Str("sni")
+		case "hysteria2": // Certificate pin replaces PKI rather than supplementing it.
+			return p.Str("fingerprint") == "" || p.Bool("skip-cert-verify")
+		case "snell":
+			return p.Int("version") >= 0 && p.Int("version") <= 5
 		}
-	}
-	out := *b
-	out.Proxies = nil
-	out.Chains = nil
-	for _, p := range b.Proxies {
-		if !omitted[p.Name] {
-			out.Proxies = append(out.Proxies, p)
-		}
-	}
-	for _, c := range b.Chains {
-		if !omitted[c.Proxy.Name] {
-			out.Chains = append(out.Chains, c)
-		}
-	}
-	return &out, omitted
+		return true
+	})
 }
 
 // Built-in templates may opt into groups for additional explicitly known
@@ -365,10 +390,12 @@ func expandMihomoGroupMarkers(groups *yaml.Node, b *Bundle, otherRegions []strin
 				}
 				continue
 			}
-			// Preserve the established empty-subscription behavior for unfiltered
-			// groups; never widen a filtered group to unrelated nodes.
+			// Only the disposable syntax-check render may synthesize a member.
 			if hasMarker {
-				expanded = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "DIRECT"}}
+				if !b.ValidationOnly {
+					return nil, noRenderPath(FormatMihomo)
+				}
+				expanded = []*yaml.Node{{Kind: yaml.ScalarNode, Value: "REJECT"}}
 			}
 		}
 		list.Content = expanded
@@ -387,11 +414,24 @@ func expandMihomoGroupMarkers(groups *yaml.Node, b *Bundle, otherRegions []strin
 			}
 		}
 		if len(kept) == 0 && len(members.Content) > 0 {
-			return nil, fmt.Errorf("代理组依赖的地区组没有匹配节点，请配置明确的备用策略")
+			return nil, fmt.Errorf("%w：代理组依赖的地区组没有匹配节点，请配置明确的备用策略", ErrNoRenderPath)
 		}
 		members.Content = kept
 	}
 	return removed, nil
+}
+
+// Provider-backed groups need not enumerate static members.
+func dynamicMihomoGroup(group *yaml.Node) bool {
+	if use := getMapKey(group, "use"); use != nil && len(use.Content) > 0 {
+		return true
+	}
+	for _, key := range []string{"include-all", "include-all-proxies", "include-all-providers"} {
+		if node := getMapKey(group, key); node != nil && node.Value == "true" {
+			return true
+		}
+	}
+	return false
 }
 
 var proxyKeyOrder = []string{"name", "type", "server", "port", "ports"}

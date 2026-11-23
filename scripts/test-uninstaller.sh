@@ -18,6 +18,56 @@ reject_args --controller --unknown
 (ROLE=''; parse_args --all --purge --remove-caddy --dry-run --yes)
 bash uninstall.sh --help >/dev/null
 
+# A synthetic systemd inventory exercises the same path as web maintenance.
+(
+  ROOT=$(mktemp -d); trap 'command rm -rf -- "$ROOT"' EXIT
+  ROLE=agent INIT=systemd PURGE=0
+  service=ctlvps-xray@24443.service
+  checker=ctlvps-proxy-check-xray-24443.service
+  bin="$ROOT/opt/ctlvps/bin/xray"; conf="$ROOT/etc/ctlvps-proxy/xray-24443/config.json"
+  unit="$ROOT/etc/systemd/system/$service"; checkunit="$ROOT/etc/systemd/system/$checker"
+  mkdir -p "${bin%/*}" "${conf%/*}" "${unit%/*}" "$bin.recovery"
+  touch "$bin" "$conf" "$unit" "$checkunit" "$bin.trusted" "$bin.recovery/journal.json" "${bin%/*}/other-tool"
+  bad=0
+  systemctl() {
+    case "$1" in
+      list-units|list-unit-files) printf '%s loaded\n%s loaded\n' "$service" "$checker" ;;
+      show)
+        if [[ "$2" != "$service" && "$2" != "$checker" ]]; then printf 'not-found\n'; return; fi
+        case "$4" in
+          LoadState) printf 'loaded\n' ;;
+          FragmentPath) printf '/etc/systemd/system/%s\n' "$2" ;;
+          User) if [[ "$bad" == 4 ]]; then printf 'root\n'; else printf 'ctlvps-xr24443\n'; fi ;;
+          ExecStop) [[ "$bad" != 5 ]] || printf 'custom stop hook\n' ;;
+          DropInPaths) [[ "$bad" != 1 ]] || printf '/unrelated/override.conf\n' ;;
+          ExecStart) local act=run; [[ "$2" != "$checker" ]] || act=candidate
+            [[ "$bad" != 2 ]] || act=unexpected
+            printf '{ path=/usr/local/bin/ctlvps-agent ; argv[]=/usr/local/bin/ctlvps-agent proxy-exec xray %s 24443 ; }\n' "$act"
+            [[ "$bad" != 6 ]] || printf '{ path=/bin/other ; argv[]=/bin/other ; }\n' ;;
+          ActiveState) printf 'active\n' ;;
+        esac ;;
+      stop) [[ "$bad" != 3 ]] ;;
+      disable|daemon-reload) return 0 ;;
+      is-active|is-failed) return 1 ;;
+      *) return 1 ;;
+    esac
+  }
+  findmnt() { return 0; }; nft() { [[ "$*" == 'list tables' ]]; }
+  rm() { local target=${!#}; [[ "$target" == "$ROOT/"* ]] || return 1; command rm -rf -- "$target"; }
+  for bad in 1 2 4 5 6; do
+    if (plan) >/dev/null 2>&1; then printf 'Accepted modified Xray unit\n' >&2; exit 1; fi
+  done
+  bad=3; plan >/dev/null
+  if (execute_plan) >/dev/null 2>&1; then printf 'Ignored Xray stop failure\n' >&2; exit 1; fi
+  [[ -f "$bin" && -f "$conf" && -f "$unit" && -f "$checkunit" ]]
+  bad=0; plan >/dev/null; execute_plan >/dev/null
+  [[ ! -e "$unit" && ! -e "$checkunit" && ! -e "$bin" && ! -e "$bin.trusted" && ! -e "$bin.recovery" && -f "$conf" && -f "${bin%/*}/other-tool" ]]
+  # After removal systemctl no longer lists a service or a file.
+  systemctl() { case "$1" in show) printf 'not-found\n';; list-units|daemon-reload) return 0;; list-unit-files) return 1;; *) return 1;; esac; }
+  PURGE=1; plan >/dev/null; execute_plan >/dev/null
+  [[ ! -e "$conf" && -f "${bin%/*}/other-tool" ]]
+)
+
 # Check NAT cleanup without touching the host's services, firewall or paths.
 (
   test_root=$(mktemp -d)
@@ -254,4 +304,4 @@ FIXTURE
   [[ "$(cat "$ROOT/runlevel-actions")" == $'delete ctlvps-agent default\ndelete ctlvps-proxy-guard default' ]]
   check_openrc_groups_empty
 )
-printf 'Uninstaller argument, NAT and OpenRC cleanup checks passed\n'
+printf 'Uninstaller argument, Xray, NAT and OpenRC cleanup checks passed\n'

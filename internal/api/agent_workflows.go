@@ -40,11 +40,12 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 		}, Completion: "仅 IPv6 节点返回 ipv6_ingress_ready=true；201/202 只代表已记录部署。", Recovery: "用相同 operation_id 和完整载荷安全重试，条件变化时重新预览。"},
 		{ID: "deploy_node", Title: "部署代理节点", Steps: []agentWorkflowStep{
 			step("确认协议支持和运行条件", "GET", "/api/v1/servers/{id}/network/capabilities"),
-			step("创建节点", "POST", "/api/v1/servers/{id}/nodes"),
+			step("XHTTP 检查 xhttp_block_reason；VLESS 普通 TLS、Trojan WS/gRPC 检查 tls_transport_block_reason。所需字段须存在且为空", "GET", "/api/v1/servers/{id}"),
+			step("普通接入按协议提交 vless 或 trojan 传输组合、TLS 域名及证书模式，保存 Location", "POST", "/api/v1/servers/{id}/nodes"),
 			step("核对创建的节点及归属", "GET", "/api/v1/nodes/{id}"),
 			step("核对服务器期望配置与实际回执", "GET", "/api/v1/servers/{id}"),
 			step("必要时检查实际发布的 revision", "GET", "/api/v1/servers/{id}/desired"),
-		}, Completion: "目标节点存在，服务器 desired.in_sync=true、desired.status=applied 且无 apply_error；仅有 201 或服务器在线不足以证明节点成功。", Recovery: "先查询资源和最新回执；超时后不重复创建节点。"},
+		}, Completion: "目标节点存在，服务器 desired.in_sync=true、desired.status=applied 且无 apply_error；仅有 201 或服务器在线不足以证明节点成功。", Recovery: "201/202 后先按 Location 查询节点及回执。202 发布受阻时，解除阻塞后 republish 原服务器。普通接入超时先按服务器、端口核对，不重复创建。"},
 		{ID: "import_nodes", Title: "导入外部节点", Steps: []agentWorkflowStep{
 			step("先解析并核对内容", "POST", "/api/v1/nodes/parse"), step("保存用户选择的节点", "POST", "/api/v1/nodes/import"), step("筛选 source、协议、服务器和名称", "GET", "/api/v1/nodes"),
 		}, Completion: "节点记录存在且协议、来源、端点与请求一致；导入不代表已测试可达。", Recovery: "先比对导入结果，避免重复导入；不要回显 URI。"},
@@ -56,7 +57,7 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 			step("operation_id 固定；两台用 ix_server_id=0，三台指定中转；获取 candidate/token/checks", "POST", "/api/v1/access-routes/preview"),
 			step("提交完整 candidate 并附 expected_impact=token", "POST", "/api/v1/access-routes"),
 			step("使用返回的 id 查询 stage/message/revision", "GET", "/api/v1/access-routes/{op}"),
-			step("applied 后取得入口节点及 URI", "GET", "/api/v1/access-routes/{op}/node"),
+			step("applied 后取得入口节点；uri 为空时按 subscription_id 获取兼容格式", "GET", "/api/v1/access-routes/{op}/node"),
 		}, Completion: "stage=applied 且 node 接口成功；pending/blocked 不表示完成。", Recovery: "先 GET 同一 id；相同 candidate 和 operation_id 可核对后重放，不能换 id 盲目重试；409/428 重新预览。"},
 		{ID: "stop_access_route", Title: "停止并清理线路", Steps: []agentWorkflowStep{
 			step("读取最新 revision", "GET", "/api/v1/access-routes/{op}"), step("提交 expected_revision", "DELETE", "/api/v1/access-routes/{op}"), step("等待逐段清理结束", "GET", "/api/v1/access-routes/{op}"),
@@ -69,10 +70,10 @@ func agentWorkflows(operations []agentOperation) []agentWorkflow {
 		}, Completion: "实际网络操作达到成功状态，节点当前配置已应用。", Recovery: "遵循 preview 影响凭证及版本校验；节点入口协议与出口协议分别判断。"},
 		{ID: "subscription", Title: "生成或转换订阅", Steps: []agentWorkflowStep{
 			step("验证模板、节点选择和分流", "POST", "/api/v1/subscriptions/preview"), step("创建订阅", "POST", "/api/v1/subscriptions"), step("核对资源配置", "GET", "/api/v1/subscriptions/{id}"), step("检查客户端格式渲染", "GET", "/api/v1/subscriptions/{id}/render"),
-		}, Completion: "保存和指定格式渲染均成功；渲染结果可能包含凭据。", Recovery: "无通用幂等保证；超时比对资源 ID、字段和创建时间，不按名称盲目重建。"},
+		}, Completion: "保存与目标格式渲染均成功，实际输出节点数和 omitted_count 已核对。现代 Surge 使用 format=surge 和 profile=surge-vless。渲染正文可能包含凭据。", Recovery: "无通用幂等保证；超时比对资源 ID、字段和创建时间，不按名称盲目重建。"},
 		{ID: "share", Title: "创建资源分享", Steps: []agentWorkflowStep{
 			step("核对目标与权限", "GET", "/api/v1/servers"), step("创建专用资源及配额", "POST", "/api/v1/shares"), step("核对分享状态、节点和用量", "GET", "/api/v1/shares/{id}"), step("按公开标识查询分享", "GET", "/api/v1/share-pages/{public_id}"),
-		}, Completion: "分享配置正确；专用节点实际已应用。", Recovery: "暂停、撤销、重签与删除的影响不同，按用户实际要求选择。"},
+		}, Completion: "核对各组合入口的稳定 ID、快照、独立配额和服务端 node_id，并确认专用节点已应用。", Recovery: "更新包含组合入口的分享时，读取既有目标并以 entry_version=1 提交完整选择。重签后核对入口 ID 与用量。"},
 		{ID: "personal_share_template", Title: "为自己的分享设置客户端模板", Steps: []agentWorkflowStep{
 			step("读取自己获分配的分享", "GET", "/api/v1/shares/{id}"), step("读取个人模板", "GET", "/api/v1/me/templates"), step("按需读取历史版本", "GET", "/api/v1/me/templates/{id}/versions"), step("预览未保存草稿", "POST", "/api/v1/shares/{id}/personal-templates/preview-draft"), step("创建个人模板", "POST", "/api/v1/me/templates"), step("用分享节点预览", "POST", "/api/v1/shares/{id}/personal-templates/preview"), step("应用模板", "PUT", "/api/v1/shares/{id}/personal-templates/{format}"), step("核对格式选择", "GET", "/api/v1/shares/{id}/personal-templates"),
 		}, Completion: "选择表中对应格式的 template_id 与请求一致；客户端下次更新订阅时生效，预览内容可能包含凭据。", Recovery: "创建超时先查个人模板并比对字段，无法唯一判断时不盲目重建；应用超时先查格式选择，409 时重新读取模板及分享并预览。使用中的模板先复制再修改。"},

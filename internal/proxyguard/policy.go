@@ -153,13 +153,15 @@ func validUnit(u string) bool {
 	if u == "ctlvps-singbox.service" || u == "ctlvps-singbox-private.service" {
 		return true
 	}
-	u = strings.Replace(u, "ctlvps-mita@", "ctlvps-snell@", 1)
-	if !strings.HasPrefix(u, "ctlvps-snell@") || !strings.HasSuffix(u, ".service") {
-		return false
+	for _, prefix := range []string{"ctlvps-snell@", "ctlvps-mita@", "ctlvps-xray@"} {
+		if !strings.HasPrefix(u, prefix) || !strings.HasSuffix(u, ".service") {
+			continue
+		}
+		s := strings.TrimSuffix(strings.TrimPrefix(u, prefix), ".service")
+		n, err := strconv.Atoi(s)
+		return err == nil && n > 0 && n <= 65535 && strconv.Itoa(n) == s
 	}
-	s := strings.TrimSuffix(strings.TrimPrefix(u, "ctlvps-snell@"), ".service")
-	n, e := strconv.Atoi(s)
-	return e == nil && n > 0 && n <= 65535 && strconv.Itoa(n) == s
+	return false
 }
 
 // Rule handles and nft version metadata change on reload but not enforcement.
@@ -207,7 +209,7 @@ func liveDigest(ctx context.Context) (string, error) {
 }
 
 func activeUnits(ctx context.Context) ([]string, error) {
-	b, e := command(ctx, "", "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--state=active,activating,reloading", "ctlvps-singbox*", "ctlvps-snell@*", "ctlvps-mita@*")
+	b, e := command(ctx, "", "systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager", "--state=active,activating,reloading", "ctlvps-singbox*", "ctlvps-snell@*", "ctlvps-mita@*", "ctlvps-xray@*")
 	if e != nil {
 		return nil, e
 	}

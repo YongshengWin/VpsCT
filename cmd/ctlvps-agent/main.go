@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"ctlvps/internal/agent"
 	"ctlvps/internal/agentnet"
+	"ctlvps/internal/agentproto"
 	"ctlvps/internal/buildinfo"
 	"ctlvps/internal/core"
 	"ctlvps/internal/maintenance"
@@ -105,7 +107,14 @@ func main() {
 		ports, _ := cfg.Expand()
 		fmt.Printf("NAT 配置有效：%d 条 TCP/UDP 端口映射；无映射时关闭适配\n", len(ports))
 	case "capabilities":
-		_ = json.NewEncoder(os.Stdout).Encode(networkconfig.CurrentCapabilities())
+		caps := networkconfig.CurrentCapabilities()
+		if runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+			caps.TLSTransport = agentproto.TLSTransportVersion
+		}
+		if core.XrayPlatform() {
+			caps.Xray = agentproto.XrayVersion
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(caps)
 	case "check-update":
 		fs := flag.NewFlagSet("check-update", flag.ExitOnError)
 		candidate := fs.String("candidate", "", "verified candidate binary")

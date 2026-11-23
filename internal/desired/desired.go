@@ -59,6 +59,14 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 	if err != nil {
 		return nil, err
 	}
+	tlsVersion, err := b.Store.TLSTransportVersion(ctx, server.ID)
+	if err != nil {
+		return nil, err
+	}
+	xrayVersion, err := b.Store.XrayVersion(ctx, server.ID)
+	if err != nil {
+		return nil, err
+	}
 	mitaVersion, err := b.Store.MitaVersion(ctx, server.ID)
 	if err != nil {
 		return nil, err
@@ -83,6 +91,8 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 	ds := &agentproto.DesiredState{
 		PublicationGeneration:   generation,
 		MitaVersion:             mitaVersion,
+		TLSTransportVersion:     tlsVersion,
+		XrayVersion:             xrayVersion,
 		NetworkSSHVersion:       sshVersion,
 		NetworkWireGuardVersion: wgVersion,
 		NetworkGeneration:       generation,
@@ -176,6 +186,14 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 		}
 		if len(n.ServerParams) > 0 {
 			_ = json.Unmarshal(n.ServerParams, &spec.Params)
+		}
+		if n.Core == domain.CoreXray || spec.Params["network"] == "xhttp" && n.Protocol == domain.ProtocolVLESS {
+			if n.Core != domain.CoreXray {
+				return nil, errors.New("XHTTP 节点持久化内核不一致")
+			}
+			spec.Core = string(domain.CoreXray)
+			ds.XrayVersion = agentproto.XrayVersion
+			ds.Versions["xray"] = agentproto.PinnedXray()
 		}
 		if n.ShareID != nil {
 			sh, ok := shares[*n.ShareID]
@@ -281,7 +299,14 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 				}
 			}
 		}
-		if needsCert(n.Protocol) {
+		managedTLS := agentproto.NeedsTLSTransport(n.Protocol, spec.Params)
+		if managedTLS {
+			if n.Core != domain.CoreSingBox {
+				return nil, fmt.Errorf("node %d: 普通 TLS 节点持久化内核不一致", n.ID)
+			}
+			ds.TLSTransportVersion = agentproto.TLSTransportVersion
+		}
+		if managedTLS || needsCert(n.Protocol) {
 			mode := fmt.Sprint(spec.Params["cert_mode"])
 			if mode == "" || mode == "<nil>" {
 				mode = server.CertMode
@@ -294,6 +319,16 @@ func (b *Builder) Build(ctx context.Context, server domain.Server) (*agentproto.
 			if mode == "external" {
 				spec.Cert.ID = fmt.Sprint(spec.Params["cert_id"])
 
+			}
+		}
+		if managedTLS {
+			if err := agentproto.ValidateTLSTransportNode(ds, spec); err != nil {
+				return nil, fmt.Errorf("node %d: %w", spec.NodeID, err)
+			}
+		}
+		if spec.Core == "xray" {
+			if err := agentproto.ValidateXrayNode(ds, spec); err != nil {
+				return nil, fmt.Errorf("node %d: %w", spec.NodeID, err)
 			}
 		}
 		ds.Nodes = append(ds.Nodes, spec)

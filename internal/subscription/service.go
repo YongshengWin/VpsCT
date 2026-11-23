@@ -619,6 +619,10 @@ func (s *Service) applySubQuota(ui *Userinfo, sub domain.Subscription, now time.
 
 // Render builds and renders a subscription in the given format.
 func (s *Service) Render(ctx context.Context, sub domain.Subscription, format string) (*Rendered, *Bundle, error) {
+	return s.RenderWithProfile(ctx, sub, format, "")
+}
+
+func (s *Service) RenderWithProfile(ctx context.Context, sub domain.Subscription, format, profile string) (*Rendered, *Bundle, error) {
 	b, err := s.Build(ctx, sub)
 	if err != nil {
 		return nil, nil, err
@@ -638,12 +642,21 @@ func (s *Service) Render(ctx context.Context, sub domain.Subscription, format st
 			}
 		}
 	}
-	r, err := RenderBundle(b, format)
+	r, err := RenderBundleWithProfile(b, format, profile)
 	return r, b, err
 }
 
 // RenderBundle dispatches on format.
-func RenderBundle(b *Bundle, format string) (result *Rendered, err error) {
+func RenderBundle(b *Bundle, format string) (*Rendered, error) {
+	return RenderBundleWithProfile(b, format, "")
+}
+
+var ErrClientProfile = errors.New("所选格式不支持此客户端兼容档")
+
+func RenderBundleWithProfile(b *Bundle, format, profile string) (result *Rendered, err error) {
+	if profile != "" && (profile != ProfileSurgeVLESS || NormalizeFormat(format) != FormatSurge) {
+		return nil, ErrClientProfile
+	}
 	if len(b.Proxies)+len(b.Chains) > 10000 {
 		return nil, fmt.Errorf("订阅节点过多")
 	}
@@ -672,7 +685,7 @@ func RenderBundle(b *Bundle, format string) (result *Rendered, err error) {
 	case FormatShadowrocket:
 		return RenderShadowrocket(b)
 	case FormatSurge:
-		return RenderSurge(b)
+		return RenderSurgeWithProfile(b, profile)
 	case FormatSingBox:
 		return RenderSingBox(b)
 	default:

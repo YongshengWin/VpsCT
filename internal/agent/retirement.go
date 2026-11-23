@@ -53,7 +53,12 @@ func (h retirementHost) FinalRead(ctx context.Context, nodes []MeterIdentity) ([
 	}
 	out := make([]agentproto.PortCounter, 0, len(nodes))
 	for _, n := range nodes {
-		if n.Core == "singbox" {
+		if n.Core == "singbox" || n.Core == "xray" {
+			if n.Core == "xray" && a.Systemd.IsActive(ctx, core.SnellSlice(n.NodeID)) {
+				if err := a.Systemd.EmptySnellMeter(ctx, n.NodeID); err != nil {
+					return nil, err
+				}
+			}
 			c, ok := byID[n.NodeID]
 			if !ok {
 				return nil, fmt.Errorf("final counter unavailable for node %d", n.NodeID)
@@ -85,7 +90,7 @@ func (h retirementHost) Clean(ctx context.Context, p *Retirement) error {
 	}
 	var ids []int64
 	for _, n := range p.Nodes {
-		if n.Core == "singbox" {
+		if n.Core == "singbox" || n.Core == "xray" {
 			ids = append(ids, n.NodeID)
 		}
 	}

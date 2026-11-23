@@ -18,7 +18,11 @@ func TestSharePersonalTemplateFormatAndTransfer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sh := domain.Share{Name: "personal-template", UserID: &a.ID}
+	node := domain.Node{Name: "template-fixture", Protocol: "http", Server: "fixture.invalid", Port: 8080, Source: domain.NodeManual, Enabled: true}
+	if err := st.CreateNode(ctx, &node); err != nil {
+		t.Fatal(err)
+	}
+	sh := domain.Share{Name: "personal-template", UserID: &a.ID, ExtraNodeIDs: []int64{node.ID}}
 	if err := st.CreateShare(ctx, &sh); err != nil {
 		t.Fatal(err)
 	}

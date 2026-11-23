@@ -146,8 +146,15 @@ func (s *Store) UpdateServerWithCalibration(ctx context.Context, v *domain.Serve
 		}
 		var oldResetDay, oldNAT int
 		var oldBilling, oldIPv6Host string
-		if err := tx.QueryRowContext(ctx, `SELECT quota_reset_day, quota_billing, is_nat, public_host_ipv6 FROM servers WHERE id=?`, v.ID).Scan(&oldResetDay, &oldBilling, &oldNAT, &oldIPv6Host); err != nil {
+		var oldMode domain.CoreMode
+		if err := tx.QueryRowContext(ctx, `SELECT quota_reset_day, quota_billing, is_nat, public_host_ipv6,core_mode FROM servers WHERE id=?`, v.ID).Scan(&oldResetDay, &oldBilling, &oldNAT, &oldIPv6Host, &oldMode); err != nil {
 			return err
+		}
+		lean, nat := oldMode != v.CoreMode && v.CoreMode == domain.CoreModeLean, oldNAT == 0 && v.IsNAT
+		if lean || nat {
+			if err := rejectIncompatibleCores(ctx, tx, v.ID, lean, nat); err != nil {
+				return err
+			}
 		}
 		if oldNAT == 1 && !v.IsNAT && ((vnat.DesiredConfig != nil && len(vnat.DesiredConfig.Mappings) > 0) || (vnat.Report != nil && (vnat.Report.Configured || vnat.Report.Status == "error" || vnat.Report.Status == "pending")) || vnat.Pending) {
 			return fmt.Errorf("%w: 请先清除端口映射并等待生效，再改为独立公网", ErrNATResources)
@@ -321,7 +328,11 @@ func (s *Store) SetAgentEnrollToken(ctx context.Context, serverID int64, hash st
 // CompleteEnrollment swaps the enrolment token for a permanent token.
 func (s *Store) CompleteEnrollment(ctx context.Context, agentID int64, enrollHash, tokenHash, version string) error {
 	now := fmtTime(s.Now())
-	res, err := s.db.ExecContext(ctx, `UPDATE agents SET token_hash=?, enroll_token_hash='', enroll_expires_at=NULL, version=?, last_seen_at=?, updated_at=? WHERE id=? AND enroll_token_hash=? AND enroll_token_hash!='' AND enroll_expires_at>?`,
+	// Re-enrollment can replace a modern agent with an older binary. Its first
+	// heartbeat, not the preceding installation, must attest transport capability.
+	res, err := s.db.ExecContext(ctx, `UPDATE agents SET token_hash=?, enroll_token_hash='', enroll_expires_at=NULL, version=?, last_seen_at=?, updated_at=?,
+		diagnostics=CASE WHEN json_valid(diagnostics) THEN json_remove(diagnostics,'$.xray_version','$.tls_transport_version') ELSE diagnostics END
+		WHERE id=? AND enroll_token_hash=? AND enroll_token_hash!='' AND enroll_expires_at>?`,
 		tokenHash, version, now, now, agentID, enrollHash, now)
 	if err != nil {
 		return err

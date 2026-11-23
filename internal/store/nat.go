@@ -226,6 +226,11 @@ func (s *Store) SaveServerNAT(ctx context.Context, serverID, expected int64, con
 }
 
 func (s *Store) validateNATResources(ctx context.Context, q querier, serverID int64, c natconfig.Config) error {
+	if len(c.Mappings) > 0 {
+		if err := rejectIncompatibleCores(ctx, q, serverID, false, true); err != nil {
+			return err
+		}
+	}
 	pairs, err := c.Expand()
 	if err != nil {
 		return err

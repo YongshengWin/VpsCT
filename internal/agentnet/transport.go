@@ -18,6 +18,7 @@ import (
 
 	"ctlvps/internal/agentbudget"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/nodecombo"
 	"ctlvps/internal/safehttp"
 )
 
@@ -29,6 +30,8 @@ type request struct {
 	Token                   string
 	Encoding                string
 	Body                    []byte
+	XrayVersion             int `json:",omitempty"`
+	TLSTransportVersion     int `json:",omitempty"`
 	NetworkBindingVersion   int `json:",omitempty"`
 	NetworkIngressVersion   int `json:",omitempty"`
 	IPv6IngressVersion      int `json:",omitempty"`
@@ -47,6 +50,10 @@ type Transport struct {
 	Executable    string
 	Public        bool
 	PrivateOrigin bool
+}
+
+func tlsTransportRoute(method, path string) bool {
+	return method == http.MethodGet && path == "/api/agent/v1/desired" || method == http.MethodPost && path == "/api/agent/v1/apply-report"
 }
 
 func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -70,7 +77,21 @@ func (t Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	in := request{Public: t.Public, PrivateOrigin: t.PrivateOrigin, URL: r.URL.String(), Method: r.Method, Token: r.Header.Get("Authorization"), Encoding: r.Header.Get("Content-Encoding"), Body: body}
+	if !t.Public && tlsTransportRoute(r.Method, r.URL.Path) {
+		if v := r.Header.Get(nodecombo.TLSTransportHeader); v != "" {
+			if v != fmt.Sprint(nodecombo.TLSTransportVersion) {
+				return nil, errors.New("unsupported TLS transport request version")
+			}
+			in.TLSTransportVersion = nodecombo.TLSTransportVersion
+		}
+	}
 	if !t.Public && r.Method == http.MethodGet && r.URL.Path == "/api/agent/v1/desired" {
+		if version := r.Header.Get(nodecombo.XrayHeader); version != "" {
+			if version != fmt.Sprint(nodecombo.XrayVersion) {
+				return nil, errors.New("unsupported Xray request version")
+			}
+			in.XrayVersion = nodecombo.XrayVersion
+		}
 		if version := r.Header.Get(networkconfig.BindingHeader); version != "" {
 			if version != fmt.Sprint(networkconfig.BindingVersion) {
 				return nil, errors.New("unsupported network binding request version")
@@ -227,6 +248,18 @@ func Entry(args []string) (bool, error) {
 	r.Header.Set("Content-Encoding", in.Encoding)
 	// Preserve only versioned capabilities, never arbitrary caller headers.
 	// A new helper serving an old parent must not invent parent capabilities.
+	if in.TLSTransportVersion != 0 {
+		if in.Public || !tlsTransportRoute(in.Method, u.Path) || in.TLSTransportVersion != nodecombo.TLSTransportVersion {
+			return true, errors.New("unsupported TLS transport request version")
+		}
+		r.Header.Set(nodecombo.TLSTransportHeader, fmt.Sprint(in.TLSTransportVersion))
+	}
+	if in.XrayVersion != 0 {
+		if in.Public || in.Method != http.MethodGet || u.Path != "/api/agent/v1/desired" || in.XrayVersion != nodecombo.XrayVersion {
+			return true, errors.New("unsupported Xray request version")
+		}
+		r.Header.Set(nodecombo.XrayHeader, fmt.Sprint(in.XrayVersion))
+	}
 	if in.NetworkBindingVersion != 0 {
 		if in.NetworkBindingVersion != networkconfig.BindingVersion {
 			return true, errors.New("unsupported network binding request version")

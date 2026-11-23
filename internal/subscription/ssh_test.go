@@ -68,8 +68,8 @@ func TestSSHClientImportAndRender(t *testing.T) {
 		t.Fatal("mihomo SSH output lost authentication")
 	}
 	links, err := RenderRaw(b, true)
-	if err != nil || strings.TrimSpace(string(links.Body)) != "" {
-		t.Fatal("SSH must not invent a share URI")
+	if err == nil || links != nil {
+		t.Fatal("a subscription containing only SSH must not publish a successful empty URI list")
 	}
 	for name, change := range map[string]func(map[string]any){
 		"missing pin":     func(m map[string]any) { delete(m, "host-key") },

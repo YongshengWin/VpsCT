@@ -41,6 +41,9 @@ func agentEgressConfigSchema() map[string]any {
 // agentDescribeRequestBody returns a fresh outer schema so registering one
 // route cannot mutate the shared generated contract used by another route.
 func agentDescribeRequestBody(handler string, body map[string]any) map[string]any {
+	if handler == "createShare" || handler == "updateShare" {
+		return agentShareEntryRequestSchema(body)
+	}
 	if handler == "deployNode" || handler == "previewIPv6Node" {
 		return agentIPv6DeployRequestSchema(body, handler == "previewIPv6Node")
 	}

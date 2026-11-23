@@ -180,6 +180,29 @@ func TestEndToEnd(t *testing.T) {
 		Metrics: agentproto.Metrics{NetRx: 1000, NetTx: 1000, MemTotal: 1 << 30}, Ports: []agentproto.PortCounter{{Port: sharePort, Rx: 0, Tx: 0}},
 		AppliedRevision: ds.Revision, AppliedHash: ds.Hash, ApplyStatus: "applied"}
 	c.do("POST", "/api/agent/v1/heartbeat", hb, 200)
+	c.do("POST", agentproto.PathApplyReport, agentproto.ApplyReport{Revision: ds.Revision, Hash: ds.Hash, Status: "applied"}, 204)
+	// public subscription: active share renders with its quota header
+	resp, err = http.Get(c.srv.URL + "/s/" + token + "/mihomo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), "proxies:") {
+		t.Fatalf("public sub: %d %s", resp.StatusCode, body)
+	}
+	if ui := resp.Header.Get("Subscription-Userinfo"); !strings.Contains(ui, "total=1000") {
+		t.Fatalf("userinfo: %q", ui)
+	}
+	// UA detection
+	req, _ = http.NewRequest("GET", c.srv.URL+"/s/"+token, nil)
+	req.Header.Set("User-Agent", "Surge iOS/3000")
+	resp, _ = http.DefaultClient.Do(req)
+	body, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "[Proxy]") {
+		t.Fatalf("surge detection failed: %s", body[:min(len(body), 200)])
+	}
 	hb.Metrics.NetRx, hb.Metrics.NetTx = 5000, 5000
 	hb.Ports[0].Rx, hb.Ports[0].Tx = 700, 700
 	hbr := c.do("POST", "/api/agent/v1/heartbeat", hb, 200)
@@ -228,27 +251,14 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("summary clients: %v", sum["clients"])
 	}
 
-	// public subscription: exhausted share still renders (soft) with userinfo
 	resp, err = http.Get(c.srv.URL + "/s/" + token + "/mihomo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(string(body), "proxies:") {
-		t.Fatalf("public sub: %d %s", resp.StatusCode, body)
-	}
-	if ui := resp.Header.Get("Subscription-Userinfo"); !strings.Contains(ui, "total=1000") {
-		t.Fatalf("userinfo: %q", ui)
-	}
-	// UA detection
-	req, _ = http.NewRequest("GET", c.srv.URL+"/s/"+token, nil)
-	req.Header.Set("User-Agent", "Surge iOS/3000")
-	resp, _ = http.DefaultClient.Do(req)
 	body, _ = io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if strings.Contains(string(body), "proxies:") || strings.Contains(string(body), "mixed-port:") {
-		t.Fatalf("surge detection failed: %s", body[:min(len(body), 200)])
+	if resp.StatusCode != http.StatusUnprocessableEntity || !strings.Contains(string(body), "no_compatible_nodes") || resp.Header.Get("Content-Disposition") != "" {
+		t.Fatal("exhausted share returned a downloadable profile", resp.StatusCode)
 	}
 	// revoke -> 410
 	c.do("POST", fmt.Sprintf("/api/v1/shares/%d/revoke", shID), nil, 200)

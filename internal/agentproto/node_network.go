@@ -83,6 +83,12 @@ func ValidateNetworkDiagnostics(d Diagnostics) error {
 	if d.ListenBindingVersion < 0 || d.ListenBindingVersion > 64 {
 		return errors.New("独立监听能力版本无效")
 	}
+	if d.TLSTransportVersion < 0 || d.TLSTransportVersion > 64 {
+		return errors.New("普通 TLS 传输能力版本无效")
+	}
+	if d.XrayVersion < 0 || d.XrayVersion > 64 {
+		return errors.New("Xray 能力版本无效")
+	}
 	if d.MitaVersion < 0 || d.MitaVersion > 64 {
 		return errors.New("mita 能力版本无效")
 	}
@@ -257,7 +263,7 @@ func DirectBindingProtocols() []string {
 	return []string{"ss", "vless", "trojan", "anytls", "hysteria2", "tuic"}
 }
 func DirectBindingSupported(n NodeSpec, version string) bool {
-	if n.Core != "singbox" || !NetworkBindingSupported(n.Core, version) {
+	if NeedsTLSTransport(n.Protocol, n.Params) || n.Core != "singbox" || !NetworkBindingSupported(n.Core, version) {
 		return false
 	}
 	switch n.Protocol {
@@ -271,7 +277,7 @@ func DirectBindingSupported(n NodeSpec, version string) bool {
 // Transport inbounds keep the same guarded business outbound. Reality's
 // independent handshake additionally requires an agent-local public-IP pin.
 func SOCKS5BindingSupported(n NodeSpec, version string) bool {
-	if n.Core != "singbox" || !NetworkBindingSupported(n.Core, version) {
+	if NeedsTLSTransport(n.Protocol, n.Params) || n.Core != "singbox" || !NetworkBindingSupported(n.Core, version) {
 		return false
 	}
 	switch n.Protocol {
@@ -287,7 +293,7 @@ func ListenBindingSupported(n NodeSpec, version string) bool {
 	return (n.Core == "snell" && n.Protocol == "snell" || n.Core == "mieru" && n.Protocol == "mieru") && NetworkBindingSupported(n.Core, version)
 }
 func CoreVersionKey(core string) string {
-	return map[string]string{"singbox": "sing-box", "snell": "snell-server", "mieru": "mita"}[core]
+	return map[string]string{"singbox": "sing-box", "snell": "snell-server", "mieru": "mita", "xray": "xray"}[core]
 }
 
 // LegacyProxyInbound is the precise admission supported by agents predating

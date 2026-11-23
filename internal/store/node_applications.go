@@ -114,7 +114,7 @@ func (s *Store) BackfillNodeApplications(ctx context.Context) error {
 				continue
 			}
 			for _, spec := range wanted.Nodes {
-				if spec.Blocked {
+				if spec.Blocked || agentproto.NeedsTLSTransport(spec.Protocol, spec.Params) {
 					continue
 				}
 				n, err := s.scanNode(tx.QueryRowContext(ctx, `SELECT `+nodeCols+` FROM nodes WHERE id=? AND server_id=? AND source='deployed'`, spec.NodeID, ds.ServerID))
@@ -201,6 +201,19 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 		for _, n := range wanted.Nodes {
 			byID[n.NodeID] = n
 		}
+		if status == "applied" {
+			// A generic success cannot prove the new agent actually installed the
+			// transport. Require a receipt even for intentionally blocked nodes.
+			reported := map[int64]bool{}
+			for _, r := range resources {
+				reported[r.NodeID] = true
+			}
+			for _, n := range wanted.Nodes {
+				if agentproto.NeedsTLSTransport(n.Protocol, n.Params) && !reported[n.NodeID] {
+					return errors.New("缺少 TLS 传输节点的独立回执")
+				}
+			}
+		}
 		if len(resources) == 0 {
 			if status != "applied" {
 				return nil
@@ -217,6 +230,9 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 			n, ok := byID[receipt.NodeID]
 			if !ok || n.Core != receipt.Core || (n.Blocked && receipt.Status == "applied") {
 				return errors.New("节点应用回执与配置不符")
+			}
+			if !validTLSTransportReceipt(n, receipt) {
+				return errors.New("节点回执未确认指定 TLS 传输")
 			}
 			if !validIPv6Application(n, receipt) {
 				return errors.New("应用回执未确认该节点的 IPv6 监听")
@@ -236,6 +252,13 @@ func (s *Store) RecordNodeApplications(ctx context.Context, serverID, revision i
 		}
 		return nil
 	})
+}
+
+func validTLSTransportReceipt(spec agentproto.NodeSpec, r agentproto.NodeApplication) bool {
+	if r.Status == "applied" && agentproto.NeedsTLSTransport(spec.Protocol, spec.Params) {
+		return r.TLSTransportVersion == agentproto.TLSTransportVersion
+	}
+	return r.TLSTransportVersion == 0
 }
 
 func validIPv6Application(spec agentproto.NodeSpec, receipt agentproto.NodeApplication) bool {
@@ -280,7 +303,7 @@ func (s *Store) recordRetainedApplications(ctx context.Context, tx *sql.Tx, serv
 		if err := json.Unmarshal([]byte(raw), &snapshot); err != nil {
 			return err
 		}
-		if snapshot.Spec.Core != receipt.Core || (snapshot.Spec.Blocked && receipt.Status == "applied") || !validIPv6Application(snapshot.Spec, receipt) {
+		if snapshot.Spec.Core != receipt.Core || (snapshot.Spec.Blocked && receipt.Status == "applied") || !validTLSTransportReceipt(snapshot.Spec, receipt) || !validIPv6Application(snapshot.Spec, receipt) {
 			return errors.New("节点应用回执与保留配置不符")
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE node_applied_states SET status=?,sequence=?,updated_at=?,listen_ipv6=? WHERE server_id=? AND node_id=? AND revision=? AND hash=? AND (sequence<? OR (sequence=? AND status=?))`, receipt.Status, sequence, fmtTime(s.Now()), receipt.ListenIPv6, serverID, receipt.NodeID, revision, hash, sequence, sequence, receipt.Status)

@@ -11,6 +11,35 @@ import (
 	"ctlvps/internal/networkconfig"
 )
 
+func TestXrayStateRequiresExactExecutableCapability(t *testing.T) {
+	dir := t.TempDir()
+	state, binary := filepath.Join(dir, "state.json"), filepath.Join(dir, "candidate")
+	for _, tc := range []struct {
+		state, caps string
+		ok          bool
+	}{
+		{`{"tls_transport_version":1}`, `{"schema":1,"tls_transport":1}`, true},
+		{`{"tls_transport_version":1}`, `{"schema":1}`, false},
+		{`{"tls_transport_version":1}`, `{"schema":1,"tls_transport":2}`, false},
+		{`{"tls_transport_version":-1}`, `{"schema":1}`, false},
+		{`{"xray_version":1}`, `{"schema":1,"xray":1}`, true},
+		{`{"xray_version":1}`, `{"schema":1}`, false},
+		{`{"xray_version":1}`, `{"schema":1,"xray":2}`, false},
+		{`{"xray_version":-1}`, `{"schema":1,"xray":1}`, false},
+		{`{"xray_version":2}`, `{"schema":1,"xray":2}`, false},
+	} {
+		if err := os.WriteFile(state, []byte(tc.state), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf '%s' '"+tc.caps+"'\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckAgentCompatibility(context.Background(), binary, state); (err == nil) != tc.ok {
+			t.Errorf("%s %s: %v", tc.state, tc.caps, err)
+		}
+	}
+}
+
 func TestUDPForwardStatePreventsAgentDowngrade(t *testing.T) {
 	dir := t.TempDir()
 	state, binary := filepath.Join(dir, "state.json"), filepath.Join(dir, "candidate")

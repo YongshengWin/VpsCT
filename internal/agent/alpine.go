@@ -15,6 +15,9 @@ import (
 // OpenRC has no systemd IPAccounting source. Never reinterpret an unsettled
 // process meter as a listen-port nft meter: that would lose origin traffic.
 func validateOpenRCState(s *State) error {
+	if s.XrayVersion > 0 {
+		return errors.New("OpenRC 不支持已登记的 Xray 能力")
+	}
 	if !s.MeteringV1 && len(s.MeterNodes) > 0 {
 		return errors.New("OpenRC 无法结算旧 systemd 进程计量；请先在原 systemd 环境完成计量迁移和结算")
 	}

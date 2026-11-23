@@ -41,6 +41,10 @@ type State struct {
 	NetworkIngressVersion   int                              `json:"network_ingress_version,omitempty"`
 	NetworkSSHVersion       int                              `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion int                              `json:"network_wireguard_version,omitempty"`
+	TLSIntentRevision       int64                            `json:"tls_intent_revision,omitempty"`
+	TLSIntentHash           string                           `json:"tls_intent_hash,omitempty"`
+	TLSTransportVersion     int                              `json:"tls_transport_version,omitempty"`
+	XrayVersion             int                              `json:"xray_version,omitempty"`
 	MitaVersion             int                              `json:"mita_version,omitempty"`
 	NetworkEgressVersion    int                              `json:"network_egress_version,omitempty"`
 	NetworkDesiredRevision  int64                            `json:"network_desired_revision,omitempty"`
@@ -138,6 +142,21 @@ func LoadState(dir string) (*State, error) {
 	if s.NetworkWireGuardVersion != 0 && (s.NetworkWireGuardVersion != agentproto.NetworkWireGuardVersion || s.NetworkEgressVersion != agentproto.NetworkEgressVersion) {
 		return nil, errors.New("unsupported persisted WireGuard version")
 	}
+	if s.TLSIntentRevision < 0 || (s.TLSIntentRevision == 0) != (s.TLSIntentHash == "") {
+		return nil, errors.New("invalid TLS transport intent")
+	}
+	if s.TLSIntentRevision > 0 {
+		digest, err := hex.DecodeString(s.TLSIntentHash)
+		if err != nil || len(digest) != 32 || s.TLSTransportVersion != agentproto.TLSTransportVersion {
+			return nil, errors.New("invalid TLS transport intent identity")
+		}
+	}
+	if s.TLSTransportVersion != 0 && s.TLSTransportVersion != agentproto.TLSTransportVersion {
+		return nil, errors.New("unsupported persisted TLS transport capability")
+	}
+	if s.XrayVersion != 0 && s.XrayVersion != agentproto.XrayVersion {
+		return nil, errors.New("unsupported persisted Xray capability")
+	}
 	if s.MitaVersion != 0 && s.MitaVersion != 1 {
 		return nil, errors.New("unsupported persisted mita capability")
 	}
@@ -156,6 +175,9 @@ func LoadState(dir string) (*State, error) {
 }
 
 func (s *State) desiredBoundary() (int64, string) {
+	if s.TLSIntentRevision > 0 && s.TLSIntentRevision >= max(s.NetworkDesiredRevision, s.AppliedRevision) {
+		return s.TLSIntentRevision, s.TLSIntentHash
+	}
 	if s.NetworkDesiredRevision >= s.AppliedRevision && s.NetworkDesiredRevision > 0 {
 		return s.NetworkDesiredRevision, s.NetworkDesiredHash
 	}

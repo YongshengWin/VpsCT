@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"ctlvps/internal/httpx"
 	"ctlvps/internal/natconfig"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/nodecombo"
 	"ctlvps/internal/provision"
 	"ctlvps/internal/store"
 	"ctlvps/internal/traffic"
@@ -24,15 +26,17 @@ import (
 // ServerView is a server with its agent and usage.
 type ServerView struct {
 	domain.Server
-	NAT         *ServerNATSummary       `json:"nat"`
-	Agent       *domain.Agent           `json:"agent,omitempty"`
-	AgentStatus domain.AgentStatus      `json:"agent_status"`
-	Metrics     *agentproto.Metrics     `json:"metrics,omitempty"`
-	Diagnostics *agentproto.Diagnostics `json:"diagnostics,omitempty"`
-	Usage       *traffic.ServerUsage    `json:"usage,omitempty"`
-	NodeCount   int                     `json:"node_count"`
-	Desired     *desiredSummary         `json:"desired,omitempty"`
-	AgentUpdate *AgentUpdateInfo        `json:"agent_update,omitempty"`
+	TLSTransportBlockReason string                  `json:"tls_transport_block_reason"`
+	XHTTPBlockReason        string                  `json:"xhttp_block_reason"`
+	NAT                     *ServerNATSummary       `json:"nat"`
+	Agent                   *domain.Agent           `json:"agent,omitempty"`
+	AgentStatus             domain.AgentStatus      `json:"agent_status"`
+	Metrics                 *agentproto.Metrics     `json:"metrics,omitempty"`
+	Diagnostics             *agentproto.Diagnostics `json:"diagnostics,omitempty"`
+	Usage                   *traffic.ServerUsage    `json:"usage,omitempty"`
+	NodeCount               int                     `json:"node_count"`
+	Desired                 *desiredSummary         `json:"desired,omitempty"`
+	AgentUpdate             *AgentUpdateInfo        `json:"agent_update,omitempty"`
 }
 
 // AgentUpdateInfo is whether the panel can push a new ctlvps-agent to this VPS.
@@ -68,12 +72,15 @@ func (a *API) agentStatus(ag domain.Agent) domain.AgentStatus {
 
 func (a *API) serverView(r *http.Request, s domain.Server, withDetail bool) ServerView {
 	ctx := r.Context()
-	v := ServerView{Server: s, AgentStatus: domain.AgentPending}
+	v := ServerView{Server: s, AgentStatus: domain.AgentPending, XHTTPBlockReason: store.XrayBlockReason(s, domain.Agent{}, a.Store.Now())}
+	v.TLSTransportBlockReason = store.TLSTransportBlockReason(s, domain.Agent{}, a.Store.Now())
 	if nat, err := a.Store.ServerNAT(ctx, s.ID); err == nil {
 		v.NAT = natSummary(nat)
 	}
 	if ag, err := a.Store.GetAgentByServer(ctx, s.ID); err == nil {
 		v.Agent = &ag
+		v.XHTTPBlockReason = store.XrayBlockReason(s, ag, a.Store.Now())
+		v.TLSTransportBlockReason = store.TLSTransportBlockReason(s, ag, a.Store.Now())
 		v.AgentStatus = a.agentStatus(ag)
 		var m agentproto.Metrics
 		if json.Unmarshal(ag.Metrics, &m) == nil {
@@ -342,7 +349,6 @@ func (a *API) updateServer(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
 	}
-	prevMode := s.CoreMode
 	prevIPv6Host := s.PublicHostIPv6
 	prevBilling, prevQuota, prevResetDay := s.QuotaBilling, s.QuotaBytes, s.QuotaResetDay
 	var oldUsage *traffic.ServerUsage
@@ -369,16 +375,6 @@ func (a *API) updateServer(w http.ResponseWriter, r *http.Request) error {
 			return httpx.E(http.StatusConflict, "ipv6_endpoint_in_use", err.Error())
 		}
 		return natAPIError(err)
-	}
-	if prevMode != s.CoreMode {
-		// re-assign cores of deployed nodes
-		nodes, _ := a.Store.ListNodes(r.Context(), store.NodeFilter{ServerID: &s.ID, IncludeRevoked: true})
-		for _, n := range nodes {
-			if n.Source == domain.NodeDeployed {
-				n.Core = domain.CoreFor(n.Protocol, s.CoreMode)
-				_ = a.Store.UpdateNode(r.Context(), &n)
-			}
-		}
 	}
 	// deployed nodes inherit the public host
 	if err := a.Store.UpdateInheritedNodeHosts(r.Context(), s.ID, s.PublicHost); err != nil {
@@ -661,6 +657,8 @@ func (a *API) serverRepublish(w http.ResponseWriter, r *http.Request) error {
 }
 
 type deployInput struct {
+	Trojan         *nodecombo.Trojan   `json:"trojan,omitempty"`
+	VLESS          *nodecombo.VLESS    `json:"vless,omitempty"`
 	IngressFamily  string              `json:"ingress_family,omitempty"`
 	Network        *networkconfig.Node `json:"network,omitempty"`
 	AdvertiseHost  string              `json:"advertise_host,omitempty"`
@@ -679,6 +677,29 @@ type deployInput struct {
 	CertID         string              `json:"cert_id"`
 	CertMode       string              `json:"cert_mode"`
 	Tags           []string            `json:"tags"`
+}
+
+// Reject unknown combination fields before a VLESS or Trojan request can fall
+// back to its default transport. Other protocols keep the v1 decoder behavior.
+func (in *deployInput) UnmarshalJSON(data []byte) error {
+	type wire deployInput
+	var body wire
+	if err := json.Unmarshal(data, &body); err != nil {
+		return err
+	}
+	if body.Protocol == domain.ProtocolVLESS || body.Protocol == domain.ProtocolTrojan {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&body); err != nil {
+			return err
+		}
+	}
+	*in = deployInput(body)
+	return nil
+}
+
+func (in deployInput) options(port int) provision.Options {
+	return provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, MieruTransport: in.MieruTransport, SSMethod: in.SSMethod, SSNetwork: in.SSNetwork, CertMode: in.CertMode, CertID: in.CertID, Network: in.Network, AdvertiseHost: in.AdvertiseHost, VLESS: in.VLESS, Trojan: in.Trojan}
 }
 
 func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
@@ -717,7 +738,7 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	} else if used[port] {
 		return httpx.Conflict(fmt.Sprintf("端口 %d 已被占用", port))
 	}
-	node, err := provision.NewNode(s, "", provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs, SnellVersion: in.SnellVersion, MieruTransport: in.MieruTransport, SSMethod: in.SSMethod, SSNetwork: in.SSNetwork, CertMode: in.CertMode, CertID: in.CertID})
+	node, err := provision.NewNode(s, "", in.options(port))
 	if err != nil {
 		return httpx.BadRequest(err.Error())
 	}
@@ -728,10 +749,17 @@ func (a *API) deployNode(w http.ResponseWriter, r *http.Request) error {
 	if err := a.Store.CreateNode(r.Context(), &node); err != nil {
 		return natAPIError(err)
 	}
-	if _, _, err := a.Desired.Publish(r.Context(), id); err != nil {
-		return err
-	}
 	a.audit(r, "node.deploy", node.Name, map[string]any{"server": s.Name, "protocol": node.Protocol, "port": node.ListenPort})
+	w.Header().Set("Location", fmt.Sprintf("/api/v1/nodes/%d", node.ID))
+	rec, _, err := a.Desired.Publish(r.Context(), id)
+	if err != nil {
+		// The node already exists. Return its identity rather than encouraging a
+		// duplicate deployment; republish the server after clearing the blocker.
+		a.Logger.Warn("node deployment publication pending", "node_id", node.ID, "err", err)
+		httpx.JSON(w, http.StatusAccepted, node)
+		return nil
+	}
+	w.Header().Set("X-Revision", fmt.Sprint(rec.Revision))
 	httpx.JSON(w, http.StatusCreated, node)
 	return nil
 }

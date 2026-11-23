@@ -41,6 +41,7 @@ func (a *API) subView(r *http.Request, s domain.Subscription, full bool) Subscri
 		for _, f := range subscription.KnownFormats {
 			v.Links[f] = base + "/s/" + s.Token + "/" + f
 		}
+		v.Links[subscription.ProfileSurgeVLESS] = v.Links[subscription.FormatSurge] + "?profile=" + subscription.ProfileSurgeVLESS
 		v.Links["auto"] = base + "/s/" + s.Token
 	}
 	if s.ShortCode != "" {
@@ -375,6 +376,21 @@ func (a *API) rotateSubscriptionToken(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
+type subscriptionRenderResult struct {
+	Format       string `json:"format"`
+	ContentType  string `json:"content_type"`
+	Body         string `json:"body"`
+	NodeCount    int    `json:"node_count"`
+	OmittedCount int    `json:"omitted_count"`
+}
+type subscriptionPreviewResult struct {
+	Format       string              `json:"format"`
+	Body         string              `json:"body"`
+	NodeNames    []string            `json:"node_names"`
+	Groups       []domain.ProxyGroup `json:"groups"`
+	OmittedCount int                 `json:"omitted_count"`
+}
+
 func (a *API) renderSubscription(w http.ResponseWriter, r *http.Request) error {
 	id, err := httpx.PathInt64(r, "id")
 	if err != nil {
@@ -391,11 +407,11 @@ func (a *API) renderSubscription(w http.ResponseWriter, r *http.Request) error {
 	if format == "" {
 		format = s.DefaultFormat
 	}
-	rendered, bundle, err := a.Subs.Render(r.Context(), s, format)
+	rendered, bundle, err := a.Subs.RenderWithProfile(r.Context(), s, format, r.URL.Query().Get("profile"))
 	if err != nil {
 		return httpx.BadRequest(err.Error())
 	}
-	httpx.OK(w, map[string]any{"format": rendered.Format, "content_type": rendered.ContentType, "body": string(rendered.Body), "node_count": len(bundle.Proxies) + len(bundle.Chains)})
+	httpx.OK(w, subscriptionRenderResult{Format: rendered.Format, ContentType: rendered.ContentType, Body: string(rendered.Body), NodeCount: len(rendered.EmittedNames), OmittedCount: len(bundle.Proxies) + len(bundle.Chains) - len(rendered.EmittedNames)})
 	return nil
 }
 
@@ -403,7 +419,8 @@ func (a *API) renderSubscription(w http.ResponseWriter, r *http.Request) error {
 func (a *API) previewSubscription(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
 		subscriptionInput
-		Format string `json:"format"`
+		Format  string `json:"format"`
+		Profile string `json:"profile,omitempty"`
 	}
 	if err := httpx.Decode(r, &in); err != nil {
 		return err
@@ -415,18 +432,12 @@ func (a *API) previewSubscription(w http.ResponseWriter, r *http.Request) error 
 	if in.Format == "" {
 		in.Format = s.DefaultFormat
 	}
-	rendered, bundle, err := a.Subs.Render(r.Context(), s, in.Format)
+	rendered, bundle, err := a.Subs.RenderWithProfile(r.Context(), s, in.Format, in.Profile)
 	if err != nil {
 		return httpx.BadRequest(err.Error())
 	}
-	names := make([]string, 0, len(bundle.Proxies))
-	for _, p := range bundle.Proxies {
-		names = append(names, p.Name)
-	}
-	for _, c := range bundle.Chains {
-		names = append(names, c.Proxy.Name)
-	}
-	httpx.OK(w, map[string]any{"format": rendered.Format, "body": string(rendered.Body), "node_names": names, "groups": bundle.Groups})
+	names := append([]string{}, rendered.EmittedNames...)
+	httpx.OK(w, subscriptionPreviewResult{Format: rendered.Format, Body: string(rendered.Body), NodeNames: names, Groups: bundle.Groups, OmittedCount: len(bundle.Proxies) + len(bundle.Chains) - len(names)})
 	return nil
 }
 

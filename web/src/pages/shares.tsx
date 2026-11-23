@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Pause, Play, Plus, RotateCcw, Trash2, Pencil, Ban, KeyRound, ScrollText } from "lucide-react";
 import { del, get, post, put } from "@/lib/api";
-import type { Share, ShareStatus, Server, Node, RuleTemplate, User, Series, ShareTarget } from "@/lib/types";
+import type { Share, ShareStatus, Server, Node, RuleTemplate, User, Series, ShareTarget, ShareEntry } from "@/lib/types";
 import { cn, displayName, fmtBytes, fmtDate, fmtAgo, gbToBytes, bytesToGb, parseResetDay, STATUS_LABELS, PROTOCOL_LABELS } from "@/lib/utils";
 import { Badge, Button, Card, CardContent, CardHeader, CardTitle, Confirm, Dialog, Empty, Field, Input, PageHeader, Progress, Select, Spinner, Switch, Table, Th, Textarea } from "@/components/ui";
 import { DateTimeInput, ResetDayInput } from "@/components/datetime-picker";
@@ -30,7 +30,7 @@ export function ShareCard({ share, link = true }: { share: Share; link?: boolean
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="wrap-break-word font-medium">{share.name}</p>
-          <p className="wrap-break-word text-xs text-muted-foreground">{share.user_name ? `用户 ${share.user_name} · ` : ""}{share.targets.length} 台服务器 · {share.targets.reduce((a, t) => a + t.protocols.length, 0) + share.extra_node_ids.length} 节点</p>
+          <p className="wrap-break-word text-xs text-muted-foreground">{share.user_name ? `用户 ${share.user_name} · ` : ""}{share.targets.length} 台服务器 · {share.targets.reduce((a, t) => a + entryCountOf(t), 0) + share.extra_node_ids.length} 节点</p>
         </div>
         <StatusBadge s={share.status} />
       </div>
@@ -93,6 +93,71 @@ interface Form {
 }
 const emptyForm: Form = { name: "", user_id: 0, targets: [], extra_node_ids: [], quota_gb: "100", billing_mode: "dual", reset_day: "1", expires_at: "", template_id: 0, connlog_enabled: false, notes: "" };
 
+function entryCountOf(t: ShareTarget) { return (t.protocols?.length ?? 0) + (t.entries?.length ?? 0); }
+function entryLabel(e: ShareEntry) {
+  const c = e.snapshot;
+  const combo = c.vless ?? c.trojan;
+  if (combo) return `${c.vless ? "VLESS" : "Trojan"} · ${combo.transport === "grpc" ? "gRPC" : combo.transport.toUpperCase()} + ${(combo.security ?? (c.vless ? "reality" : "tls")).toUpperCase()}`;
+  if (c.protocol === "trojan") return "Trojan · TCP + TLS";
+  if (c.protocol === "ss") return `SS · ${c.ss_network === "both" ? "TCP + UDP" : "TCP"}`;
+  if (c.mieru_transport) return `Mieru · ${c.mieru_transport}`;
+  return PROTOCOL_LABELS[c.protocol] ?? c.protocol;
+}
+function entryOptions(protocols: string[], saved: ShareEntry[]): ShareEntry[] {
+  const options = new Map<string, ShareEntry>();
+  const add = (id: string, snapshot: ShareEntry["snapshot"]) => options.set(id, { id, snapshot, quota_bytes: 0 });
+  for (const protocol of protocols) {
+    if (protocol !== "vless" && protocol !== "trojan") continue;
+    if (protocol === "vless") {
+      add("vless-tcp", { protocol, vless: { transport: "tcp", security: "reality" } });
+      add("vless-xhttp", { protocol, vless: { transport: "xhttp", security: "reality", xhttp: { path: "/", mode: "auto" } } });
+      add("vless-tcp-tls", { protocol, vless: { transport: "tcp", security: "tls" } });
+    } else {
+      add("trojan", { protocol }); // Keep the original TCP/TLS entry ID and snapshot.
+    }
+    add(`${protocol}-ws-tls`, { protocol, [protocol]: { transport: "ws", security: "tls", ws: { path: "/" } } });
+    add(`${protocol}-grpc-tls`, { protocol, [protocol]: { transport: "grpc", security: "tls", grpc: { service_name: "grpc" } } });
+  }
+  for (const e of saved) options.set(e.id, e);
+  return [...options.values()];
+}
+
+function managedTLS({ vless, trojan }: ShareEntry["snapshot"]) {
+  return vless?.security === "tls" || trojan?.transport === "ws" || trojan?.transport === "grpc";
+}
+
+function entryBlockReason(e: ShareEntry, s: Server, network?: ShareTarget["network"]) {
+  if (e.snapshot.vless?.transport === "xhttp") return s.xhttp_block_reason ?? "未确认 XHTTP 主机能力";
+  if (managedTLS(e.snapshot)) {
+    if (network && !e.node_id) return "仅支持默认网络";
+    return s.tls_transport_block_reason ?? "未确认 TLS 传输部署能力";
+  }
+  return "";
+}
+
+function TLSTransportFields({ entry, server, onChange }: { entry: ShareEntry; server: Server; onChange: (e: ShareEntry) => void }) {
+  const key = entry.snapshot.protocol === "trojan" ? "trojan" : "vless";
+  const combo = entry.snapshot[key];
+  if (!combo || !managedTLS(entry.snapshot)) return null;
+  const patch = (delta: Partial<ShareEntry["snapshot"]>) => onChange({ ...entry, snapshot: { ...entry.snapshot, ...delta } });
+  const update = (delta: Partial<typeof combo>) => patch({ [key]: { ...combo, ...delta } });
+  const label = entryLabel(entry);
+  const frozen = !!entry.node_id;
+  const mode = entry.snapshot.cert_mode || server.cert_mode;
+  return <div className="grid gap-2">
+    {combo.transport === "ws" && <>
+      <Field label="WS 路径"><Input aria-label={`${label} WS 路径`} maxLength={512} value={combo.ws?.path ?? "/"} disabled={frozen} onChange={ev => update({ ws: { ...combo.ws, path: ev.target.value } })} /></Field>
+      <Field label="WS Host（可选）"><Input aria-label={`${label} WS Host`} value={combo.ws?.host ?? ""} disabled={frozen} onChange={ev => update({ ws: { ...combo.ws, host: ev.target.value } })} /></Field>
+    </>}
+    {combo.transport === "grpc" && <Field label="gRPC 服务名"><Input aria-label={`${label} gRPC 服务名`} maxLength={128} value={combo.grpc?.service_name ?? ""} disabled={frozen} onChange={ev => update({ grpc: { service_name: ev.target.value } })} /></Field>}
+    <Field label="TLS 域名（SNI）" hint="留空使用服务器访问地址，与 WS Host 分开设置。"><Input aria-label={`${label} TLS 域名`} value={entry.snapshot.domain ?? ""} disabled={frozen} onChange={ev => patch({ domain: ev.target.value || undefined })} /></Field>
+    <Field label="证书模式"><Select aria-label={`${label} 证书模式`} disabled={frozen} value={entry.snapshot.cert_mode ?? ""} onChange={ev => patch({ cert_mode: ev.target.value || undefined, cert_id: (ev.target.value || server.cert_mode) === "external" ? entry.snapshot.cert_id : undefined })}>
+      <option value="">继承服务器（{server.cert_mode || "self_signed"}）</option><option value="self_signed">自签证书</option><option value="acme">ACME</option><option value="external">外部证书</option>
+    </Select></Field>
+    {mode === "external" && <Field label="外部证书 ID" hint="仅填 VPS 本机安全策略中登记的 ID，不要填写密钥或文件路径。"><Input aria-label={`${label} 外部证书 ID`} maxLength={64} value={entry.snapshot.cert_id ?? ""} disabled={frozen} onChange={ev => patch({ cert_id: ev.target.value || undefined })} /></Field>}
+  </div>;
+}
+
 function toLocal(iso: string) {
   const d = new Date(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -111,14 +176,14 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
   const [f, setF] = React.useState<Form>(emptyForm);
   const [nodeQuotas, setNodeQuotas] = React.useState<Record<string, string>>({});
   React.useEffect(() => {
-    setF(share ? { name: share.name, user_id: share.user_id ?? 0, targets: share.targets ?? [], extra_node_ids: share.extra_node_ids ?? [], quota_gb: bytesToGb(share.quota_bytes), billing_mode: billingMode(share.billing_mode), reset_day: String(share.reset_day ?? 0), expires_at: share.expires_at ? toLocal(share.expires_at) : "", template_id: share.template_id ?? 0, connlog_enabled: share.connlog_enabled, notes: share.notes } : emptyForm);
-    setNodeQuotas(Object.fromEntries((share?.targets ?? []).flatMap(t => t.protocols.map(p => [`${t.server_id}:${p}`, bytesToGb(t.quota_bytes?.[p] ?? 0)]))));
+    setF(share ? { name: share.name, user_id: share.user_id ?? 0, targets: (share.targets ?? []).map(t => ({ ...t, protocols: t.protocols ?? [] })), extra_node_ids: share.extra_node_ids ?? [], quota_gb: bytesToGb(share.quota_bytes), billing_mode: billingMode(share.billing_mode), reset_day: String(share.reset_day ?? 0), expires_at: share.expires_at ? toLocal(share.expires_at) : "", template_id: share.template_id ?? 0, connlog_enabled: share.connlog_enabled, notes: share.notes } : emptyForm);
+    setNodeQuotas(Object.fromEntries((share?.targets ?? []).flatMap(t => [...(t.protocols ?? []).map(p => [`${t.server_id}:${p}`, bytesToGb(t.quota_bytes?.[p] ?? 0)]), ...(t.entries ?? []).map(e => [`${t.server_id}:entry:${e.id}`, bytesToGb(e.quota_bytes)])])));
   }, [share, open]);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
   const m = useMutation({
     mutationFn: () => {
-      const targets = f.targets.map(t => ({ ...t, quota_bytes: Object.fromEntries(t.protocols.map(p => [p, gbToBytes(nodeQuotas[`${t.server_id}:${p}`] ?? "")])) }));
-      const payload = { ...f, targets, user_id: f.user_id || null, quota_bytes: gbToBytes(f.quota_gb), reset_day: parseResetDay(f.reset_day), template_id: f.template_id || null, expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : "0001-01-01T00:00:00Z" };
+      const targets = f.targets.map(t => ({ ...t, entries: t.entries?.map(e => ({ ...e, quota_bytes: gbToBytes(nodeQuotas[`${t.server_id}:entry:${e.id}`] ?? "") })), quota_bytes: Object.fromEntries(t.protocols.map(p => [p, gbToBytes(nodeQuotas[`${t.server_id}:${p}`] ?? "")])) }));
+      const payload = { ...f, entry_version: 1, targets, user_id: f.user_id || null, quota_bytes: gbToBytes(f.quota_gb), reset_day: parseResetDay(f.reset_day), template_id: f.template_id || null, expires_at: f.expires_at ? new Date(f.expires_at).toISOString() : "0001-01-01T00:00:00Z" };
       return share ? put<Share>(`/api/v1/shares/${share.id}`, payload) : post<Share>("/api/v1/shares", payload);
     },
     onSuccess: (r) => {
@@ -136,18 +201,22 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
     if (!t) next = on ? [...f.targets, { server_id: serverID, protocols: [proto] }] : f.targets;
     else {
       const protocols = on ? Array.from(new Set([...t.protocols, proto])) : t.protocols.filter((p) => p !== proto);
-      next = protocols.length ? f.targets.map((x) => (x.server_id === serverID ? { ...x, protocols } : x)) : f.targets.filter((x) => x.server_id !== serverID);
+      next = protocols.length || t.entries?.length ? f.targets.map((x) => (x.server_id === serverID ? { ...x, protocols } : x)) : f.targets.filter((x) => x.server_id !== serverID);
     }
     set("targets", next);
   };
+  const setEntries = (serverID: number, entries: ShareEntry[]) => {
+    const target = f.targets.find(t => t.server_id === serverID) ?? { server_id: serverID, protocols: [] };
+    set("targets", [...f.targets.filter(t => t.server_id !== serverID), ...(entries.length || target.protocols.length ? [{ ...target, entries }] : [])]);
+  };
   const extraCandidates = (nodes.data ?? []).filter((n) => !n.share_id && !n.revoked && n.source !== "deployed");
   const enabledServers = (servers.data ?? []).filter((s) => s.enabled);
-  const entryCount = f.targets.reduce((n, t) => n + t.protocols.length, 0);
+  const entryCount = f.targets.reduce((n, t) => n + entryCountOf(t), 0);
   // Single column sized to the content: the old two-column layout left the
   // right half empty whenever there were no servers / spare nodes.
   return (
-    <Dialog open={open} onClose={onClose} title={share ? "编辑分享" : "新建分享"} size="md" description="每个勾选的「服务器 × 协议」会生成一个独立端口与凭据的专属入口，专属节点独立计量。"
-      footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending} disabled={!validGiB(f.quota_gb, true) || f.targets.some(t => t.protocols.some(p => !validGiB(nodeQuotas[`${t.server_id}:${p}`] ?? "", true)))}>{share ? "保存" : "创建"}</Button></>}>
+    <Dialog open={open} onClose={onClose} title={share ? "编辑分享" : "新建分享"} size="md" description="每个勾选的「服务器 × 组合」会生成一个独立端口与凭据的专属入口，专属节点独立计量。"
+      footer={<><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={() => m.mutate()} loading={m.isPending} disabled={!validGiB(f.quota_gb, true) || f.targets.some(t => [...t.protocols, ...(t.entries ?? []).map(e => `entry:${e.id}`)].some(p => !validGiB(nodeQuotas[`${t.server_id}:${p}`] ?? "", true)))}>{share ? "保存" : "创建"}</Button></>}>
       <div className="space-y-5">
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="名称"><Input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="给小王" /></Field>
@@ -174,24 +243,43 @@ export function ShareDialog({ open, onClose, share }: { open: boolean; onClose: 
               {enabledServers.map((s) => {
                 const t = f.targets.find((x) => x.server_id === s.id);
                 const protos = (meta?.protocols ?? []).filter((p) => !(s.core_mode === "lean" && ["snell","mieru"].includes(p)));
+                const saved = share?.targets.find(x => x.server_id === s.id);
+                const plainProtocols = new Set([...protos.filter(p => p !== "vless" && p !== "trojan"), ...(saved?.protocols ?? [])]);
                 return (
                   <div key={s.id} className="rounded-xl border p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <p className="min-w-0 wrap-break-word text-sm font-medium">{s.name} <span className="text-xs text-muted-foreground">{s.region}{s.region ? " · " : ""}{s.agent_status === "online" ? "在线" : STATUS_LABELS[s.agent_status]}</span></p>
-                      {t && <Badge variant="info">{t.protocols.length}</Badge>}
+                      {t && <Badge variant="info">{entryCountOf(t)}</Badge>}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {protos.map((p) => (
+                      {[...plainProtocols].map((p) => (
                         <label key={p} className={cn("inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-xs", t?.protocols.includes(p) && "border-primary/40 bg-primary/10 text-primary")}>
                           <input type="checkbox" className="accent-primary" checked={!!t?.protocols.includes(p)} onChange={(e) => toggleProto(s.id, p, e.target.checked)} />
-                          {PROTOCOL_LABELS[p] ?? p}
+                          {PROTOCOL_LABELS[p] ?? p}{(p === "vless" || p === "trojan") && "（原入口）"}
                         </label>
                       ))}
+                      {entryOptions(protos, saved?.entries ?? []).map(option => {
+                        const selected = t?.entries?.find(e => e.id === option.id);
+                        const reason = entryBlockReason(option, s, t?.network);
+                        return <label key={`entry:${option.id}`} title={reason || option.id} className={cn("inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs", selected && "border-primary/40 bg-primary/10 text-primary", !selected && reason && "text-muted-foreground")}>
+                          <input type="checkbox" className="accent-primary" checked={!!selected} disabled={!selected && !!reason} onChange={event => setEntries(s.id, event.target.checked ? [...(t?.entries ?? []), option] : (t?.entries ?? []).filter(e => e.id !== option.id))} />
+                          {entryLabel(option)}{reason && <span>（{reason}）</span>}
+                        </label>;
+                      })}
                     </div>
                     {t && <div className="mt-3 space-y-2">{t.protocols.map(p => <Field key={p} label={`${PROTOCOL_LABELS[p] ?? p} 额度 (GiB)`}>
                       <Input aria-label={`${s.name} ${PROTOCOL_LABELS[p] ?? p} 节点额度`} type="number" min={0} step="any" placeholder="不限" value={nodeQuotas[`${s.id}:${p}`] ?? ""} onChange={e => setNodeQuotas(prev => ({ ...prev, [`${s.id}:${p}`]: e.target.value }))} />
                     </Field>)}</div>}
-                    {t && <Field label="新入口网络" hint="仅在新建入口时复制监听与固定出口版本，已有入口保持各自设置。应用会重启共享代理。"><Select aria-label={`分享网络 ${s.name}`} value={t.network?JSON.stringify(t.network):""} onChange={e=>set("targets",f.targets.map(x=>x.server_id===s.id?{...x,network:e.target.value?JSON.parse(e.target.value):undefined}:x))}>
+                    {t?.entries?.map(e => <div key={e.id} className="mt-3 space-y-2">
+                      <Field label={`${entryLabel(e)} 额度 (GiB)`} hint={`入口 ID：${e.id}`}><Input aria-label={`${s.name} ${e.id} 节点额度`} type="number" min={0} step="any" placeholder="不限" value={nodeQuotas[`${s.id}:entry:${e.id}`] ?? ""} onChange={ev => setNodeQuotas(prev => ({ ...prev, [`${s.id}:entry:${e.id}`]: ev.target.value }))} /></Field>
+                      <TLSTransportFields entry={e} server={s} onChange={next => setEntries(s.id, (t.entries ?? []).map(it => it.id === e.id ? next : it))} />
+                      {e.snapshot.vless?.transport === "xhttp" && (() => {
+                        const x = e.snapshot.vless.xhttp ?? {};
+                        const update = (field: "path" | "host" | "mode", value: string) => setEntries(s.id, (t.entries ?? []).map(it => it.id === e.id ? { ...it, snapshot: { ...it.snapshot, vless: { ...e.snapshot.vless!, xhttp: { ...x, [field]: value } } } } : it));
+                        return <div className="grid gap-2"><Field label="XHTTP 路径"><Input aria-label="XHTTP 路径" value={x.path ?? "/"} disabled={!!e.node_id} onChange={ev => update("path", ev.target.value)} /></Field><Field label="HTTP Host（可选）"><Input aria-label="HTTP Host" value={x.host ?? ""} disabled={!!e.node_id} onChange={ev => update("host", ev.target.value)} /></Field><Field label="XHTTP 模式"><Select aria-label="XHTTP 模式" value={x.mode ?? "auto"} disabled={!!e.node_id} onChange={ev => update("mode", ev.target.value)}>{["auto", "packet-up", "stream-up", "stream-one"].map(v => <option key={v}>{v}</option>)}</Select></Field></div>;
+                      })()}
+                    </div>)}
+                    {t && <Field label="新入口网络" hint="仅在新建入口时复制监听与固定出口版本，已有入口保持各自设置。应用会重启共享代理。"><Select aria-label={`分享网络 ${s.name}`} disabled={!t.network && !!t.entries?.some(e => !e.node_id && managedTLS(e.snapshot))} value={t.network?JSON.stringify(t.network):""} onChange={e=>set("targets",f.targets.map(x=>x.server_id===s.id?{...x,network:e.target.value?JSON.parse(e.target.value):undefined}:x))}>
                     <option value="">默认网络</option>
                     {t.network&&<option value={JSON.stringify(t.network)}>已保存的网络模板</option>}
                     {(nodes.data??[]).filter(n=>n.server_id===s.id&&n.network&&n.network.advertise_mode==="inherit"&&!n.revoked).map(n=><option key={n.id} value={JSON.stringify(n.network)}>复制 {n.name} 的网络 · v{n.network_revision}</option>)}
@@ -268,7 +356,7 @@ export function ShareDetailPage() {
   const invalidate = () => { qc.invalidateQueries({ queryKey: ["shares"] }); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["subscriptions"] }); };
   const action = useMutation({
     mutationFn: (a: string) => post<{ share: Share; token?: string }>(`/api/v1/shares/${shareID}/${a}`),
-    onSuccess: (_r, a) => { toast.success({ pause: "已暂停", resume: "已恢复", reset: "用量已重置", revoke: "已撤销", reissue: "已重新签发：新端口、新凭据、新订阅链接" }[a] ?? "完成"); setConfirm(null); invalidate(); },
+    onSuccess: (_r, a) => { toast.success({ pause: "已暂停", resume: "已恢复", reset: "用量已重置", revoke: "已撤销", reissue: "已重新签发：端口不变，凭据与订阅链接已更换" }[a] ?? "完成"); setConfirm(null); invalidate(); },
     onError: (e) => toast.fromError(e),
   });
   const delM = useMutation({ mutationFn: () => del(`/api/v1/shares/${shareID}`), onSuccess: () => { toast.success("已删除"); invalidate(); nav("/shares"); }, onError: (e) => toast.fromError(e) });
@@ -344,7 +432,8 @@ export function ShareDetailPage() {
               <p className="text-sm font-medium">节点额度与已计量用量</p>
               <p className="text-xs text-muted-foreground">沿用分享计费方式与重置日；已有分享从支持此功能的版本升级后开始累计节点用量。</p>
               {s.nodes.map(n => {
-                const quota = s.targets.find(t => t.server_id === n.server_id)?.quota_bytes?.[n.protocol] ?? 0;
+                const target = s.targets.find(t => t.server_id === n.server_id);
+                const quota = target?.entries?.find(e => e.node_id === n.id)?.quota_bytes ?? target?.quota_bytes?.[n.protocol] ?? 0;
                 const raw = s.node_usage?.[String(n.id)] ?? [0, 0];
                 const used = trafficUsage(undefined, s.billing_mode, { inbound: raw[0], outbound: raw[1], quota });
                 return <div key={n.id} className="rounded-lg border p-3 text-sm">
@@ -370,7 +459,7 @@ export function ShareDetailPage() {
       <ShareDialog open={edit} onClose={() => setEdit(false)} share={s} />
       <Confirm open={confirm === "revoke"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("revoke")} loading={action.isPending} destructive title="撤销分享？" description="专属入口从服务器上撤下、订阅链接失效。撤销后可「重新签发」恢复。" />
       <Confirm open={confirm === "reset"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("reset")} loading={action.isPending} title="重置本期用量？" description="用量归零并开始新的周期；若状态为「流量用尽」会恢复为正常。" />
-      <Confirm open={confirm === "reissue"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("reissue")} loading={action.isPending} title="重新签发？" description="所有专属入口更换端口与凭据，订阅链接更换。用于对方泄露链接时止损。" />
+      <Confirm open={confirm === "reissue"} onClose={() => setConfirm(null)} onConfirm={() => action.mutate("reissue")} loading={action.isPending} title="重新签发？" description="保留各入口的 ID、端口、配置和用量，更换凭据与订阅链接。旧凭据和旧链接将失效。" />
       <Confirm open={confirm === "delete"} onClose={() => setConfirm(null)} onConfirm={() => delM.mutate()} loading={delM.isPending} destructive title="删除分享？" description="删除记录、专属节点、订阅与连接日志。不可恢复。" />
       <NodeDetailDialog node={nodeDetail} onClose={() => setNodeDetail(null)} />
     </div>

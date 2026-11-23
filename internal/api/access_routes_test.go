@@ -104,8 +104,8 @@ func TestAccessRouteAPIProvisionsAndExportsIndependentSubscription(t *testing.T)
 		t.Fatal("route failed to resume stages", r.Stage, r.Message)
 	}
 	response := c.do("GET", "/api/v1/access-routes/"+in.ID+"/node", nil, 200)
-	if response["uri"] == "" {
-		t.Fatal("missing client link")
+	if response["uri"] != "" || response["node"].(map[string]any)["params"].(map[string]any)["udp"] != false {
+		t.Fatal("TCP-only SS must keep udp=false and omit the standalone link")
 	}
 	projected := response["node"].(map[string]any)
 	if projected["server"] != in.AdvertiseHost || int(projected["port"].(float64)) != in.EntryPort {

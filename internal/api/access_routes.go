@@ -6,6 +6,7 @@ import (
 	"ctlvps/internal/proxynode"
 	"ctlvps/internal/store"
 	"ctlvps/internal/subscription"
+	"errors"
 	"net/http"
 )
 
@@ -118,8 +119,8 @@ func (a *API) accessRouteNode(w http.ResponseWriter, r *http.Request) error {
 		return httpx.E(409, "route_not_applied", "线路或落地节点尚未应用，暂不能复制接入配置")
 	}
 	p := subscription.ProxyFor(n, nil)
-	uri, err := proxynode.ToURI(p)
-	if err != nil {
+	uri, err := subscription.StandaloneURI(p)
+	if err != nil && !errors.Is(err, proxynode.ErrUnsupported) {
 		return err
 	}
 	httpx.OK(w, struct {

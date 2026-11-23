@@ -25,6 +25,20 @@ func surgeIdent(name string) string {
 	return name
 }
 
+// Surge uses ws-headers for the HTTP Host override, independently of TLS SNI.
+func addSurgeWS(p proxynode.Proxy, add func(string, string)) bool {
+	path, host, ok := p.BasicWebSocket()
+	if !ok || strings.ContainsAny(host, "|;\r\n\x00\"") || strings.ContainsAny(path, "\r\n\x00\"") {
+		return false
+	}
+	add("ws", "true")
+	add("ws-path", path)
+	if host != "" {
+		add("ws-headers", "Host:"+host)
+	}
+	return true
+}
+
 // SurgeProxyLine renders one Surge [Proxy] line ("" when unsupported).
 func SurgeProxyLine(p proxynode.Proxy, via string) string {
 	var parts []string
@@ -40,6 +54,18 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		if v {
 			parts = append(parts, k+"=true")
 		}
+	}
+	if oneOf(p.Type, "vmess", "trojan") && !oneOf(p.Str("network"), "", "tcp", "ws") || p.Type == "tuic" && (!isTUICv5(p) || p.Bool("disable-sni")) || p.Type == "ss" && (!oneOf(p.Str("plugin"), "", "obfs") || p.Bool("udp-over-tcp")) {
+		return ""
+	}
+	if ambiguousSimpleTLS(p) || surgeOnlyFingerprint(p) || oneOf(p.Type, "socks5", "http") && p.Params["headers"] != nil || p.Type == "socks5" && p.Bool("remote-dns-resolve") || p.Type == "vmess" && (p.Int("alterId") != 0 || p.Int("alter-id") != 0) {
+		return ""
+	}
+	if oneOf(p.Type, "http", "socks5") && (p.Str("sni") != "" || p.Str("servername") != "" || p.Bool("skip-cert-verify") || len(p.StrList("alpn")) != 0) {
+		return ""
+	}
+	if p.Str("fingerprint") != "" || p.Type == "hysteria2" && (p.Str("obfs") != "" || p.Str("obfs-password") != "" || via != "" && p.Str("ports") != "") {
+		return ""
 	}
 	host, port := p.Server, strconv.Itoa(p.Port)
 	switch p.Type {
@@ -65,16 +91,8 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		addBool("tls", p.Bool("tls"))
 		add("sni", p.Str("servername"))
 		addBool("skip-cert-verify", p.Bool("skip-cert-verify"))
-		if p.Str("network") == "ws" {
-			addBool("ws", true)
-			if o := p.Sub("ws-opts"); o != nil {
-				add("ws-path", fmt.Sprint(o["path"]))
-				if h, ok := o["headers"].(map[string]any); ok {
-					if hv := fmt.Sprint(h["Host"]); hv != "" && hv != "<nil>" {
-						add("ws-headers", "Host:"+hv)
-					}
-				}
-			}
+		if p.Str("network") == "ws" && !addSurgeWS(p, add) {
+			return ""
 		}
 		addBool("vmess-aead", p.Int("alterId") == 0)
 	case "vless":
@@ -86,11 +104,9 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 		add("password", p.Str("password"))
 		add("sni", p.Str("sni"))
 		addBool("skip-cert-verify", p.Bool("skip-cert-verify"))
-		if p.Str("network") == "ws" {
-			addBool("ws", true)
-			if o := p.Sub("ws-opts"); o != nil {
-				add("ws-path", fmt.Sprint(o["path"]))
-			}
+		// The official Trojan policy documents WS, not VLESS's grpc options.
+		if p.Str("network") == "ws" && !addSurgeWS(p, add) {
+			return ""
 		}
 	case "hysteria2":
 		parts = append(parts, "hysteria2", host, port)
@@ -161,6 +177,9 @@ func SurgeProxyLine(p proxynode.Proxy, via string) string {
 	default:
 		return ""
 	}
+	if p.Type == "trojan" {
+		add("alpn", strings.Join(p.StrList("alpn"), ","))
+	}
 	if via != "" && p.Type != "anytls" {
 		parts = append(parts, "underlying-proxy="+surgeQuote(via))
 		add("test-timeout", "8")
@@ -199,7 +218,9 @@ func SurgeGroupLine(g domain.ProxyGroup) string {
 		typ = "select" // Surge has no relay group; underlying-proxy is used instead
 	}
 	parts := []string{typ}
-	parts = append(parts, g.Proxies...)
+	for _, name := range g.Proxies {
+		parts = append(parts, surgeIdent(name))
+	}
 	if typ == "url-test" || typ == "fallback" || typ == "load-balance" {
 		url := g.URL
 		if url == "" {
@@ -241,38 +262,64 @@ func surgeRule(r string) string {
 }
 
 // RenderSurge produces a Surge profile.
-func RenderSurge(b *Bundle) (*Rendered, error) {
+func RenderSurge(b *Bundle) (*Rendered, error) { return RenderSurgeWithProfile(b, "") }
+
+func RenderSurgeWithProfile(b *Bundle, profile string) (*Rendered, error) {
+	if !oneOf(profile, "", ProfileSurgeVLESS) {
+		return nil, fmt.Errorf("未知 Surge 兼容档")
+	}
 	tpl := builtinSurgeTemplate
+	if profile == ProfileSurgeVLESS {
+		tpl = surgeFullTemplate
+	}
 	if b.Template != nil && b.Template.Kind == "surge" && strings.TrimSpace(b.Template.Content) != "" {
 		tpl = b.Template.Content
 	}
+	if profile == ProfileSurgeVLESS && (tpl == builtinSurgeTemplate || tpl == surgeFullTemplate) {
+		tpl = surgeFullTemplate
+		for _, rule := range b.Rules {
+			if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(rule)), "MATCH,") {
+				tpl = strings.Replace(tpl, "\nFINAL,VpsCT Nodes\n", "\n", 1)
+				break
+			}
+		}
+	}
 	var proxyLines, groupLines, ruleLines []string
-	emitted := map[string]bool{}
-	for _, p := range b.Proxies {
-		if l := SurgeProxyLine(p, ""); l != "" {
-			proxyLines = append(proxyLines, l)
-			emitted[p.Name] = true
+	byName := map[string]string{}
+	b, omitted := projectNodes(b, func(p proxynode.Proxy, via string) bool {
+		var line string
+		if profile == ProfileSurgeVLESS && p.Type == "vless" {
+			line = modernVLESSLine(p, via)
+		} else {
+			line = SurgeProxyLine(p, via)
 		}
+		if line == "" {
+			return false
+		}
+		byName[p.Name] = line
+		return true
+	})
+	allNames := b.AllProxyNames()
+	if len(allNames) == 0 && !b.ValidationOnly && (len(omitted) > 0 || tpl == builtinSurgeTemplate || strings.Contains(tpl, "{{all")) {
+		return nil, noRenderPath(FormatSurge)
 	}
-	for _, c := range b.Chains {
-		if c.Via != "" && !emitted[c.Via] {
-			continue
-		}
-		if l := SurgeProxyLine(c.Proxy, c.Via); l != "" {
-			proxyLines = append(proxyLines, l)
-			emitted[c.Proxy.Name] = true
-		}
+	for _, name := range allNames {
+		proxyLines = append(proxyLines, byName[name])
 	}
+
 	wantGroups := strings.Contains(tpl, "{{PROXY_GROUPS}}") || strings.Contains(tpl, "[Proxy Group]")
 	// Only {{RULES}} opts into subscription rules. A stub [Rule]/FINAL is
 	// required for remote #!include validation and must stay empty.
 	wantRules := strings.Contains(tpl, "{{RULES}}")
 	if wantGroups {
 		groups := b.Groups
-		if len(groups) == 0 {
+		if len(groups) == 0 && strings.Contains(tpl, "{{PROXY_GROUPS}}") {
 			groups = []domain.ProxyGroup{{Name: "PROXY", Type: "select", Proxies: b.AllProxyNames()}}
 		}
 		for _, g := range groups {
+			if g.Type == "relay" {
+				return nil, fmt.Errorf("%w：Surge 无法将 relay 转为选择组", ErrNoRenderPath)
+			}
 			groupLines = append(groupLines, SurgeGroupLine(g))
 		}
 	}
@@ -289,7 +336,7 @@ func RenderSurge(b *Bundle) (*Rendered, error) {
 			}
 		}
 	}
-	out := tpl
+	out := expandAllTokens(strings.ReplaceAll(tpl, "{{NAME}}", surgeHeaderName(b.Name)), allNames)
 	rep := func(marker string, lines []string, section string) {
 		joined := strings.Join(lines, "\n")
 		if strings.Contains(out, marker) {
@@ -312,12 +359,15 @@ func RenderSurge(b *Bundle) (*Rendered, error) {
 		pos := idx + lineEnd + 1
 		out = out[:pos] + joined + "\n" + out[pos:]
 	}
-	rep("{{PROXIES}}", proxyLines, "Proxy")
-	rep("{{PROXY_GROUPS}}", groupLines, "Proxy Group")
+	if !strings.Contains(out, "{{PROXY_GROUPS}}") && len(groupLines) > 0 {
+		out = mergeTextGroups(out, groupLines)
+	} else {
+		rep("{{PROXY_GROUPS}}", groupLines, "Proxy Group")
+	}
 	if len(ruleLines) > 0 || strings.Contains(out, "{{RULES}}") {
 		rep("{{RULES}}", ruleLines, "Rule")
 	}
-	out = strings.ReplaceAll(out, "{{NAME}}", surgeHeaderName(b.Name))
+	rep("{{PROXIES}}", proxyLines, "Proxy")
 	if b.Userinfo != nil && len(b.InfoNodes) > 0 && !strings.Contains(out, "#!MANAGED-CONFIG") {
 		info := "# " + strings.Join(b.InfoNodes, " | ") + "\n"
 		if i := strings.Index(out, "[Proxy]"); i >= 0 {
@@ -332,7 +382,14 @@ func RenderSurge(b *Bundle) (*Rendered, error) {
 			out = info + out
 		}
 	}
-	return &Rendered{Body: []byte(out), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".conf", Format: FormatSurge}, nil
+	if !b.ValidationOnly {
+		var err error
+		out, err = checkTextPolicies(out, omitted, allNames)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Rendered{EmittedNames: allNames, Body: []byte(out), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".conf", Format: FormatSurge}, nil
 }
 
 func surgeHeaderName(s string) string {

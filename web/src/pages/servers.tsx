@@ -662,6 +662,10 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
   const qc = useQueryClient();
   const toast = useToast();
   const [f, setF] = React.useState({ protocol: "vless", name: "", port: "", sni: "", domain: "", obfs: false, snell_version: 4, mieru_transport: "TCP", ss_method: "2022-blake3-aes-128-gcm", ss_network: "tcp", cert_mode: "", cert_id: "" });
+  const [transport, setTransport] = React.useState("tcp");
+  const [ws, setWS] = React.useState({ path: "/", host: "" });
+  const [serviceName, setServiceName] = React.useState("");
+  const [xhttp, setXHTTP] = React.useState({ path: "/", host: "", mode: "auto" });
   const [ipv6, setIPv6] = React.useState(false);
   const [overrideHost, setOverrideHost] = React.useState("");
   const [fixedListener, setFixedListener] = React.useState(false);
@@ -670,6 +674,10 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
   React.useEffect(() => {
     if (!open) {
       setIPv6(false);
+      setTransport("tcp");
+      setWS({ path: "/", host: "" });
+      setServiceName("");
+      setXHTTP({ path: "/", host: "", mode: "auto" });
       setOverrideHost("");
       setFixedListener(false);
       setListener(undefined);
@@ -689,8 +697,29 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
   });
   const protocolSupportsIPv6 = (p: string) => ["vless", "ss", "anytls", "trojan", "hysteria2", "tuic"].includes(p);
   const endpoint = `/api/v1/servers/${server.id}/nodes`;
+  const usingXHTTP = f.protocol === "vless" && transport === "xhttp";
+  const hasTransport = f.protocol === "vless" || f.protocol === "trojan";
+  const usingTLSCombo = hasTransport && ["ws", "grpc", "tcp-tls"].includes(transport);
+  const tlsBlocked = ipv6 ? "新增的 TLS 组合目前只支持普通接入。" : (server.tls_transport_block_reason ?? "服务器未报告 TLS 传输能力。");
+  const tls = usingTLSCombo || ["anytls", "hysteria2", "tuic", "trojan"].includes(f.protocol);
+  const xhttpBlocked = ipv6 ? "XHTTP 目前只支持普通接入。" : (server.xhttp_block_reason ?? "服务器未报告 XHTTP 部署能力。");
   const payload = () => {
-    const base = { ...f, port: Number(f.port) || 0, snell_version: Number(f.snell_version) };
+    const combination: Record<string, unknown> = {};
+    if (usingTLSCombo) {
+      combination[f.protocol] = {
+        transport: transport === "tcp-tls" ? "tcp" : transport,
+        security: "tls",
+        ...(transport === "ws" && { ws }),
+        ...(transport === "grpc" && { grpc: { service_name: serviceName } }),
+      };
+    } else if (f.protocol === "vless") {
+      combination.vless = { transport, security: "reality", ...(usingXHTTP ? { xhttp } : { flow: "xtls-rprx-vision" }) };
+    }
+    const base = {
+      ...f, ...combination, port: Number(f.port) || 0, snell_version: Number(f.snell_version),
+      sni: f.protocol === "vless" && !usingTLSCombo ? f.sni : "", domain: tls ? f.domain : "",
+      cert_mode: tls ? f.cert_mode : "", cert_id: tls && (f.cert_mode || server.cert_mode) === "external" ? f.cert_id : "",
+    };
     if (!ipv6) return base;
     const host = overrideHost.trim();
     const network: NodeNetworkPolicy = {
@@ -712,7 +741,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
       ? { ...payload(), port: review.result.port, operation_id: review.operationID, expected_ipv6: review.result.confirmation }
       : payload()),
     onSuccess: () => {
-      toast.success("节点已创建，等待 agent 应用");
+      toast.success("节点已创建，可在「配置版本」核对应用状态");
       void qc.invalidateQueries({ queryKey: ["nodes"] });
       void qc.invalidateQueries({ queryKey: ["servers"] });
       onClose();
@@ -722,8 +751,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
   const list = protocols.filter((p) => !(server.core_mode === "lean" && ["snell","mieru"].includes(p)));
   const busy = preview.isPending || m.isPending;
   const canPreview = !ipv6 || (protocolSupportsIPv6(f.protocol) && !!(overrideHost.trim() || server.public_host_ipv6) && (!fixedListener || !!listener));
-  const canSubmit = canPreview && (!review || (review.result.readiness.ready && !!review.result.confirmation)) && (!ipv6 || !isNATServer(server));
-  const tls = ["anytls", "hysteria2", "tuic", "trojan"].includes(f.protocol);
+  const canSubmit = !(usingXHTTP && xhttpBlocked) && !(usingTLSCombo && (tlsBlocked || (transport === "grpc" && !serviceName.trim()))) && canPreview && (!review || (review.result.readiness.ready && !!review.result.confirmation)) && (!ipv6 || !isNATServer(server));
   return (
     <Dialog open={open} onClose={onClose} title={`在 ${server.name} 上部署节点`} description="凭据自动生成。TLS 协议按所选证书模式部署。"
       footer={<>
@@ -741,7 +769,7 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
         </dl>
       </div> : <fieldset disabled={busy} className="grid gap-4 sm:grid-cols-2">
         <Field label="协议">
-          <Select aria-label="协议" value={f.protocol} onChange={(e) => set("protocol", e.target.value)}>
+          <Select aria-label="协议" value={f.protocol} onChange={(e) => { set("protocol", e.target.value); setTransport("tcp"); }}>
             {list.map((p) => <option key={p} value={p} disabled={(ipv6 && !protocolSupportsIPv6(p)) || (!!natConfig?.mappings.length && !natCovers(natConfig, p, undefined, f.mieru_transport, f.ss_network))}>{PROTOCOL_LABELS[p] ?? p}</option>)}
           </Select>
         </Field>
@@ -751,9 +779,33 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
             setIPv6(only);
             if (only && !protocolSupportsIPv6(f.protocol)) set("protocol", list.find(protocolSupportsIPv6) ?? "vless");
           }}>
-            <option value="default">普通接入</option><option value="ipv6">仅 IPv6 接入</option>
+            <option value="default">普通接入</option><option value="ipv6" disabled={usingXHTTP || usingTLSCombo}>仅 IPv6 接入{usingXHTTP || usingTLSCombo ? "（此传输暂不支持）" : ""}</option>
           </Select>
         </Field>}
+        {hasTransport && <>
+          <Field label="传输方式" hint={[f.protocol === "vless" && xhttpBlocked, tlsBlocked].filter(Boolean).join(" ")}>
+            <Select aria-label={`${f.protocol === "vless" ? "VLESS" : "Trojan"} 传输方式`} value={transport} onChange={e => setTransport(e.target.value)}>
+              <option value="tcp">{f.protocol === "vless" ? "TCP + REALITY + Vision" : "TCP + TLS"}</option>
+              {f.protocol === "vless" && <option value="xhttp" disabled={!!xhttpBlocked}>XHTTP + REALITY</option>}
+              {f.protocol === "vless" && <option value="tcp-tls" disabled={!!tlsBlocked}>TCP + TLS</option>}
+              <option value="ws" disabled={!!tlsBlocked}>WebSocket + TLS</option>
+              <option value="grpc" disabled={!!tlsBlocked}>gRPC + TLS</option>
+            </Select>
+          </Field>
+          {f.protocol === "vless" && !usingTLSCombo && <Field label="REALITY 握手域名" hint="客户端使用此域名作为 SNI；留空使用 www.sony.com。"><Input aria-label="REALITY 握手域名" value={f.sni} onChange={e => set("sni", e.target.value)} placeholder="www.sony.com" /></Field>}
+          {transport === "ws" && <>
+            <Field label="WebSocket 路径"><Input aria-label="WebSocket 路径" value={ws.path} maxLength={512} onChange={e => setWS({ ...ws, path: e.target.value })} /></Field>
+            <Field label="WebSocket Host" hint="可选，设置客户端 HTTP 请求头。按 Host 分流需配置前置代理。"><Input aria-label="WebSocket Host" value={ws.host} maxLength={253} onChange={e => setWS({ ...ws, host: e.target.value })} /></Field>
+          </>}
+          {transport === "grpc" && <Field label="gRPC 服务名"><Input aria-label="gRPC 服务名" value={serviceName} maxLength={128} required onChange={e => setServiceName(e.target.value)} /></Field>}
+          {usingXHTTP && <>
+            <Field label="XHTTP 路径" hint="以 / 开头，不含查询参数。"><Input aria-label="XHTTP 路径" maxLength={512} value={xhttp.path} placeholder="/" onChange={e => setXHTTP({ ...xhttp, path: e.target.value })} /></Field>
+            <Field label="XHTTP 模式"><Select aria-label="XHTTP 模式" value={xhttp.mode} onChange={e => setXHTTP({ ...xhttp, mode: e.target.value })}>
+              <option value="auto">自动（auto）</option><option value="packet-up">packet-up</option><option value="stream-up">stream-up</option><option value="stream-one">stream-one</option>
+            </Select></Field>
+            <Field label="XHTTP Host" hint="可选的 HTTP 请求域名，与 REALITY 的 SNI 分开设置。" className="sm:col-span-2"><Input aria-label="XHTTP Host" maxLength={253} value={xhttp.host} onChange={e => setXHTTP({ ...xhttp, host: e.target.value })} /></Field>
+          </>}
+        </>}
         {ipv6 && <>
           <Field label="IPv6 客户端访问地址" hint={server.public_host_ipv6 ? `留空继承 ${server.public_host_ipv6}` : "未配置服务器 IPv6 默认地址，请填写独立地址。"} className="sm:col-span-2">
             <Input value={overrideHost} onChange={e => setOverrideHost(e.target.value)} placeholder={ipv6HostPlaceholder} maxLength={253} />
@@ -785,10 +837,9 @@ function DeployDialog({ open, onClose, server, protocols, onConfigureNAT }: { op
             </Select>
           </Field>
         </>}
-        {f.protocol === "vless" && <Field label="Reality 伪装域名" hint="默认 www.sony.com"><Input value={f.sni} onChange={(e) => set("sni", e.target.value)} placeholder="www.sony.com" /></Field>}
         {tls && (
           <>
-            <Field label="TLS 域名" hint={ipv6 ? "留空使用 IPv6 客户端访问域名" : "留空用服务器公网地址"}><Input value={f.domain} onChange={(e) => set("domain", e.target.value)} /></Field>
+            <Field label="TLS 域名" hint={ipv6 ? "留空使用 IPv6 客户端访问域名" : "留空用服务器公网地址"}><Input aria-label="TLS 域名" value={f.domain} onChange={(e) => set("domain", e.target.value)} /></Field>
             <Field label="证书模式" hint="留空继承服务器">
               <Select aria-label="证书模式" value={f.cert_mode} onChange={(e) => set("cert_mode", e.target.value)}>
                 <option value="">继承（{server.cert_mode}）</option>

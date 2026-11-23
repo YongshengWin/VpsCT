@@ -19,6 +19,8 @@ type ExecutableCapabilities struct {
 	OpenRC              int `json:"openrc"`
 	NAT                 int `json:"nat"`
 	Mita                int `json:"mita"`
+	TLSTransport        int `json:"tls_transport,omitempty"`
+	Xray                int `json:"xray,omitempty"`
 	Schema              int `json:"schema"`
 	NetworkBinding      int `json:"network_binding"`
 	IPv6Ingress         int `json:"ipv6_ingress,omitempty"`

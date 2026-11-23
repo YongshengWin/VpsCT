@@ -7,6 +7,7 @@ import (
 	"ctlvps/internal/auth"
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
+	"ctlvps/internal/httpx"
 	"ctlvps/internal/maintenance"
 	"ctlvps/internal/networkconfig"
 	"ctlvps/internal/nft"
@@ -17,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"time"
@@ -118,13 +120,18 @@ func testSubscriptionClients(ctx context.Context, st *store.Store, d *desired.Bu
 	body, e := io.ReadAll(response.Body)
 	response.Body.Close()
 	must(e)
-	var paused map[string]any
+	if response.StatusCode != http.StatusUnprocessableEntity || response.Header.Get("Content-Disposition") != "" {
+		panic(fmt.Sprintf("paused share: expected 422 without a downloadable profile, got HTTP %d", response.StatusCode))
+	}
+	var paused map[string]json.RawMessage
 	must(json.Unmarshal(body, &paused))
-	for _, raw := range paused["outbounds"].([]any) {
-		m := raw.(map[string]any)
-		if m["type"] != "selector" && m["type"] != "direct" && m["type"] != "urltest" {
-			panic("paused share leaked usable proxy")
-		}
+	if len(paused) != 1 || paused["error"] == nil {
+		panic("paused share response must contain only the API error")
+	}
+	var apiError httpx.Error
+	must(json.Unmarshal(paused["error"], &apiError))
+	if apiError.Code != "no_compatible_nodes" {
+		panic("paused share did not report no_compatible_nodes")
 	}
 	_ = os.Remove("/tmp/subscription-runtime.json")
 	fmt.Println("PASS paused share excludes dedicated nodes")

@@ -23,12 +23,12 @@ func TestPolicyDigest(t *testing.T) {
 	}
 }
 func TestGuardCannotTargetController(t *testing.T) {
-	for _, s := range []string{"ctlvpsd.service", "ctlvps-agent.service", "ctlvps-maintenance.service", "ctlvps-snell@0.service", "ctlvps-snell@01.service", "ctlvps-snell@65536.service", "ctlvps-singbox.service extra"} {
+	for _, s := range []string{"ctlvpsd.service", "ctlvps-agent.service", "ctlvps-maintenance.service", "ctlvps-snell@0.service", "ctlvps-snell@01.service", "ctlvps-snell@65536.service", "ctlvps-singbox.service extra", "ctlvps-xray@0.service", "ctlvps-xray@01.service", "ctlvps-xray@65536.service", "ctlvps-xray@.service"} {
 		if validUnit(s) {
 			t.Fatalf("unsafe target %q", s)
 		}
 	}
-	for _, s := range []string{"ctlvps-singbox.service", "ctlvps-singbox-private.service", "ctlvps-snell@24443.service"} {
+	for _, s := range []string{"ctlvps-singbox.service", "ctlvps-singbox-private.service", "ctlvps-snell@24443.service", "ctlvps-xray@65535.service"} {
 		if !validUnit(s) {
 			t.Fatal(s)
 		}

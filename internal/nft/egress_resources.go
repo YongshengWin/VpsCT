@@ -12,6 +12,7 @@ import (
 type egressGroup struct {
 	path, core    string
 	private, acme bool
+	blocked       bool // an isolated Xray slice is never shared
 	marks         []string
 }
 
@@ -19,7 +20,7 @@ func resourceEgressGroups(nodes []agentproto.NodeSpec, groups map[int64]string, 
 	byPath := map[string]*egressGroup{}
 	add := func(path, core string, private bool) (*egressGroup, error) {
 		path = strings.TrimPrefix(path, "/")
-		if path == "" || strings.Contains(path, "..") || strings.ContainsAny(path, "\"\\\r\n\t ") || (core != "singbox" && core != "snell" && core != "mieru") {
+		if path == "" || strings.Contains(path, "..") || strings.ContainsAny(path, "\"\\\r\n\t ") || (core != "singbox" && core != "snell" && core != "mieru" && core != "xray") {
 			return nil, errors.New("missing or invalid proxy cgroup")
 		}
 		g := byPath[path]
@@ -36,9 +37,17 @@ func resourceEgressGroups(nodes []agentproto.NodeSpec, groups map[int64]string, 
 		if n.Retired {
 			continue
 		}
+		if n.Core == "xray" {
+			if n.AllowPrivate || n.Network != nil || n.RuntimeNetwork != nil || n.NodeID <= 0 || strings.TrimPrefix(groups[n.NodeID], "/") != fmt.Sprintf("ctlvps.slice/ctlvps-proxy.slice/ctlvps-proxy-n%d.slice", n.NodeID) {
+				return nil, errors.New("Xray requires public-only direct egress in its own node slice")
+			}
+		}
 		g, err := add(groups[n.NodeID], n.Core, n.AllowPrivate)
 		if err != nil {
 			return nil, err
+		}
+		if n.Core == "xray" {
+			g.blocked = n.Blocked
 		}
 		if n.Core == "singbox" && !n.Blocked {
 			mark, err := NodeMark(n.NodeID)

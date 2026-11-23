@@ -60,6 +60,9 @@ func ingressResourceRules(snapshot []byte, nodes []agentproto.NodeSpec, forwards
 		if n.ListenPort < 1 || n.ListenPort > 65535 {
 			return "", fmt.Errorf("节点监听端口无效")
 		}
+		if n.Core == "xray" && n.Protocol != "vless" {
+			return "", fmt.Errorf("Xray requires a VLESS TCP ingress")
+		}
 		switch n.Protocol {
 		case "mieru":
 			transport, _ := n.Params["transport"].(string)

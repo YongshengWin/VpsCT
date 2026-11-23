@@ -9,8 +9,11 @@ import (
 	"strings"
 )
 
-func IsStandalone(kind string) bool { return kind == "snell" || kind == "mieru" }
+func IsStandalone(kind string) bool { return kind == "snell" || kind == "mieru" || kind == "xray" }
 func StandaloneUnit(kind string, port int) string {
+	if kind == "xray" {
+		return fmt.Sprintf("ctlvps-xray@%d.service", port)
+	}
 	if kind == "mieru" {
 		return MitaUnit(port)
 	}

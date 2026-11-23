@@ -23,6 +23,8 @@ func agentIPv6DeployRequestSchema(body map[string]any, preview bool) map[string]
 	props["ingress_family"] = map[string]any{"type": "string", "enum": []string{"", "default", "ipv6"}}
 	props["operation_id"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{32}$", "description": "仅 IPv6 提交时必填。重试使用同一个 ID 和请求。"}
 	props["expected_ipv6"] = map[string]any{"type": "string", "pattern": "^[a-f0-9]{64}$", "description": "仅 IPv6 提交时必填。使用最近一次预览的 confirmation 和 port。"}
+	props["trojan"] = agentTrojanCombinationSchema(!preview)
+	props["vless"] = agentVLESSCombinationSchema(!preview)
 	result["properties"] = props
 	if preview {
 		props["ingress_family"], props["network"] = map[string]any{"const": "ipv6"}, policy
@@ -55,6 +57,15 @@ func agentAccessRouteRequestSchema(create bool) map[string]any {
 func agentRouteResponseSchema(handler string) map[string]any {
 	var shape map[string]any
 	switch handler {
+	case "getServer":
+		shape = agentJSONTypeSchema(reflect.TypeFor[ServerView](), map[reflect.Type]bool{}, 0)
+		agentSchemaProperties(shape)["tls_transport_block_reason"] = map[string]any{"type": "string", "description": "空字符串允许新普通 TLS 组合，非空时说明服务器需要满足的条件。"}
+	case "listServers":
+		shape = agentJSONTypeSchema(reflect.TypeFor[[]ServerView](), map[reflect.Type]bool{}, 0)
+	case "renderSubscription":
+		shape = agentJSONTypeSchema(reflect.TypeFor[subscriptionRenderResult](), map[reflect.Type]bool{}, 0)
+	case "previewSubscription":
+		shape = agentJSONTypeSchema(reflect.TypeFor[subscriptionPreviewResult](), map[reflect.Type]bool{}, 0)
 	case "getShareByPublicID":
 		shape = agentJSONTypeSchema(reflect.TypeFor[ShareView](), map[reflect.Type]bool{}, 0)
 		shape["description"] = "按分享的公开标识查询，仍须通过账户或委派授权；标识不是访问凭证。"

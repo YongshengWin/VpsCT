@@ -164,7 +164,7 @@ plan_openrc_agent() {
     UNITS+=("$unit")
     add_remove "$file"
   done
-  for file in "$(path /etc/init.d)"/ctlvps-singbox* "$(path /etc/init.d)"/ctlvps-snell* "$(path /etc/init.d)"/ctlvps-mita*; do
+  for file in "$(path /etc/init.d)"/ctlvps-singbox* "$(path /etc/init.d)"/ctlvps-snell* "$(path /etc/init.d)"/ctlvps-mita* "$(path /etc/init.d)"/ctlvps-xray*; do
     [[ -e "$file" || -L "$file" ]] || continue
     name=${file##*/}
     [[ "$name" == ctlvps-singbox || "$name" == ctlvps-singbox-private || "$name" =~ ^ctlvps-mita@[1-9][0-9]*$ ]] || die "发现不受支持的 OpenRC 节点服务：$name"
@@ -184,12 +184,22 @@ data_path() {
 add_unit() {
   local unit=$1 expected=${2:-} state fragment dropins start existing content pattern
   for existing in "${UNITS[@]}"; do [[ "$existing" != "$unit" ]] || return 0; done
-  [[ "$unit" =~ ^ctlvps(d|-agent|-maintenance|-proxy-guard|-singbox(-private|@[0-9]*)?|-(snell|mita)@[0-9]*)\.service$ || "$unit" == ctlvps-proxy-guard.timer || "$unit" =~ ^ctlvps-proxy(-(n[0-9]+|public|private))?\.slice$ || "$unit" == caddy.service ]] || die '服务名超出卸载范围'
+  [[ "$unit" =~ ^ctlvps(d|-agent|-maintenance|-proxy-guard|-singbox(-private|@[0-9]*)?|-(snell|mita)@[0-9]*)\.service$ || "$unit" =~ ^ctlvps-(xray@|proxy-check-xray-)[1-9][0-9]{0,4}\.service$ || "$unit" == ctlvps-proxy-guard.timer || "$unit" =~ ^ctlvps-proxy(-(n[0-9]+|public|private))?\.slice$ || "$unit" == caddy.service ]] || die '服务名超出卸载范围'
   state=$(systemctl show "$unit" -p LoadState --value) || die "无法读取服务：$unit"
   [[ "$state" != not-found ]] || return 0
   [[ "$state" == loaded || "$state" == masked ]] || die "服务状态异常：$unit"
   fragment=$(systemctl show "$unit" -p FragmentPath --value) || die "无法读取服务路径：$unit"
   dropins=$(systemctl show "$unit" -p DropInPaths --value) || die "无法读取服务覆盖配置：$unit"
+  if [[ "$unit" == ctlvps-xray@* || "$unit" == ctlvps-proxy-check-xray-* ]]; then
+    [[ "$state" == loaded && "$fragment" == "/etc/systemd/system/$unit" && -z "$dropins" ]] || die "$unit 不是独立的受管 Xray 服务，尚未停止或删除文件"
+    [[ -f "$(path "$fragment")" && ! -L "$(path "$fragment")" ]] || die 'Xray 服务文件不是普通文件'
+    local hooks owner proxy_port=${unit%.service}
+    proxy_port=${proxy_port##*@}; proxy_port=${proxy_port#ctlvps-proxy-check-xray-}
+    owner=$(systemctl show "$unit" -p User --value) || die '无法读取 Xray 服务账户'
+    [[ "$owner" == "ctlvps-xr$proxy_port" ]] || die 'Xray 服务不属于预期的非特权账户'
+    hooks=$(systemctl show "$unit" -p ExecStop -p ExecStopPost --value) || die '无法检查 Xray 停止命令'
+    [[ -z "$hooks" ]] || die 'Xray 服务包含自定义停止命令'
+  fi
   if [[ -n "$dropins" ]]; then
     [[ "$unit" =~ ^ctlvps-(snell|mita)@[0-9]+\.service$ && "$dropins" == "/etc/systemd/system/$unit.d/meter.conf" ]] || die "$unit 有自定义 systemd 覆盖配置，请手动处理"
     content=$(cat "$(path "$dropins")") || die '无法读取节点计量配置'
@@ -203,6 +213,8 @@ add_unit() {
   if [[ -n "$expected" && "$state" != masked ]]; then
     start=$(systemctl show "$unit" -p ExecStart --value) || die "无法读取启动命令：$unit"
     case "$unit" in
+      ctlvps-xray@*|ctlvps-proxy-check-xray-*)
+        [[ "$start" == "{ path=/usr/local/bin/ctlvps-agent ; argv[]=$expected ; "* && "${start#*argv\[\]=}" != *'argv[]='* ]] || die 'Xray 服务含有非受管的启动命令' ;;
       ctlvps-singbox.service) [[ "$start" != *"argv[]=/usr/local/bin/ctlvps-agent proxy-exec singbox run public ;"* ]] || expected='/usr/local/bin/ctlvps-agent proxy-exec singbox run public' ;;
       ctlvps-snell@*) [[ "$start" != *"argv[]=/usr/local/bin/ctlvps-agent proxy-exec snell run ${unit#*@}"* ]] || :
         local proxy_port=${unit#*@}; proxy_port=${proxy_port%.service}
@@ -221,8 +233,8 @@ plan_agent() {
   add_unit ctlvps-proxy-guard.timer
   add_unit ctlvps-proxy-guard.service '/usr/local/bin/ctlvps-agent proxy-guard'
   add_unit ctlvps-agent.service '/usr/local/bin/ctlvps-agent run --state /var/lib/ctlvps-agent'
-  listed=$(systemctl list-units --all --plain --no-legend --no-pager 'ctlvps-singbox*' 'ctlvps-snell*' 'ctlvps-mita*') || die '无法枚举节点服务'
-  if files=$(systemctl list-unit-files --no-legend --no-pager 'ctlvps-singbox*' 'ctlvps-snell*' 'ctlvps-mita*'); then
+  listed=$(systemctl list-units --all --plain --no-legend --no-pager 'ctlvps-singbox*' 'ctlvps-snell*' 'ctlvps-mita*' 'ctlvps-xray*' 'ctlvps-proxy-check-xray-*') || die '无法枚举节点服务'
+  if files=$(systemctl list-unit-files --no-legend --no-pager 'ctlvps-singbox*' 'ctlvps-snell*' 'ctlvps-mita*' 'ctlvps-xray*' 'ctlvps-proxy-check-xray-*'); then
     :
   else
     status=$?
@@ -232,11 +244,18 @@ plan_agent() {
   listed+=$'\n'"$files"
   while read -r unit rest; do
     [[ -n "$unit" ]] || continue
-    [[ "$unit" =~ ^ctlvps-(singbox|snell|mita)(-private|@[0-9]*)?\.service$ ]] || die "发现非标准节点服务：$unit"
+    if [[ "$unit" == ctlvps-xray* || "$unit" == ctlvps-proxy-check-xray-* ]]; then
+      [[ "$unit" =~ ^ctlvps-(xray@|proxy-check-xray-)([1-9][0-9]{0,4})\.service$ ]] || die "发现非标准 Xray 节点服务：$unit"
+      (( 10#${BASH_REMATCH[2]} <= 65535 )) || die "Xray 节点服务端口超出范围：$unit"
+    else
+      [[ "$unit" =~ ^ctlvps-(singbox|snell|mita)(-private|@[0-9]*)?\.service$ ]] || die "发现非标准节点服务：$unit"
+    fi
     # Templates themselves have no running process.
     [[ "$unit" != *@.service ]] || continue
     port=${unit#*@}; port=${port%.service}
     case "$unit" in
+      ctlvps-xray@*) expected="/usr/local/bin/ctlvps-agent proxy-exec xray run $port" ;;
+      ctlvps-proxy-check-xray-*) port=${unit#ctlvps-proxy-check-xray-}; port=${port%.service}; expected="/usr/local/bin/ctlvps-agent proxy-exec xray candidate $port" ;;
       ctlvps-singbox-private.service) expected='/usr/local/bin/ctlvps-agent proxy-exec singbox run private' ;;
       ctlvps-singbox.service) expected='/opt/ctlvps/bin/sing-box run -c /etc/ctlvps/sing-box.json' ;;
       ctlvps-singbox@*) expected="/opt/ctlvps/bin/sing-box run -c /etc/ctlvps/sing-box/$port.json" ;;
@@ -254,6 +273,14 @@ plan_agent() {
     [[ "$name" =~ ^ctlvps-(singbox|snell|mita)@[0-9]*\.service$ ]] || die "发现非标准节点服务文件：$name"
     add_remove "$file"
   done
+  # Xray writes concrete per-port services, never a template or a drop-in.
+  # An unenumerated/orphan file must not be silently deleted.
+  for file in "$(path /etc/systemd/system)"/ctlvps-xray*.service "$(path /etc/systemd/system)"/ctlvps-proxy-check-xray-*.service; do
+    [[ -e "$file" || -L "$file" ]] || continue
+    name=${file##*/}
+    [[ " ${UNITS[*]} " == *" $name "* && "$name" =~ ^ctlvps-(xray@|proxy-check-xray-)[1-9][0-9]{0,4}\.service$ ]] || die "无法验证 Xray 服务文件：$name"
+    add_remove "$file"
+  done
   for file in "$(path /etc/systemd/system)"/ctlvps-proxy*.slice; do
     [[ -e "$file" || -L "$file" ]] || continue
     name=${file##*/}
@@ -267,6 +294,11 @@ plan_agent() {
   if [[ "$PURGE" -eq 1 ]]; then add_remove "$(path /usr/local/libexec/ctlvps-agent-uninstall.sh)"; fi
   for name in sing-box snell-server mita; do
     for file in "$name" "$name.version" "$name.trusted" "$name.tmp"; do add_remove "$(path /opt/ctlvps/bin)/$file"; done
+  done
+  # Fixed activation/rollback artifacts belong to the executable. The live
+  # per-port configuration stays in /etc/ctlvps-proxy unless --purge is used.
+  for file in xray xray.trusted xray.activate xray.policy xray.retained xray.recovery xray.recovery.done; do
+    add_remove "$(path /opt/ctlvps/bin)/$file"
   done
   for file in /etc/ctlvps/openrc /etc/ctlvps/sing-box /etc/ctlvps/sing-box.json /etc/ctlvps/snell /etc/ctlvps/mita /etc/ctlvps/proxy /etc/ctlvps/agent-nat.json /etc/ctlvps-proxy /var/lib/ctlvps-proxy /var/lib/ctlvps-agent /var/log/ctlvps; do
     data_path "$(path "$file")"

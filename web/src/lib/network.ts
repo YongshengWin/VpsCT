@@ -148,6 +148,8 @@ export interface PortForward { route_id?: string; rx_30_days: number; tx_30_days
 export const networkStatus: Record<NetworkOperation["status"], string> = { saved: "已保存", queued: "等待发布", publish_failed: "发布失败", waiting_agent: "等待应用回执", apply_failed: "应用失败", applied: "已应用", superseded: "已被新变更替代" };
 export const networkTerminal = (op?: NetworkOperation) => !!op && ["saved", "applied", "superseded"].includes(op.status);
 export function canBindNodeNetwork(node: Pick<Node, "core" | "protocol" | "params">) {
+  if (node.protocol === "vless" && !node.params["reality-opts"]) return false;
+  if (node.protocol === "trojan" && ["ws", "grpc"].includes(String(node.params.network))) return false;
   return (node.core === "snell" && node.protocol === "snell") || (node.core === "mieru" && node.protocol === "mieru") || node.core === "singbox" && (["vless", "trojan", "anytls", "hysteria2", "tuic"].includes(node.protocol) || (node.protocol === "ss" && ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"].includes(String(node.params.cipher))));
 }
 export function networkRequestUncertain(error: unknown) {

@@ -67,6 +67,35 @@ func TestIndependentTrustAndRollback(t *testing.T) {
 	}
 }
 
+func TestXrayTUFRequiresMatchingComponentAndBytes(t *testing.T) {
+	dir := t.TempDir()
+	keys, metadataDir := filepath.Join(dir, "keys"), filepath.Join(dir, "metadata")
+	if err := InitRepository(keys); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("inert signed Xray fixture")
+	file := filepath.Join(dir, "fixture")
+	if err := os.WriteFile(file, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := PublishRepository(keys, metadataDir, []ReleaseFile{{file, Identity{Product: "VpsCT", Component: "xray", Version: "25.12.8", Arch: "amd64", Epoch: 1}}}, 1, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewTLSServer(http.FileServer(http.Dir(metadataDir)))
+	defer srv.Close()
+	root, err := os.ReadFile(filepath.Join(keys, "root.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Verifier{Policy: Policy{MetadataURL: srv.URL}, Root: root, Dir: filepath.Join(dir, "cache"), Client: srv.Client()}
+	if err = v.Verify(context.Background(), "xray", "25.12.8", "amd64", data); err != nil {
+		t.Fatal(err)
+	}
+	if v.Verify(context.Background(), "sing-box", "25.12.8", "amd64", data) == nil || v.Verify(context.Background(), "xray", "25.12.8", "amd64", []byte("other fixture")) == nil {
+		t.Fatal("accepted unsigned/foreign Xray identity")
+	}
+}
+
 func TestRootRotationAndExpiry(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "old")

@@ -179,6 +179,9 @@ jobs:
         env:
           CI_CASE: ${{ matrix.kind }}
         run: bash scripts/ci-scenarios.sh network "$CI_CASE"
+      - name: Official Xray XHTTP modes and systemd rollback
+        if: matrix.kind == 'direct'
+        run: bash scripts/test-xray-systemd-container.sh
   alpine:
     name: Alpine (${{ matrix.kind }})
     needs: [lint, source]

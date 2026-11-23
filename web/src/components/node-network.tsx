@@ -195,7 +195,7 @@ export function NodeNetwork({ nodeID, serverID, onNavigate, embedded = false }: 
     {n.network?.ingress?.mode === "deny_countries" && <p className="text-xs text-muted-foreground"><a className="underline" href="https://db-ip.com" target="_blank" rel="noreferrer">IP Geolocation by DB-IP</a> · 国家地址数据仅用于入口策略。</p>}
     {!editing && capabilities.data && !capabilities.data.ready && <NetworkChecks view={capabilities.data} />}
     {(inventory.isError || profiles.isError || capabilities.isError) && <p role="alert" className="text-sm text-destructive">网卡、出口或运行条件暂时无法读取，请刷新后再编辑。</p>}
-    {!qualified && <p className="text-xs text-muted-foreground">该协议组合尚未开放新绑定；已有配置可申请清理。sing-box 的 SS、VLESS Reality、Trojan、AnyTLS、Hysteria2 和 TUIC 支持监听及出口绑定；非原有 SS-2022 AES-128 组合需新版 agent。独立内核只支持指定监听。</p>}
+    {!qualified && <p className="text-xs text-muted-foreground">此组合目前仅支持默认网络。VLESS 普通 TLS 和 Trojan WebSocket/gRPC 使用默认监听和服务器默认出口。已有网络配置可申请清理。</p>}
     {!editing && (embedded ? <Button size="sm" variant="outline" disabled={disabled} onClick={() => startEditing("all")}>选择并应用出口</Button> : <div className="flex flex-wrap gap-2">{n.network && <Button size="sm" variant="ghost" onClick={() => startEditing("reset")} disabled={disabled}>恢复默认网络</Button>}{n.network?.ingress?.mode === "deny_countries" && <Button size="sm" variant="ghost" loading={refreshGeo.isPending} onClick={() => refreshGeo.mutate()}>刷新 GeoIP 数据</Button>}</div>)}
     {editing && <NodeNetworkEditor egressOnly={embedded} focus={focus} node={editing} currentRevision={n.network_revision ?? 0} inventory={inventory.data} profiles={profiles.data ?? []} onClose={() => setEditing(null)} onSaved={saved} />}
     {receipt && <NetworkOperationReceipt id={receipt} />}

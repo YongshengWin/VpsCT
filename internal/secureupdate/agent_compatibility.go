@@ -15,6 +15,8 @@ import (
 )
 
 type agentRequirements struct {
+	TLSTransport     int             `json:"tls_transport_version"`
+	Xray             int             `json:"xray_version"`
 	ForwardUDP       int             `json:"forward_udp_version"`
 	OpenRCMieru      int             `json:"openrc_mieru_version"`
 	OpenRC           int             `json:"openrc_version"`
@@ -49,6 +51,12 @@ func readAgentRequirements(path string) (agentRequirements, error) {
 	raw, err := safehttp.ReadBounded(f, 8<<20)
 	if err != nil || json.Unmarshal(raw, &r) != nil || r.Mita < 0 || r.WireGuard < 0 || r.SSH < 0 || r.Binding < 0 || r.Egress < 0 || r.Forward < 0 || r.Revision < 0 {
 		return r, errors.New("agent 本地兼容状态无效")
+	}
+	if r.TLSTransport < 0 || r.TLSTransport > 1 {
+		return r, errors.New("agent 普通 TLS 传输能力状态无效")
+	}
+	if r.Xray < 0 || r.Xray > 1 {
+		return r, errors.New("agent Xray 能力状态无效")
 	}
 	if r.SSH > 0 || r.WireGuard > 0 {
 		r.Egress = max(1, r.Egress)
@@ -106,6 +114,12 @@ func (r agentRequirements) check(c networkconfig.ExecutableCapabilities) error {
 	if c.ForwardUDP > networkconfig.ForwardUDPVersion || r.ForwardUDP < 0 || r.ForwardUDP > networkconfig.ForwardUDPVersion || (r.ForwardUDP > 0 && udpVersion < r.ForwardUDP) {
 		return errors.New("候选 agent 不支持本机 UDP 会话管理，拒绝降级")
 	}
+	if r.TLSTransport > 0 && c.TLSTransport != r.TLSTransport {
+		return errors.New("候选 agent 不支持本机普通 TLS 传输，拒绝降级")
+	}
+	if r.Xray > 0 && c.Xray != r.Xray {
+		return errors.New("候选 agent 不支持本机 Xray 入口与计量，拒绝降级")
+	}
 	if r.OpenRCMieru > 0 && r.OpenRCMieru != c.OpenRCMieru {
 		return errors.New("候选 agent 不支持本机 OpenRC mieru 计量，拒绝降级")
 	}
@@ -141,7 +155,7 @@ func CheckAgentCompatibility(ctx context.Context, binary, statePath string) erro
 	if err != nil {
 		return err
 	}
-	if r.OpenRC == 0 && r.NAT == 0 && r.Mita == 0 && r.Binding == 0 && r.Egress == 0 && r.Forward == 0 && r.ForwardUDP == 0 && !r.billingRequired() {
+	if r.TLSTransport == 0 && r.Xray == 0 && r.OpenRC == 0 && r.NAT == 0 && r.Mita == 0 && r.Binding == 0 && r.Egress == 0 && r.Forward == 0 && r.ForwardUDP == 0 && !r.billingRequired() {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)

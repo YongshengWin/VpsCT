@@ -179,6 +179,9 @@ func retainedStandalone(ctx context.Context, binary string, sd *Systemd, ds *age
 		return false
 	}
 	kind, accountPrefix := "snell", "ctlvps-sn"
+	if filepath.Base(binary) == "xray" {
+		kind, accountPrefix = "xray", "ctlvps-xr"
+	}
 	if filepath.Base(binary) == "mita" {
 		kind, accountPrefix = "mieru", "ctlvps-mi"
 	}
@@ -191,6 +194,9 @@ func retainedStandalone(ctx context.Context, binary string, sd *Systemd, ds *age
 		unit := StandaloneUnit(kind, n.ListenPort)
 		port := strconv.Itoa(n.ListenPort)
 		if !retainedProcess(ctx, sd, unit, digest) || sd.CheckRunningProxy(ctx, unit, accountPrefix+port, SnellSlice(n.NodeID), launcher+" proxy-exec "+kind+" run "+port, false) != nil {
+			return false
+		}
+		if kind == "xray" && sd.CheckNodeListener(ctx, unit, n.ListenPort, "tcp") != nil {
 			return false
 		}
 		if kind == "mieru" && sd.CheckNodeListener(ctx, unit, n.ListenPort, strings.ToLower(str(n.Params, "transport"))) != nil {

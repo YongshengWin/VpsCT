@@ -15,6 +15,10 @@ import (
 
 func TestSubscriptionBrowserAccess(t *testing.T) {
 	c := newTestAPI(t)
+	// This test checks browser/client access, not the empty-subscription policy.
+	if err := c.api.Store.CreateNode(t.Context(), &domain.Node{Name: "browser-fixture", Protocol: "http", Server: "fixture.invalid", Port: 8080, Source: domain.NodeManual, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
 	token := auth.NewSubscriptionToken()
 	sub := domain.Subscription{Name: "browser-test", Kind: domain.SubGenerated, Enabled: true, Token: token, TokenHash: auth.HashToken(token), ShortCode: "browser-test-short", DefaultFormat: "mihomo", NodeSelection: domain.NodeSelection{IncludeAll: true}}
 	if err := c.api.Store.CreateSubscription(context.Background(), &sub); err != nil {

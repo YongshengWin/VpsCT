@@ -12,7 +12,6 @@ import (
 	"fmt"
 	mrand "math/rand/v2"
 	"net/netip"
-	"regexp"
 	"strings"
 
 	"golang.org/x/crypto/curve25519"
@@ -20,11 +19,14 @@ import (
 	"ctlvps/internal/domain"
 	"ctlvps/internal/natconfig"
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/nodecombo"
 	"ctlvps/internal/wgconfig"
 )
 
 // Options tune node creation.
 type Options struct {
+	VLESS          *nodecombo.VLESS
+	Trojan         *nodecombo.Trojan
 	Network        *networkconfig.Node
 	AdvertiseHost  string
 	Name           string
@@ -207,6 +209,28 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 	if tlsDomain == "" {
 		tlsDomain = host
 	}
+	core := domain.CoreFor(opts.Protocol, server.CoreMode)
+	if opts.VLESS != nil && opts.Protocol != domain.ProtocolVLESS {
+		return domain.Node{}, errors.New("VLESS 选项不能用于其他协议")
+	}
+	if opts.Trojan != nil && opts.Protocol != domain.ProtocolTrojan {
+		return domain.Node{}, errors.New("Trojan 选项不能用于其他协议")
+	}
+	managedTLS := opts.VLESS != nil && opts.VLESS.Security == "tls" || opts.Trojan != nil
+	if managedTLS {
+		if network != nil && (opts.VLESS != nil || opts.Trojan.Transport == "ws" || opts.Trojan.Transport == "grpc") {
+			return domain.Node{}, errors.New("普通 TLS 新组合暂不支持自定义网络策略")
+		}
+		if opts.SNI != "" {
+			if opts.Domain != "" && opts.Domain != opts.SNI {
+				return domain.Node{}, errors.New("普通 TLS 的 SNI 必须与证书名称一致")
+			}
+			tlsDomain = opts.SNI
+		}
+		if err := nodecombo.ValidateManagedCert(certMode, tlsDomain, opts.CertID); err != nil {
+			return domain.Node{}, err
+		}
+	}
 	client := map[string]any{}
 	srv := map[string]any{"cert_mode": certMode, "tls_domain": tlsDomain}
 	switch opts.Protocol {
@@ -218,8 +242,8 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 			}
 		}
 	}
-	if certMode == "external" && (opts.Protocol == "anytls" || opts.Protocol == "hysteria2" || opts.Protocol == "tuic" || opts.Protocol == "trojan") {
-		if !regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`).MatchString(opts.CertID) {
+	if certMode == "external" && (managedTLS || opts.Protocol == "anytls" || opts.Protocol == "hysteria2" || opts.Protocol == "tuic" || opts.Protocol == "trojan") {
+		if !nodecombo.ValidCertID(opts.CertID) {
 			return domain.Node{}, errors.New("外部证书需要本机策略中登记的证书 ID")
 		}
 		srv["cert_id"] = opts.CertID
@@ -227,6 +251,46 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 	insecure := certMode == "self_signed"
 	switch opts.Protocol {
 	case domain.ProtocolVLESS:
+		var combo nodecombo.VLESS
+		if opts.VLESS != nil {
+			combo = *opts.VLESS
+		}
+		combo, err := combo.Normalized()
+		if err != nil {
+			return domain.Node{}, err
+		}
+		if combo.Security == "tls" {
+			uuid := UUID()
+			client["uuid"], srv["uuid"] = uuid, uuid
+			client["tls"], client["servername"], client["udp"] = true, tlsDomain, true
+			if insecure {
+				client["skip-cert-verify"] = true
+			}
+			setTLSTransport(client, srv, combo.Transport, combo.WS, combo.GRPC)
+			break
+		}
+		if combo.Transport == "xhttp" {
+			if server.CoreMode != domain.CoreModeStable || server.IsNAT || opts.Network != nil {
+				return domain.Node{}, errors.New("XHTTP 仅支持标准模式、独立公网和普通接入，不能指定网络策略")
+			}
+			if opts.SNI != "" && !nodecombo.ValidDNSName(opts.SNI) {
+				return domain.Node{}, errors.New("REALITY SNI 必须是域名")
+			}
+			core = domain.CoreXray
+			x := combo.XHTTP
+			srv["network"] = "xhttp"
+			srv["xhttp_path"] = x.Path
+			srv["xhttp_mode"] = x.Mode
+			xc := map[string]any{"path": x.Path, "mode": x.Mode}
+			if x.Host != "" {
+				xc["host"] = x.Host
+				srv["xhttp_host"] = x.Host
+			}
+			client["xhttp-opts"] = xc
+		} else {
+			srv["flow"] = combo.Flow
+			client["flow"] = combo.Flow
+		}
 		uuid := UUID()
 		priv, pub, err := RealityKeyPair()
 		if err != nil {
@@ -238,15 +302,15 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 		}
 		sid := ShortID()
 		client["uuid"] = uuid
-		client["flow"] = "xtls-rprx-vision"
+
 		client["tls"] = true
 		client["servername"] = sni
 		client["client-fingerprint"] = "chrome"
 		client["reality-opts"] = map[string]any{"public-key": pub, "short-id": sid}
-		client["network"] = "tcp"
+		client["network"] = combo.Transport
 		client["udp"] = true
 		srv["uuid"] = uuid
-		srv["flow"] = "xtls-rprx-vision"
+
 		srv["reality_private_key"] = priv
 		srv["reality_public_key"] = pub
 		srv["reality_short_id"] = sid
@@ -293,6 +357,13 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 		srv["uuid"] = uuid
 		srv["password"] = pw
 	case domain.ProtocolTrojan:
+		if opts.Trojan != nil {
+			combo, err := opts.Trojan.Normalized()
+			if err != nil {
+				return domain.Node{}, err
+			}
+			setTLSTransport(client, srv, combo.Transport, combo.WS, combo.GRPC)
+		}
 		pw := Password(16)
 		client["password"] = pw
 		client["sni"] = tlsDomain
@@ -385,7 +456,7 @@ func NewNode(server domain.Server, host string, opts Options) (domain.Node, erro
 		Source:       domain.NodeDeployed,
 		ServerID:     &sid,
 		ListenPort:   opts.Port,
-		Core:         domain.CoreFor(opts.Protocol, server.CoreMode),
+		Core:         core,
 		Enabled:      true,
 		Tags:         []string{},
 	}, nil
@@ -399,6 +470,26 @@ func RegenerateCredentials(n *domain.Node, server domain.Server) error {
 	var oldSrv map[string]any
 	_ = json.Unmarshal(n.ServerParams, &oldSrv)
 	opts := Options{Name: n.Name, Protocol: n.Protocol, Port: n.ListenPort, CertMode: fmt.Sprint(oldSrv["cert_mode"])}
+	if n.Protocol == domain.ProtocolVLESS {
+		var err error
+		opts.VLESS, err = VLESSFromNode(*n)
+		if err != nil {
+			return err
+		}
+		if opts.VLESS.Transport == "xhttp" && n.Network != nil {
+			return errors.New("XHTTP 不支持自定义网络策略")
+		}
+	}
+	if n.Protocol == domain.ProtocolTrojan {
+		combo, err := TrojanFromNode(*n)
+		if err != nil {
+			return err
+		}
+		// An unmarked native deployment keeps its original parameter layout.
+		if _, explicit := oldSrv["security"]; explicit {
+			opts.Trojan = combo
+		}
+	}
 	if n.Protocol == domain.ProtocolShadowsocks {
 		opts.SSMethod, _ = oldSrv["method"].(string)
 		opts.SSNetwork, _ = oldSrv["network"].(string)

@@ -6,6 +6,7 @@ import (
 	"ctlvps/internal/domain"
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
 // Snapshot share policies when allocating a new dedicated node. Existing
@@ -96,13 +97,21 @@ func (s *Store) ValidateShareNetwork(ctx context.Context, targets []domain.Share
 		if t.Network == nil {
 			continue
 		}
+		for _, e := range t.Entries {
+			if e.Snapshot.ManagedTLS() {
+				return fmt.Errorf("%w: 分享 TLS 新组合不能使用自定义网络模板", ErrTLSTransportUnavailable)
+			}
+			if e.Snapshot.VLESS != nil && e.Snapshot.VLESS.Transport == "xhttp" {
+				return fmt.Errorf("%w：XHTTP 分享入口暂不支持网络模板", ErrXrayUnavailable)
+			}
+		}
 		if err := t.Network.Validate(); err != nil {
 			return err
 		}
 		if t.Network.AdvertiseMode != "inherit" {
 			return errors.New("分享网络模板须继承服务器访问地址")
 		}
-		for _, p := range t.Protocols {
+		for _, p := range t.SelectedProtocols() {
 			core := domain.CoreFor(p, domain.CoreModeStable)
 			_, version := bindingCoreSetting(core)
 			spec := agentproto.NodeSpec{Protocol: p, Core: string(core)}
@@ -119,7 +128,7 @@ func (s *Store) ValidateShareNetwork(ctx context.Context, targets []domain.Share
 				return errors.New("WireGuard Peer 不可被多个分享复用，请在生成的节点上配置独立 Peer")
 			}
 			if kind != "direct" {
-				for _, p := range t.Protocols {
+				for _, p := range t.SelectedProtocols() {
 					if p != domain.ProtocolShadowsocks {
 						return errors.New("经中转出口的分享入口目前需要 SS-2022 AES-128")
 					}

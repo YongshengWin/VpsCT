@@ -26,7 +26,9 @@ func scanShare(sc interface{ Scan(...any) error }) (domain.Share, error) {
 	v.TemplateID = intPtr(templateID)
 	v.SubscriptionID = intPtr(subID)
 	v.ExpiresAt = parseTimePtr(expires)
-	v.Targets = jsonList[domain.ShareTarget](targets)
+	if err := json.Unmarshal([]byte(targets), &v.Targets); err != nil {
+		return v, err
+	}
 	if err := json.Unmarshal([]byte(nodeUsage), &v.NodeUsage); err != nil {
 		return v, err
 	}
@@ -237,7 +239,18 @@ func (s *Store) SetShareEvaluatedStatus(ctx context.Context, snapshot domain.Sha
 
 // SetShareStatus updates only the status.
 func (s *Store) SetShareStatus(ctx context.Context, id int64, st domain.ShareStatus) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE shares SET status=?, updated_at=? WHERE id=?`, st, fmtTime(s.Now()), id)
+	q := `UPDATE shares SET status=?, updated_at=? WHERE id=?`
+	if st == domain.SharePaused {
+		q += ` AND status<>'revoked'`
+	}
+	r, err := s.db.ExecContext(ctx, q, st, fmtTime(s.Now()), id)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err == nil && n == 0 {
+		return ErrShareChanged
+	}
 	return err
 }
 

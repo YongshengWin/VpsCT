@@ -3,6 +3,7 @@ package api
 import (
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -125,9 +126,16 @@ func (a *API) serveSub(w http.ResponseWriter, r *http.Request, sub domain.Subscr
 	if format == "" {
 		format = sub.DefaultFormat
 	}
-	rendered, bundle, err := a.Subs.Render(ctx, sub, format)
+	rendered, bundle, err := a.Subs.RenderWithProfile(ctx, sub, format, r.URL.Query().Get("profile"))
 	if err != nil {
-		a.Logger.Warn("render subscription", "sub", sub.ID, "err", err)
+		w.Header().Set("Cache-Control", "no-store")
+		if errors.Is(err, subscription.ErrClientProfile) {
+			return fail(http.StatusBadRequest, "invalid_client_profile", "所选格式不支持此客户端兼容档")
+		}
+		if errors.Is(err, subscription.ErrNoRenderPath) {
+			return fail(http.StatusUnprocessableEntity, "no_compatible_nodes", "此订阅没有可用于所选格式的节点或链路")
+		}
+		a.Logger.Warn("render subscription failed", "sub", sub.ID)
 		return fail(http.StatusInternalServerError, "render_failed", "render failed")
 	}
 	logEntry.Format = rendered.Format
@@ -184,6 +192,11 @@ func surgeManagedBody(body []byte, base string, requestURL *url.URL) []byte {
 	u.RawQuery, u.Fragment = "", ""
 	if !strings.HasSuffix(requestURL.Path, "/surge") {
 		u.RawQuery = "format=surge"
+	}
+	if requestURL.Query().Get("profile") == subscription.ProfileSurgeVLESS {
+		query := u.Query()
+		query.Set("profile", subscription.ProfileSurgeVLESS)
+		u.RawQuery = query.Encode()
 	}
 	// A custom template may already declare a managed URL. Replace it rather
 	// than emitting competing declarations or retaining another subscription.

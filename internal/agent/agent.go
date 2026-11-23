@@ -96,6 +96,9 @@ func New(stateDir string, st *State, logger *slog.Logger, version string) *Agent
 		"snell":   core.NewSnell(paths, sd),
 		"mieru":   core.NewMita(paths, sd),
 	}
+	if core.XrayPlatform() {
+		a.Drivers["xray"] = core.NewXray(paths, sd)
+	}
 	if openrc.Enabled() {
 		delete(a.Drivers, "snell")
 	}
@@ -303,7 +306,7 @@ func (a *Agent) portCounters(ctx context.Context) ([]agentproto.PortCounter, err
 	units := []string{}
 	byUnit := map[string]MeterIdentity{}
 	for _, n := range a.State.MeterNodes {
-		if !core.IsStandalone(n.Core) {
+		if !core.IsStandalone(n.Core) || n.Core == "xray" {
 			continue
 		}
 		u := core.SnellSlice(n.NodeID)
@@ -330,6 +333,9 @@ func (a *Agent) portCounters(ctx context.Context) ([]agentproto.PortCounter, err
 	}
 	if !a.State.MeteringV1 && a.State.LegacySettled {
 		for _, n := range a.State.MeterNodes {
+			if n.Core == "xray" {
+				continue
+			} // Xray has never had a process-accounted generation
 			u := core.SingBoxUnit(n.Port)
 			if core.IsStandalone(n.Core) {
 				u = core.StandaloneUnit(n.Core, n.Port)
@@ -415,7 +421,7 @@ func (a *Agent) prepareMetering(ctx context.Context, ds *agentproto.DesiredState
 	guardedMigration := false
 	for u := range identities {
 		guardedMigration = guardedMigration || identities[u].Network != nil
-		if n := identities[u]; core.IsStandalone(n.Core) && a.Systemd.InSlice(ctx, u, core.SnellSlice(n.NodeID)) {
+		if n := identities[u]; n.Core == "xray" || (core.IsStandalone(n.Core) && a.Systemd.InSlice(ctx, u, core.SnellSlice(n.NodeID))) {
 			continue
 		}
 		if a.Systemd.IsActive(ctx, u) {
@@ -677,7 +683,13 @@ func (a *Agent) diagnostics(ctx context.Context) agentproto.Diagnostics {
 		d.ForwardPrivateVersion = 1
 		d.NetworkEgressVersion = agentproto.NetworkEgressVersion
 		d.NetworkProxyInboundVersion = agentproto.NetworkProxyInboundVersion
+		if runtime.GOARCH == "amd64" {
+			d.TLSTransportVersion = agentproto.TLSTransportVersion
+		}
 		d.MitaVersion = networkconfig.MitaVersion
+		if core.XrayPlatform() {
+			d.XrayVersion = agentproto.XrayVersion
+		}
 		d.NetworkSSHVersion = agentproto.NetworkSSHVersion
 		d.NetworkWireGuardVersion = agentproto.NetworkWireGuardVersion
 		d.NetworkForwardVersion = agentproto.NetworkForwardVersion
@@ -789,6 +801,15 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 	lastRevision, lastHash := a.State.desiredBoundary()
 	if err := agentproto.ValidateDesired(ds, a.State.ServerID, lastRevision, lastHash); err != nil {
 		a.Logger.Warn("rejected desired state", "err", err)
+		// A negotiated controller can distinguish an invalid transport profile from
+		// a hung apply without receiving server parameters or a false success.
+		// Never acknowledge a foreign, replayed or tampered revision.
+		if ds != nil && (ds.XrayVersion != 0 || ds.TLSTransportVersion != 0) && local == nil && ds.ServerID == a.State.ServerID && ds.Revision > 0 && ds.Revision >= lastRevision && (ds.Revision != lastRevision || lastHash == "" || ds.Hash == lastHash) && ds.Hash == agentproto.ContentHash(ds) {
+			const msg = "Negotiated desired state rejected at execution boundary"
+			if e := a.Client.Report(ctx, agentproto.ApplyReport{Revision: ds.Revision, Hash: ds.Hash, Status: "failed", Error: msg}); e != nil {
+				a.Logger.Warn("desired rejection report failed", "err", e)
+			}
+		}
 		return
 	}
 	// Capture the remote representation before local certificate paths/private
@@ -839,6 +860,7 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 				}
 			}
 			if !allowed {
+				a.rejectTLSCertificate(ctx, ds, ds.Nodes[i], local == nil)
 				a.Logger.Warn("ACME domain not locally authorized")
 				return
 			}
@@ -846,11 +868,13 @@ func (a *Agent) convergeDesired(ctx context.Context, force bool, local *agentpro
 		if c != nil && c.Mode == "external" {
 			p, e := secureupdate.LoadPolicy()
 			if e != nil {
+				a.rejectTLSCertificate(ctx, ds, ds.Nodes[i], local == nil)
 				a.Logger.Warn("external certificate policy unavailable")
 				return
 			}
 			cert, ok := p.Certificates[c.ID]
 			if !ok || c.ID == "" {
+				a.rejectTLSCertificate(ctx, ds, ds.Nodes[i], local == nil)
 				a.Logger.Warn("external certificate not registered")
 				return
 			}
@@ -942,8 +966,27 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 			}
 		}
 	}()
+	// A failure before a negotiated Xray driver gets to reconcile must not
+	// leave an old endpoint serving with its previous access rules.
+	xrayHandled := false
+	defer func() {
+		if ds.XrayVersion == 0 || (xrayHandled && natConverged) || applyErr == nil {
+			return
+		}
+		if driver := a.Drivers["xray"]; driver != nil {
+			stop, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			applyErr = errors.Join(applyErr, driver.Stop(stop))
+		}
+	}()
 	var errs []error
 	note := func(format string, args ...any) { details = append(details, fmt.Sprintf(format, args...)) }
+	if ds.TLSTransportVersion > 0 && (runtime.GOOS != "linux" || runtime.GOARCH != "amd64") {
+		return nil, errors.New("TLS transport requires Linux AMD64")
+	}
+	if ds.XrayVersion > 0 && !core.XrayPlatform() {
+		return nil, errors.New("Xray requires Linux AMD64 systemd")
+	}
 	if openrc.Enabled() {
 		if err := validateOpenRCDesired(ds, a.State); err != nil {
 			return details, err
@@ -1012,7 +1055,7 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 		current[n.NodeID] = true
 	}
 	for _, n := range a.State.MeterNodes {
-		if n.Core == "singbox" && !current[n.NodeID] {
+		if (n.Core == "singbox" || n.Core == "xray") && !current[n.NodeID] {
 			meterNodes = append(meterNodes, agentproto.NodeSpec{NodeID: n.NodeID, Core: n.Core, Blocked: true, Retired: true})
 		}
 	}
@@ -1036,7 +1079,13 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 			}
 			groups[n.NodeID] = g
 		}
-		if core.IsStandalone(n.Core) {
+		if n.Core == "xray" {
+			g, e := a.Systemd.EnsureXraySlice(ctx, n.NodeID)
+			if e != nil {
+				return details, e
+			}
+			groups[n.NodeID] = g
+		} else if core.IsStandalone(n.Core) {
 			if _, e := a.Systemd.EnsureSnellMeter(ctx, n); e != nil {
 				return details, e
 			}
@@ -1111,7 +1160,11 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 	}
 	appliedCores := map[string]bool{}
 	retainedCores := map[string]bool{}
+	partial := map[string]map[int64]bool{}
 	for name, drv := range a.Drivers {
+		if name == "xray" {
+			xrayHandled = true
+		}
 		nodes := byCore[name]
 		forwards := coreForwards
 		if name != "singbox" {
@@ -1126,8 +1179,23 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 		if name == "singbox" {
 			live += len(coreForwards)
 		}
+		if name == "xray" && live > 0 { // Verify both named nft counters BEFORE permitting a process to start.
+			counters, e := a.NFT.ReadNodes(ctx)
+			choice, natErr := a.selectedNAT(ds)
+			if e == nil {
+				e = verifyXrayMeters(nodes, counters)
+			}
+			if e == nil && (natErr != nil || choice.Configured) {
+				e = errors.New("Xray does not support local or controller NAT")
+			}
+			if e != nil {
+				attemptedCores[name] = true
+				errs = append(errs, e, drv.Stop(ctx))
+				continue
+			}
+		}
 		if live > 0 {
-			key := map[string]string{"singbox": "sing-box", "snell": "snell-server", "mieru": "mita"}[name]
+			key := agentproto.CoreVersionKey(name)
 			v, ok := ds.Versions[key]
 			if !ok {
 				errs = append(errs, fmt.Errorf("missing trusted core version"))
@@ -1173,6 +1241,15 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 				appliedCores[name], retainedCores[name] = true, true
 				delete(attemptedCores, name)
 				note("%s: verified previous resources restored", name)
+			} else if restorer, ok := drv.(core.PartialRestorer); ok {
+				ids, e := restorer.RestoreUnchanged(ctx, ds, nodes)
+				if e == nil && len(ids) > 0 {
+					appliedCores[name] = true
+					partial[name] = ids
+					note("%s: %d unchanged endpoints revalidated", name, len(ids))
+				} else {
+					errs = append(errs, e, drv.Stop(ctx))
+				}
 			} else {
 				errs = append(errs, drv.Stop(ctx))
 			}
@@ -1182,6 +1259,15 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 			note("%s: %d node(s) applied", name, live)
 		}
 		appliedCores[name] = true
+	}
+	if len(partial) > 0 {
+		filtered := make([]agentproto.NodeSpec, 0, len(preparedNodes))
+		for _, n := range preparedNodes {
+			if ids := partial[n.Core]; ids == nil || n.Blocked || ids[n.NodeID] {
+				filtered = append(filtered, n)
+			}
+		}
+		preparedNodes = filtered
 	}
 	bindingsSafe := true
 	if bindingTx != nil {
@@ -1199,7 +1285,7 @@ func (a *Agent) apply(ctx context.Context, ds *agentproto.DesiredState) (details
 		// their verified resources. Failed resources remain closed/pending.
 		ingressNodes := append([]agentproto.NodeSpec(nil), coreNodes...)
 		for i := range ingressNodes {
-			if !appliedCores[ingressNodes[i].Core] {
+			if !appliedCores[ingressNodes[i].Core] || (partial[ingressNodes[i].Core] != nil && !partial[ingressNodes[i].Core][ingressNodes[i].NodeID]) {
 				ingressNodes[i].Blocked = true
 			}
 		}
@@ -1332,4 +1418,21 @@ func processMeterSource() string {
 		return "openrc-cgroup-v1"
 	}
 	return "systemd-v1"
+}
+
+// Xray is process-isolated but uses the nft counters for its client-facing TCP
+// port only, never systemd IPAccounting (which also counts origin traffic).
+func verifyXrayMeters(nodes []agentproto.NodeSpec, counters []agentproto.PortCounter) error {
+	have := map[int64]bool{}
+	for _, c := range counters {
+		if c.Source == "nft-node-v1" {
+			have[c.NodeID] = true
+		}
+	}
+	for _, n := range nodes {
+		if !n.Blocked && !have[n.NodeID] {
+			return errors.New("Xray node ingress meter unavailable")
+		}
+	}
+	return nil
 }

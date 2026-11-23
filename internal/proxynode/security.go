@@ -1,18 +1,20 @@
 package proxynode
 
 import (
+	"errors"
+	"maps"
+	"strings"
+
 	"ctlvps/internal/agentproto"
 	"ctlvps/internal/mieruconfig"
 	"ctlvps/internal/sshconfig"
 	"ctlvps/internal/wgconfig"
-	"errors"
 	"gopkg.in/yaml.v3"
-	"strings"
 )
 
 var proxyFields = func() map[string]bool {
 	m := map[string]bool{}
-	for _, s := range strings.Fields("uuid password username cipher alterId alter-id network udp tls servername sni skip-cert-verify fingerprint client-fingerprint alpn flow encryption reality-opts ws-opts grpc-opts h2-opts http-opts transport obfs obfs-password obfs-opts psk version ports up down up-speed down-speed recv-window recv-window-conn congestion-controller udp-relay-mode reduce-rtt disable-sni fast-open tfo auth auth-str protocol protocol-param obfs-param plugin plugin-opts smux packet-encoding udp-over-tcp udp-over-tcp-version ip-version") {
+	for _, s := range strings.Fields("uuid password username cipher alterId alter-id network udp tls dialer-proxy servername sni skip-cert-verify fingerprint client-fingerprint alpn flow encryption reality-opts xhttp-opts ws-opts grpc-opts h2-opts http-opts transport obfs obfs-password obfs-opts psk version ports up down up-speed down-speed recv-window recv-window-conn congestion-controller udp-relay-mode reduce-rtt disable-sni fast-open tfo auth auth-str protocol protocol-param obfs-param plugin plugin-opts smux packet-encoding udp-over-tcp udp-over-tcp-version ip-version") {
 		m[s] = true
 	}
 	return m
@@ -34,8 +36,47 @@ func validateProxy(p Proxy) error {
 		_, err := mieruconfig.Decode(p.Params)
 		return err
 	}
-	if err := agentproto.ValidateParams(p.Params, 0); err != nil {
+	params := p.Params
+	if list, ok := params["alpn"].([]string); ok {
+		params = maps.Clone(params)
+		params["alpn"] = stringValues(list)
+	}
+	if err := agentproto.ValidateParams(params, 0); err != nil {
 		return err
+	}
+	if raw, exists := params["alpn"]; exists {
+		list, ok := raw.([]any)
+		if !ok {
+			return errors.New("ALPN 必须为字符串列表")
+		}
+		for _, item := range list {
+			if s, ok := item.(string); !ok || s == "" || strings.Contains(s, ",") {
+				return errors.New("ALPN 列表项无效")
+			}
+		}
+	}
+	if via, exists := params["dialer-proxy"]; exists {
+		if _, ok := via.(string); !ok {
+			return errors.New("前置代理名必须为字符串")
+		}
+	}
+	if _, exists := params["extra"]; exists && p.Str("network") == "xhttp" {
+		return errors.New("不支持的 XHTTP extra")
+	}
+	if options, exists := params["xhttp-opts"]; exists {
+		m, ok := options.(map[string]any)
+		if !ok || p.Str("network") != "xhttp" {
+			return errors.New("无效的 XHTTP 选项")
+		}
+		for key, value := range m {
+			s, ok := value.(string)
+			if !ok || (key != "path" && key != "host" && key != "mode") {
+				return errors.New("不支持的 XHTTP 选项")
+			}
+			if key == "mode" && s != "" && s != "auto" && s != "packet-up" && s != "stream-up" && s != "stream-one" {
+				return errors.New("不支持的 XHTTP mode")
+			}
+		}
 	}
 	if plugin, ok := p.Params["plugin"].(string); ok && plugin != "" && plugin != "obfs" && plugin != "v2ray-plugin" {
 		return errors.New("不支持的客户端插件")
