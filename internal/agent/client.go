@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ctlvps/internal/agentproto"
+	"ctlvps/internal/core"
 	"ctlvps/internal/networkconfig"
 )
 
@@ -74,10 +75,16 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any, gz bo
 		return err
 	}
 	req.Header.Set("User-Agent", "ctlvps-agent/"+c.Version)
+	if (path == agentproto.PathDesired || path == agentproto.PathApplyReport) && runtime.GOOS == "linux" && runtime.GOARCH == "amd64" {
+		req.Header.Set(agentproto.TLSTransportHeader, fmt.Sprint(agentproto.TLSTransportVersion))
+	}
 	if path == agentproto.PathDesired && runtime.GOOS == "linux" {
 		req.Header.Set(networkconfig.IPv6IngressHeader, fmt.Sprint(networkconfig.IPv6IngressVersion))
 		req.Header.Set(agentproto.NetworkBindingHeader, fmt.Sprint(agentproto.NetworkBindingVersion))
 		req.Header.Set(agentproto.NetworkWireGuardHeader, fmt.Sprint(agentproto.NetworkWireGuardVersion))
+		if core.XrayPlatform() {
+			req.Header.Set(agentproto.XrayHeader, fmt.Sprint(agentproto.XrayVersion))
+		}
 		req.Header.Set(networkconfig.MitaHeader, fmt.Sprint(networkconfig.MitaVersion))
 		req.Header.Set(agentproto.NetworkSSHHeader, fmt.Sprint(agentproto.NetworkSSHVersion))
 		req.Header.Set(agentproto.NetworkEgressHeader, fmt.Sprint(agentproto.NetworkEgressVersion))

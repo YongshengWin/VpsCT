@@ -66,7 +66,7 @@ API key 无法调用登录/初始化接口，不能获取 CSRF、修改自己或
 
 设置写入目录列出当前可编辑键，包含尚未配置的可选项；出口的 `config` 按 `kind` 提供 direct、SOCKS5、SS-2022、SSH、WireGuard 的字段类型分支。这些描述只包含产品结构，不带用户配置或凭据值。
 
-转发线路支持 `GET /api/v1/access-routes/{op}` 按稳定编号查询，不必扫描最多 256 条的列表。预览/创建合约提供两台/三台结构、端口自动分配、来源模式和影响凭证说明；这些操作的响应提供 stage、message、revision 或 candidate/token/checks 的结构。UI 默认三台；API 的 `ix_server_id=0` 或省略明确表示无额外中转。完整请求与超时恢复示例见 [线路指引](../skills/vpsct/references/api.md#18-转发线路两台三台及导入落地)。
+转发线路支持 `GET /api/v1/access-routes/{op}` 按稳定编号查询，不必扫描最多 256 条的列表。预览/创建合约提供两台/三台结构、端口自动分配、来源模式和影响凭证说明；这些操作的响应提供 stage、message、revision 或 candidate/token/checks 的结构。UI 默认三台；API 的 `ix_server_id=0` 或省略明确表示无额外中转。`GET /api/v1/access-routes/{op}/node` 在线路应用后返回结构化节点。仅 TCP 的 SS 等无法生成等价链接的组合会返回空 `uri`，可使用线路订阅。完整请求与超时恢复示例见 [线路指引](../skills/vpsct/references/api.md#18-转发线路两台三台及导入落地)。
 
 目录覆盖服务器、节点、外部订阅、订阅、模板、预设、分享、流量、网络/出口/转发/中转、连接日志、账户、设置、审计、封禁、系统状态与维护。会话专用接口会标记 `session_only=true`；发现并不授权绕过该限制。公开订阅与 VPS 专用通信接口使用各自凭据，不接收开发者 key。
 
@@ -182,6 +182,24 @@ Mihomo 模板直接编辑 YAML 正文。个人用户可用 `POST /api/v1/shares/
 首次管理员初始化、登录、创建/撤销 API key 及两步验证管理使用面板会话，属于接入和安全边界。VPS 首次安装与旧安装的信任迁移可由 API 生成命令；执行仍需要用户授权该目标操作系统上的操作，不会因为读取命令就自动获准 SSH。离线 VPS 可以保存部分配置，但只能报告待应用，不能宣称部署已完成。
 
 公开订阅 `/s`、短链接 `/r` 与 VPS agent 专用协议使用各自凭据。已移除的配置上传与托管功能不在支持范围，旧记录不恢复下载。
+
+### 1.6.1 VLESS 传输与分享组合
+
+部署 VLESS 时，省略 `vless` 沿用 TCP + REALITY + Vision。`vless.transport="xhttp"` 选择独立 Xray，`vless.xhttp` 可设置 `path`、`host`、`mode`。提交前读取服务器的 `xhttp_block_reason`，字段存在且为空才表示控制端准入通过。首次范围为标准模式下具备本机安全策略和 nftables 计量的 Linux AMD64/systemd 普通公网入口。
+
+部署普通 TLS 时，先读取 `GET /api/v1/servers/{id}` 并确认 `tls_transport_block_reason` 存在且为空。VLESS 可选 `tcp`、`ws`、`grpc`；Trojan 原生 TCP 沿用旧请求，另可选 `ws`、`grpc`。新组合使用普通接入、默认监听和默认出口。`domain` 设置证书域名及客户端 SNI。`cert_mode` 可继承服务器，或选 `self_signed`、`acme`、`external`。外部证书另需 `cert_id`，对应 VPS 本机已登记的证书。自签模式沿用客户端跳过证书校验的现有语义。
+
+```json
+{"protocol":"vless","domain":"origin.example.org","cert_mode":"external","cert_id":"edge","vless":{"transport":"ws","security":"tls","ws":{"path":"/connect","host":"edge.example.org"}}}
+```
+
+Trojan 使用同形的 `trojan` 对象。gRPC 改用 `{"transport":"grpc","security":"tls","grpc":{"service_name":"edge.RPC"}}`。WS 路径默认 `/`，可选 `host` 用于客户端 HTTP 请求；sing-box 入站校验路径，Host 路由由前置 HTTP 服务实现。gRPC 服务名必填，最多 128 字符，以字母或数字开头，其余可含字母、数字、点、下划线及连字符。普通 TLS 不携带 Vision 或 REALITY。分享在 `targets[].entries[].snapshot` 中填写相同的协议组合与证书选项。
+
+服务器尚未上报新能力时，部署接口返回 `409 tls_transport_unavailable`。升级后等待新心跳，再以原参数部署。成功创建后按 `Location` 读回节点，核对目标配置版本及应用回执。新组合的成功节点回执应带 `tls_transport_version=1`。
+
+普通部署持久化后用 `Location` 查询节点，按响应的 `X-Revision` 与服务器应用回执核对。若返回 202，先查该节点和服务器期望状态，排除发布阻塞后使用 `POST /api/v1/servers/{id}/republish`。普通接入请求超时且没有收到响应时，应先按服务器与固定端口查找节点。客户端实际收发还需单独验证。
+
+分享可用 `targets[].entries[]` 保存稳定入口 `id`、无凭据组合 `snapshot` 和独立 `quota_bytes`。读取时的 `node_id` 由服务端分配。修改已有组合的分享要带 `entry_version: 1` 和完整目标列表，保留仍要使用的入口 ID。旧分享仍可使用 `protocols` 入口。
 
 ## 1.7 本地验证与后续扩展
 

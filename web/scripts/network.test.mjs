@@ -10,6 +10,17 @@ test("binding UI checks the public node cipher, not the private server method", 
   assert.equal(canBindNodeNetwork({ ...node, core: "snell" }), false);
 });
 
+test("TLS transport profiles use the default network while legacy profiles stay editable", () => {
+  const eligible = (protocol, params) => canBindNodeNetwork({ core: "singbox", protocol, params });
+  assert.equal(eligible("vless", { network: "tcp", "reality-opts": {} }), true);
+  assert.equal(eligible("trojan", {}), true);
+  assert.equal(eligible("vless", { network: "tcp", tls: true }), false);
+  for (const network of ["ws", "grpc"]) {
+    assert.equal(eligible("trojan", { network }), false);
+    assert.equal(eligible("vless", { network, tls: true }), false);
+  }
+});
+
 test("address choices preserve interface identity and exclude disappeared or unusable addresses", () => {
   const interfaces = [
     { present: false, interface: { id: "old", name: "wan0", usable_addresses: ["192.0.2.10/24"] } },

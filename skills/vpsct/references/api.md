@@ -49,6 +49,10 @@
 
 `port=0` 由服务端分配。其它可用字段包括 `sni`、`domain`、`obfs`、`snell_version`、`mieru_transport`、`cert_id`、`cert_mode`，具体协议和能力以 `/api/v1/meta`、服务器网络能力及官方内核能力为准。服务端生成节点凭据，201 表示记录已创建；仍需查询服务器 desired/apply 状态。
 
+普通接入部署 VLESS XHTTP 时，先读取服务器的 `xhttp_block_reason` 并确认字段存在且为空。请求中传 `"protocol":"vless","vless":{"transport":"xhttp","security":"reality","xhttp":{"path":"/connect","mode":"auto"}}`。缺省 VLESS 组合继续使用 TCP/Vision。201 或 202 后先按 `Location` 查节点和 desired/apply；202 的已有节点可在排除发布错误后调用服务器 `republish`。普通接入请求超时要先核对固定端口与节点 ID。
+
+VLESS 普通 TLS 的 TCP、WS、gRPC 及 Trojan WS/gRPC 先检查 `tls_transport_block_reason` 存在且为空。普通接入示例为 `{"protocol":"trojan","domain":"origin.example.org","trojan":{"transport":"grpc","security":"tls","grpc":{"service_name":"edge.RPC"}}}`。WS 改为 `"transport":"ws","ws":{"path":"/connect","host":"edge.example.org"}`。`domain` 是证书域名及 SNI；WS Host 是 HTTP 请求头。外部证书按本机登记 ID 引用。分享快照沿用相同结构。主机不兼容返回 `409 tls_transport_unavailable`；升级 agent 并等新心跳后重试。核对目标版本和 `tls_transport_version=1` 的应用回执。
+
 仅 IPv6 部署使用服务器的 `public_host_ipv6` 或本节点的独立地址。可以先用 `GET /api/v1/servers/{id}/ipv6-endpoint/check` 检查 `host=v6.example.com` 的 DNS 和网卡匹配，再用 `POST /api/v1/servers/{id}/nodes/preview` 检查初始监听和端口。
 
 ```json
@@ -81,7 +85,7 @@
 }
 ```
 
-响应含 `format`、`body`、`node_names`、`groups`，`body` 可能含节点密码。确认预览后，移除仅用于预览的 `format`，向 `POST /api/v1/subscriptions` 提交。其它字段包括 `template_id`、`proxy_groups`、`chains`、`rules`、`rule_providers`、`expire_at`、`traffic_limit_bytes`、`reset_day`、`userinfo_header`、`show_info_nodes`、`allowed_user_ids`、`short_link`。空模板/代理组规则遵循模板默认语义，不能向其中写个人更新地址或网段。
+现代 Surge 完整配置使用 `format="surge"` 和 `profile="surge-vless"`，旧档省略 `profile`。读取已保存预览或公开订阅时使用同名查询参数。响应含 `format`、`body`、实际输出的 `node_names`、`omitted_count`、`groups`，`body` 可能含节点密码。确认预览后，移除仅用于预览的 `format` 与 `profile`，向 `POST /api/v1/subscriptions` 提交。其它字段包括 `template_id`、`proxy_groups`、`chains`、`rules`、`rule_providers`、`expire_at`、`traffic_limit_bytes`、`reset_day`、`userinfo_header`、`show_info_nodes`、`allowed_user_ids`、`short_link`。空模板/代理组规则遵循模板默认语义，不能向其中写个人更新地址或网段。
 
 创建订阅没有通用幂等 key；提交前可记录现有订阅 ID 与请求时间。创建请求超时后，通过列表/详情比对新增 ID、kind、节点选择、模板等完整请求字段及创建时间，不能只看同名记录；多个候选或证据不足时仍为结果未知，不再次 POST。用户索取链接时，可说明面板内的记录 ID/名称，让其在订阅详情领取，或使用其已授权的私有文件/秘密管理器交付，不在聊天展开 token。
 
@@ -90,6 +94,8 @@
 模板 `POST /api/v1/templates` 使用 `name`、`kind`、`description`、`content`、`variables`；`kind` 为 `mihomo`、`surge`、`singbox` 或 `shadowrocket`。预设 `POST /api/v1/presets` 使用 `name`、`groups`、`rules`，套用时需要把 groups 和 rules 一并写入订阅，不能只套一半。
 
 ## 1.4 创建和管理分享
+
+同一服务器的不同组合可分别放入 `targets[].entries[]`。每项传稳定 `id`、`snapshot` 和独立 `quota_bytes`，其中 `snapshot.protocol`、`snapshot.vless` 与部署组合一致。`node_id` 由服务器分配。更新含组合入口的分享须读取完整目标并发送 `entry_version: 1`。
 
 `POST /api/v1/shares`：
 
@@ -185,7 +191,7 @@
 2. 向 `POST /api/v1/access-routes/preview` 提交选择。`network` 为 `tcp` 或 `both`，应根据节点的实际线缆传输协议选择；VLESS 的 UDP 业务并不等于要 UDP 转发。按实际能力/错误提示处理，不擅自降级。
 3. 检查 `ready`、`waiting_authorization` 和 `checks`；不就绪先处理网络、节点状态或本机授权。成功后**完整使用返回的 `candidate`**，仅增加 `expected_impact=token`，向 `POST /api/v1/access-routes` 提交，不能重新拼接表单默认值。
 4. 202 后按返回 `id` 查询 `GET /api/v1/access-routes/{op}`，关注 `stage`、`message`、`revision`。`pending_landing`、`pending_ix`、`pending_entry` 是待应用，`blocked` 是阻塞；只有 `applied` 才可继续。用有界轮询和合理间隔，不无限等待。
-5. `GET /api/v1/access-routes/{op}/node` 仅在实际可用时返回入口节点与 `uri`，否则 409。响应包含认证信息，保存到私有输出文件；必要时按 `subscription_id` 检查订阅渲染。
+5. `GET /api/v1/access-routes/{op}/node` 在线路应用后返回入口节点 `node`。若 `uri` 为空，表示单节点链接无法完整表达连接参数（例如仅 TCP 的 SS），可按 `subscription_id` 获取兼容订阅。线路未就绪时返回 409。响应含认证信息，应保存到私有输出文件。
 6. 超时或断连后先 GET 原 `id`；不存在时也先确认是否请求尚在执行。创建支持同一 `operation_id` 和相同完整 candidate 的核对后重放；同编号但配置不同会冲突。409/428 重新读取和预览，不生成新编号盲目重建。
 7. 用户要求停止时，GET 当前线路，把最新 `revision` 作为 `expected_revision` 提交 `DELETE /api/v1/access-routes/{op}`。继续查询至 `retired`；`stopping_entry`、`stopping_ix` 尚未清理完成。阻塞重试使用 `POST /api/v1/access-routes/{op}/retry` 和最新 `expected_revision`。不要直接删除其底层转发。
 

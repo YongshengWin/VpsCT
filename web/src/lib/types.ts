@@ -185,6 +185,8 @@ export interface ServerUsage {
 export type ServerQuotaBilling = BillingMode;
 
 export interface Server {
+  xhttp_block_reason?: string;
+  tls_transport_block_reason?: string;
   is_nat: boolean;
   nat?: NATSummary;
   id: number;
@@ -355,7 +357,33 @@ export interface Preset {
   is_builtin: boolean;
 }
 
+interface ShareTransport {
+  transport: string;
+  security?: string;
+  ws?: { path?: string; host?: string };
+  grpc?: { service_name?: string };
+}
+
+export interface ShareEntry {
+  id: string;
+  snapshot: {
+    protocol: string;
+    vless?: ShareTransport & { flow?: string; xhttp?: { path?: string; host?: string; mode?: string } };
+    trojan?: ShareTransport;
+    domain?: string;
+    cert_mode?: string;
+    cert_id?: string;
+    ss_method?: string;
+    ss_network?: string;
+    snell_version?: number;
+    mieru_transport?: string;
+    obfs?: boolean;
+  };
+  quota_bytes: number;
+  node_id?: number;
+}
 export interface ShareTarget {
+  entries?: ShareEntry[];
   quota_bytes?: Record<string, number>;
   network?: import("@/lib/network").NodeNetworkPolicy;
   server_id: number;

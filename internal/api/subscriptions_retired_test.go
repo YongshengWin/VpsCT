@@ -19,7 +19,10 @@ func TestUploadedSubscriptionInputsAreRejected(t *testing.T) {
 		c.do("POST", "/api/v1/subscriptions", body, 400)
 		c.do("POST", "/api/v1/subscriptions/preview", body, 400)
 	}
-	sub := c.do("POST", "/api/v1/subscriptions", map[string]any{"name": "generated", "kind": "generated"}, 201)
+	if err := c.api.Store.CreateNode(t.Context(), &domain.Node{Name: "generated-fixture", Protocol: "http", Server: "fixture.invalid", Port: 8080, Source: domain.NodeManual, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	sub := c.do("POST", "/api/v1/subscriptions", map[string]any{"name": "generated", "kind": "generated", "node_selection": map[string]any{"include_all": true}}, 201)
 	path := fmt.Sprintf("/api/v1/subscriptions/%v", sub["id"])
 	c.do("PUT", path, map[string]any{"uploaded_content": "proxies: []"}, 400)
 	c.do("PUT", path, map[string]any{"kind": "uploaded"}, 400)

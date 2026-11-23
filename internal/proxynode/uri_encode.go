@@ -12,14 +12,46 @@ import (
 // ToURI renders a share link for the proxy. Returns ErrUnsupported for
 // protocols without a link format.
 func ToURI(p Proxy) (string, error) {
+	if p.Str("dialer-proxy") != "" {
+		return "", fmt.Errorf("%w: 单节点链接不能表示前置代理", ErrUnsupported)
+	}
+	if fp := p.Str("client-fingerprint"); p.Type == "vless" && (fp == "chromium-155" || fp == "apple-26") {
+		return "", unsupported("此原生 ClientHello 指纹没有已验证的通用 URI 表示")
+	}
+	if p.Type == "vless" && (p.Bool("tfo") || p.Params["udp"] != nil && !p.Bool("udp")) {
+		return "", unsupported("单条 VLESS 链接不能保留 TCP Fast Open 或 UDP 限制")
+	}
 	switch p.Type {
 	case "ss":
+		if udp, ok := p.Params["udp"]; ok && !toBool(udp) {
+			return "", unsupported("SIP002 无法保留仅 TCP 的限制")
+		}
 		return encodeSS(p), nil
 	case "vmess":
+		if p.Bool("skip-cert-verify") || p.Sub("reality-opts") != nil || p.Str("fingerprint") != "" {
+			return "", unsupported("VMess JSON 不能保留此证书验证策略")
+		}
 		return encodeVMess(p), nil
-	case "vless":
-		return encodeVLESS(p), nil
-	case "trojan":
+	case "vless", "trojan":
+		if err := validateProxy(p); err != nil {
+			return "", err
+		}
+		if p.Str("fingerprint") != "" {
+			return "", unsupported("此通用链接不能保留证书指纹校验")
+		}
+		switch p.Str("network") {
+		case "ws", "httpupgrade":
+			if _, _, ok := p.BasicWebSocket(); !ok {
+				return "", unsupported("此链接不能无损表示 WebSocket 选项")
+			}
+		case "grpc":
+			if _, ok := p.BasicGRPCService(); !ok {
+				return "", unsupported("此链接不能无损表示 gRPC 选项")
+			}
+		}
+		if p.Type == "vless" {
+			return encodeVLESS(p), nil
+		}
 		return encodeTrojan(p), nil
 	case "hysteria2":
 		return encodeHysteria2(p), nil
@@ -200,12 +232,9 @@ func transportQuery(p Proxy, v url.Values) {
 		v.Set("type", "tcp")
 	case "ws", "httpupgrade":
 		v.Set("type", p.Str("network"))
-		if o := p.Sub("ws-opts"); o != nil {
-			setIf(v, "path", str(o["path"]))
-			if h, ok := o["headers"].(map[string]any); ok {
-				setIf(v, "host", str(h["Host"]))
-			}
-		}
+		path, host, _ := p.BasicWebSocket()
+		setIf(v, "path", path)
+		setIf(v, "host", host)
 	case "grpc":
 		v.Set("type", "grpc")
 		if o := p.Sub("grpc-opts"); o != nil {
@@ -273,7 +302,7 @@ func encodeTrojan(p Proxy) string {
 	v := url.Values{}
 	tlsQuery(p, v, "sni")
 	transportQuery(p, v)
-	return "trojan://" + url.PathEscape(p.Str("password")) + "@" + p.HostPort() + encodeQuery(v) + frag(p.Name)
+	return "trojan://" + url.User(p.Str("password")).String() + "@" + p.HostPort() + encodeQuery(v) + frag(p.Name)
 }
 
 func encodeHysteria2(p Proxy) string {

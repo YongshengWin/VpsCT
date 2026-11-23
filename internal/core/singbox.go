@@ -112,7 +112,7 @@ func (d *SingBox) tlsBlock(spec agentproto.NodeSpec, ds *agentproto.DesiredState
 		// application protocol, TCP clients offering h2/http/1.1 cannot
 		// negotiate TLS. Keep file certificates' permissive empty list and
 		// the explicit QUIC protocol list unchanged.
-		if len(alpn) == 0 && (spec.Protocol == "anytls" || spec.Protocol == "trojan") {
+		if len(alpn) == 0 && (spec.Protocol == "anytls" || spec.Protocol == "trojan" || spec.Protocol == "vless") {
 			tls["alpn"] = []string{"h2", "http/1.1"}
 		}
 		acme := map[string]any{"domain": []string{domain}, "data_directory": firstNonEmpty(d.runtimeACME, filepath.Join(d.Paths.DataDir, "acme")), "default_server_name": domain, "provider": "letsencrypt"}
@@ -267,6 +267,38 @@ func (d *SingBox) BuildConfig(ds *agentproto.DesiredState, nodes []agentproto.No
 		}
 		p := n.Params
 		in := map[string]any{"tag": InboundTag(n.NodeID), "listen": listen, "listen_port": n.ListenPort}
+		if n.Protocol == "vless" && n.Cert != nil && !agentproto.NeedsTLSTransport(n.Protocol, n.Params) {
+			return nil, errors.New("VLESS 普通证书必须声明 TLS 传输配置")
+		}
+		if agentproto.NeedsTLSTransport(n.Protocol, p) {
+			if err := agentproto.ValidateTLSTransportNode(ds, n); err != nil {
+				return nil, err
+			}
+			// WS Host is a client request header, not an inbound Host filter.
+			// sing-box inbound headers would set HTTP response headers instead.
+			var alpn []string
+			switch str(p, "network") {
+			case "ws":
+				in["transport"] = map[string]any{"type": "ws", "path": p["ws_path"]}
+				alpn = []string{"http/1.1"}
+			case "grpc":
+				in["transport"] = map[string]any{"type": "grpc", "service_name": p["grpc_service_name"]}
+				alpn = []string{"h2"}
+			}
+			in["type"] = n.Protocol
+			key := "uuid"
+			if n.Protocol == "trojan" {
+				key = "password"
+			}
+			in["users"] = []any{map[string]any{key: p[key]}}
+			tls, err := d.tlsBlock(n, ds, alpn)
+			if err != nil {
+				return nil, err
+			}
+			in["tls"] = tls
+			inbounds = append(inbounds, in)
+			continue
+		}
 		switch n.Protocol {
 		case "wireguard":
 			if n.Network != nil {

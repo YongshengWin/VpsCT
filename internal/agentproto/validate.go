@@ -33,6 +33,12 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 			return err
 		}
 	}
+	if d.TLSTransportVersion != 0 && d.TLSTransportVersion != TLSTransportVersion {
+		return errors.New("普通 TLS 传输能力版本无效")
+	}
+	if d.XrayVersion != 0 && d.XrayVersion != XrayVersion {
+		return errors.New("Xray 能力版本无效")
+	}
 	if d.MitaVersion != 0 && d.MitaVersion != 1 {
 		return errors.New("mita 能力版本无效")
 	}
@@ -77,7 +83,23 @@ func ValidateDesired(d *DesiredState, serverID, lastRevision int64, lastHash str
 		}
 		ids[n.NodeID] = true
 		ports[n.ListenPort] = true
-		if n.Core != "singbox" && n.Core != "snell" && n.Core != "mieru" {
+		if n.Protocol == "vless" && n.Cert != nil && !NeedsTLSTransport(n.Protocol, n.Params) {
+			return errors.New("VLESS 普通证书必须声明 TLS 传输配置")
+		}
+		if NeedsTLSTransport(n.Protocol, n.Params) {
+			if n.Cert != nil && (n.Cert.CertPath != "" || n.Cert.KeyPath != "") {
+				return errors.New("TLS 证书文件路径只能由 agent 本机解析")
+			}
+			if err := ValidateTLSTransportNode(d, n); err != nil {
+				return err
+			}
+		}
+		if n.Core == "xray" || n.Protocol == "vless" && n.Params["network"] == "xhttp" {
+			if err := ValidateXrayNode(d, n); err != nil {
+				return err
+			}
+		}
+		if n.Core != "singbox" && n.Core != "snell" && n.Core != "mieru" && n.Core != "xray" {
 			return errors.New("不支持的代理内核")
 		}
 		if n.Core == "snell" && n.Protocol != "snell" {

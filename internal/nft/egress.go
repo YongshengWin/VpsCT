@@ -95,6 +95,15 @@ func EgressResourceRules(nodes []agentproto.NodeSpec, groups map[int64]string, r
 	for _, g := range protected {
 		match := fmt.Sprintf("socket cgroupv2 level %d %q ct direction original", strings.Count(g.path, "/")+1, g.path)
 		rule := func(expr string) { fmt.Fprintf(&b, "add rule inet ctlvps_egress output %s %s\n", match, expr) }
+		if g.core == "xray" {
+			if g.blocked {
+				rule("drop")
+				continue
+			}
+			// Unlike sing-box, Xray never sets an origin accounting mark.
+			// Do not let an origin socket impersonate a node or forward.
+			rule("meta mark != 0 drop")
+		}
 		for _, raw := range resolvers {
 			ip := net.ParseIP(raw)
 			if ip == nil {
@@ -157,6 +166,8 @@ func (m *Manager) EnsureResourceEgress(ctx context.Context, nodes []agentproto.N
 			if n.AllowPrivate {
 				unit = "ctlvps-singbox-private.service"
 			}
+		} else if n.Core == "xray" {
+			unit = fmt.Sprintf("ctlvps-xray@%d.service", n.ListenPort)
 		} else if n.Core == "mieru" {
 			unit = fmt.Sprintf("ctlvps-mita@%d.service", n.ListenPort)
 		} else if n.Core == "snell" {

@@ -124,6 +124,8 @@ type Diagnostics struct {
 	TransportGrants            []networkconfig.TransportGrant `json:"transport_grants,omitempty"`
 	NetworkSSHVersion          int                            `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion    int                            `json:"network_wireguard_version,omitempty"`
+	TLSTransportVersion        int                            `json:"tls_transport_version,omitempty"`
+	XrayVersion                int                            `json:"xray_version,omitempty"`
 	MitaVersion                int                            `json:"mita_version,omitempty"`
 	NetworkEgressVersion       int                            `json:"network_egress_version,omitempty"`
 	NetworkForwardVersion      int                            `json:"network_forward_version,omitempty"`
@@ -274,6 +276,8 @@ type DesiredState struct {
 	NetworkIngressVersion   int                    `json:"network_ingress_version,omitempty"`
 	NetworkSSHVersion       int                    `json:"network_ssh_version,omitempty"`
 	NetworkWireGuardVersion int                    `json:"network_wireguard_version,omitempty"`
+	TLSTransportVersion     int                    `json:"tls_transport_version,omitempty"`
+	XrayVersion             int                    `json:"xray_version,omitempty"`
 	MitaVersion             int                    `json:"mita_version,omitempty"`
 	NetworkEgressVersion    int                    `json:"network_egress_version,omitempty"`
 	NetworkForwardVersion   int                    `json:"network_forward_version,omitempty"`

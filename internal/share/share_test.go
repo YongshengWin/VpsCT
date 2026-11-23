@@ -78,6 +78,10 @@ func TestShareLifecycle(t *testing.T) {
 	if len(sub.ProxyGroups) != 0 || len(sub.Rules) != 0 {
 		t.Fatalf("share must follow the template, not stock 节点选择: %+v %v", sub.ProxyGroups, sub.Rules)
 	}
+	// The public subscription may include deployed nodes only after the agent's receipt.
+	if err := st.RecordNodeApplications(ctx, srv.ID, rec.Revision, rec.Hash, "applied", nil, 0); err != nil {
+		t.Fatal(err)
+	}
 	// old rows that still have the stock groups must not hide ⚡️ smart
 	sub.ProxyGroups = []domain.ProxyGroup{{Name: "节点选择", Type: "select", IncludeAll: true}}
 	sub.Rules = []string{"MATCH,节点选择"}

@@ -31,7 +31,11 @@ func expandAllTokens(s string, names []string) string {
 			continue
 		}
 		b.WriteString(rest[:i])
-		b.WriteString(strings.Join(expandAllMarkers([]string{tok}, names), ","))
+		expanded := expandAllMarkers([]string{tok}, names)
+		for i, n := range expanded {
+			expanded[i] = surgeIdent(n)
+		}
+		b.WriteString(strings.Join(expanded, ","))
 		rest = rest[j:]
 	}
 	return b.String()
@@ -59,6 +63,11 @@ func mapStr(m map[string]any, k string) string {
 
 // ShadowrocketProxyLine renders one [Proxy] line. Unlike Surge, VLESS/Reality is supported.
 func ShadowrocketProxyLine(p proxynode.Proxy, via string) string {
+	// Native [Proxy] parameters are not share URI or Surge parameters. Do
+	// not publish a bare transport, an unpinned peer or an unobfuscated Hy2.
+	if surgeOnlyFingerprint(p) || p.Str("fingerprint") != "" || p.Type == "vless" && !oneOf(p.Str("network"), "", "tcp", "ws") || p.Type == "hysteria2" && (p.Str("obfs") != "" || p.Str("obfs-password") != "") {
+		return ""
+	}
 	if p.Type != "vless" && p.Type != "snell" {
 		return SurgeProxyLine(p, via)
 	}
@@ -106,12 +115,12 @@ func ShadowrocketProxyLine(p proxynode.Proxy, via string) string {
 		add("obfs", net)
 	}
 	if net == "ws" {
-		if o := p.Sub("ws-opts"); o != nil {
-			add("obfs-uri", mapStr(o, "path"))
-			if h, ok := o["headers"].(map[string]any); ok {
-				add("obfs-host", mapStr(h, "Host"))
-			}
+		path, host, ok := p.BasicWebSocket()
+		if !ok || strings.ContainsAny(path+host, "\r\n\x00\"") {
+			return ""
 		}
+		add("obfs-uri", path)
+		add("obfs-host", host)
 	}
 	addBool("udp-relay", true)
 	add("peer", nonempty(p.Str("servername"), p.Str("sni")))
@@ -140,73 +149,67 @@ func RenderShadowrocket(b *Bundle) (*Rendered, error) {
 	if b.Template != nil && b.Template.Kind == "shadowrocket" && strings.TrimSpace(b.Template.Content) != "" {
 		tpl = b.Template.Content
 	}
+	if !strings.Contains(tpl, "{{PROXIES}}") && len(b.AllProxyNames()) > 0 {
+		return nil, fmt.Errorf("Shadowrocket 模板缺少 {{PROXIES}}，无法写入订阅节点")
+	}
 	var proxyLines []string
-	emitted := map[string]bool{}
-	for _, p := range b.Proxies {
-		if l := ShadowrocketProxyLine(p, ""); l != "" {
-			proxyLines = append(proxyLines, l)
-			emitted[p.Name] = true
+	byName := map[string]string{}
+	b, omitted := projectNodes(b, func(p proxynode.Proxy, via string) bool {
+		line := ShadowrocketProxyLine(p, via)
+		if line == "" {
+			return false
 		}
-	}
-	for _, c := range b.Chains {
-		if c.Via != "" && !emitted[c.Via] {
-			continue
-		}
-		if l := ShadowrocketProxyLine(c.Proxy, c.Via); l != "" {
-			proxyLines = append(proxyLines, l)
-			emitted[c.Proxy.Name] = true
-		}
-	}
+		byName[p.Name] = line
+		return true
+	})
 	allNames := b.AllProxyNames()
+	if len(allNames) == 0 && !b.ValidationOnly && (len(omitted) > 0 || tpl == builtinShadowrocketTemplate || strings.Contains(tpl, "{{all")) {
+		return nil, noRenderPath(FormatShadowrocket)
+	}
+	for _, name := range allNames {
+		proxyLines = append(proxyLines, byName[name])
+	}
+
 	var groupLines []string
 	if len(b.Groups) > 0 {
 		for _, g := range b.Groups {
+			if g.Type == "relay" {
+				return nil, fmt.Errorf("%w：Shadowrocket 无法将 relay 转为选择组", ErrNoRenderPath)
+			}
 			gg := g
-			gg.Proxies = expandAllMarkers(g.Proxies, allNames)
+			if len(g.Proxies) > 0 {
+				gg.Proxies = expandAllMarkers(g.Proxies, allNames)
+			}
 			groupLines = append(groupLines, SurgeGroupLine(gg))
 		}
 	}
 	var ruleLines []string
 	if strings.Contains(tpl, "{{RULES}}") {
+		tplHasFinal := strings.Contains(strings.ToUpper(tpl), "FINAL,")
 		for _, r := range b.Rules {
 			if l := surgeRule(r); l != "" {
 				u := strings.ToUpper(strings.TrimSpace(l))
-				if strings.HasPrefix(u, "FINAL,") || strings.HasPrefix(u, "MATCH,") {
+				if tplHasFinal && (strings.HasPrefix(u, "FINAL,") || strings.HasPrefix(u, "MATCH,")) {
 					continue
 				}
 				ruleLines = append(ruleLines, l)
 			}
 		}
 	}
-	out := tpl
-	out = strings.ReplaceAll(out, "{{PROXIES}}", strings.Join(proxyLines, "\n"))
+	out := expandAllTokens(strings.ReplaceAll(tpl, "{{NAME}}", surgeHeaderName(b.Name)), allNames)
 	if strings.Contains(out, "{{PROXY_GROUPS}}") {
 		out = strings.ReplaceAll(out, "{{PROXY_GROUPS}}", strings.Join(groupLines, "\n"))
 	} else if len(groupLines) > 0 {
-		out = replaceSection(out, "Proxy Group", strings.Join(groupLines, "\n"))
+		out = mergeTextGroups(out, groupLines)
 	}
 	out = strings.ReplaceAll(out, "{{RULES}}", strings.Join(ruleLines, "\n"))
-	out = strings.ReplaceAll(out, "{{NAME}}", surgeHeaderName(b.Name))
-	out = expandAllTokens(out, allNames)
-	return &Rendered{Body: []byte(out), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".conf", Format: FormatShadowrocket}, nil
-}
-
-func replaceSection(src, section, body string) string {
-	tag := "[" + section + "]"
-	i := strings.Index(src, tag)
-	if i < 0 {
-		return strings.TrimRight(src, "\n") + "\n\n" + tag + "\n" + body + "\n"
-	}
-	start := i + len(tag)
-	if start < len(src) && src[start] == '\n' {
-		start++
-	}
-	end := len(src)
-	for k := start; k < len(src); k++ {
-		if src[k] == '[' && (k == 0 || src[k-1] == '\n') {
-			end = k
-			break
+	out = strings.ReplaceAll(out, "{{PROXIES}}", strings.Join(proxyLines, "\n"))
+	if !b.ValidationOnly {
+		var err error
+		out, err = checkTextPolicies(out, omitted, allNames)
+		if err != nil {
+			return nil, err
 		}
 	}
-	return src[:start] + body + "\n" + src[end:]
+	return &Rendered{EmittedNames: allNames, Body: []byte(out), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".conf", Format: FormatShadowrocket}, nil
 }

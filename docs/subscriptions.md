@@ -14,6 +14,7 @@ SSH、WireGuard、Mieru 提供结构化客户端参数编辑。SSH 使用密码�
 
 | 协议 | 当前输出与注意事项 |
 |---|---|
+| VLESS / Trojan 普通 TLS | TCP、WebSocket、gRPC 的 Mihomo、sing-box、明文 URI 和 Base64 输出分别保留传输及证书校验。WebSocket 保留路径和独立 HTTP Host，gRPC 保留服务名。 |
 | SSH | Mihomo、sing-box outbound；仅 TCP，不生成通用分享 URI |
 | WireGuard | Mihomo、sing-box endpoint、可等价表达时的标准 WireGuard 配置；原生客户端运行验收另行记录 |
 | Mieru | Mihomo 配置；服务端由 mita 部署，sing-box 不输出不支持的 Mieru 节点 |
@@ -22,6 +23,10 @@ SSH、WireGuard、Mieru 提供结构化客户端参数编辑。SSH 使用密码�
 | Shadowrocket 的 VLESS REALITY | 使用原生 pbk、sid、fp 字段 |
 
 协议被过滤时，相应组引用也需要有效；不能靠伪造版本或生成不等价字段让客户端导入。界面只展示该节点可用的配置片段，不为没有通用 URI 的协议生成空二维码。客户端支持范围以相应渲染器和实际验证为准。
+
+普通 Surge 链接使用兼容档。需要 VLESS 时，可显式选择「Surge（iOS 6.1+ / Mac 6.13+）」并按完整托管配置载入。链接、预览和托管更新使用同一 `profile=surge-vless`；客户端版本未知时不会自动进入此档。版本验证范围见 [v0.1.9 发布说明](releases/v0.1.9.md)。
+
+现代 Surge 档可表达 VLESS WS/gRPC；普通档保留 Trojan WS。Trojan gRPC 在两个 Surge 档都过滤。Shadowrocket 原生配置暂不输出 gRPC；可按客户端实际能力选择 URI 或 Base64。各格式会剔除不能完整导出的入口；可用入口数见订阅预览。
 
 ### 1.2 外部订阅信息项
 

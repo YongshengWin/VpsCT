@@ -2,6 +2,8 @@ package proxynode
 
 import (
 	"encoding/base64"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -146,5 +148,133 @@ func TestDedupeNames(t *testing.T) {
 	list := DedupeNames([]Proxy{{Name: "a"}, {Name: "a"}, {Name: "a"}, {Name: "b"}})
 	if list[0].Name != "a" || list[1].Name != "a 2" || list[2].Name != "a 3" || list[3].Name != "b" {
 		t.Fatalf("%+v", list)
+	}
+}
+
+// Check the public paths used by single-node creation, bulk paste and external
+// sync, including the JSON representation actually handed to storage.
+func importLink(t *testing.T, link string) Proxy {
+	t.Helper()
+	p, err := ParseURI(link)
+	if err != nil {
+		t.Fatalf("single import: %v", err)
+	}
+	for _, text := range []string{link, base64.StdEncoding.EncodeToString([]byte(link))} {
+		r := ParseAny(text)
+		if len(r.Errors) != 0 || len(r.Proxies) != 1 || !reflect.DeepEqual(r.Proxies[0], p) {
+			t.Fatalf("batch mismatch: %v", r.Errors)
+		}
+	}
+	return p
+}
+
+func TestPublicALPNImports(t *testing.T) {
+	for _, tc := range []struct {
+		name, link string
+		want       []string
+	}{
+		{"vless", "vless://id@edge.test:443?security=tls&alpn=h2,http/1.1", []string{"h2", "http/1.1"}},
+		{"trojan", "trojan://p@edge.test:443?alpn=h2,http/1.1", []string{"h2", "http/1.1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := importLink(t, tc.link)
+			if _, ok := p.Params["alpn"].([]any); !ok || !reflect.DeepEqual(p.StrList("alpn"), tc.want) || p.Port != 443 {
+				t.Fatal("wrong ALPN/port")
+			}
+			stored := FromDomain(p.ToDomain())
+			uri, err := ToURI(stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			back := importLink(t, uri)
+			if !reflect.DeepEqual(back.ToDomain().Params, p.ToDomain().Params) {
+				t.Fatal("parameters lost after storage and URI round trip")
+			}
+		})
+	}
+}
+
+func TestXHTTPClashAndURI(t *testing.T) {
+	const doc = `proxies:
+  - {name: fixture, type: vless, server: edge.test, port: 443, uuid: id, network: xhttp, xhttp-opts: {path: /rpc, host: cdn.test, mode: stream-up}}`
+	r := ParseAny(doc)
+	if len(r.Proxies) != 1 || len(r.Errors) != 0 {
+		t.Fatal(r.Errors)
+	}
+	p := FromDomain(r.Proxies[0].ToDomain())
+	want := map[string]any{"path": "/rpc", "host": "cdn.test", "mode": "stream-up"}
+	if !reflect.DeepEqual(p.ClashMap()["xhttp-opts"], want) {
+		t.Fatal("YAML lost XHTTP fields")
+	}
+	out, err := ToURI(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back := importLink(t, out)
+	if !reflect.DeepEqual(back.Sub("xhttp-opts"), want) {
+		t.Fatal("URI lost XHTTP fields")
+	}
+	for _, bad := range []string{"extra: {unknown: value}", "path: [wrong]", "mode: bogus", "unknown: x"} {
+		r := ParseAny(strings.Replace(doc, "path: /rpc, host: cdn.test, mode: stream-up", bad, 1))
+		if len(r.Proxies) != 0 || len(r.Errors) != 1 {
+			t.Fatalf("accepted unsupported XHTTP option %s", bad)
+		}
+	}
+}
+
+func importLinkSurge(t *testing.T, line string) Proxy {
+	t.Helper()
+	p, err := ParseURI(line)
+	r := ParseAny(line)
+	if err != nil || len(r.Errors) != 0 || len(r.Proxies) != 1 || !reflect.DeepEqual(r.Proxies[0], p) {
+		t.Fatal("Surge parse failed")
+	}
+	return p
+}
+
+func TestRejectDanglingURIAndPreserveStructuredVia(t *testing.T) {
+	for _, link := range []string{"http://edge.test:80?dialer-proxy=front", "vless://id@edge.test:443?type=xhttp&underlying-proxy=front"} {
+		if _, err := ParseURI(link); !errors.Is(err, ErrUnsupported) {
+			t.Fatal("URI discarded a required front")
+		}
+	}
+	if _, err := ParseSurgeLine("node = trojan, edge.test, 443, password=fixture, underlying-proxy=one, dialer-proxy=two"); err == nil {
+		t.Fatal("accepted conflicting front proxies")
+	}
+	p, err := ParseSurgeLine(`Node = https, edge.test, 443, underlying-proxy="Front, One"`)
+	if err != nil || p.Str("dialer-proxy") != "Front, One" {
+		t.Fatal("Surge chain reference lost")
+	}
+	p, err = FromClashMap(p.ClashMap())
+	if err != nil || p.Str("dialer-proxy") != "Front, One" {
+		t.Fatal("YAML chain reference lost")
+	}
+	if _, err = ToURI(p); !errors.Is(err, ErrUnsupported) {
+		t.Fatal("node link unexpectedly bypassed the front proxy")
+	}
+}
+
+func TestBasicTLSLinksRejectUnrepresentableHandshake(t *testing.T) {
+	for _, prefix := range []string{"vless://fixture@node.example.test:443?security=tls&", "trojan://fixture@node.example.test:443?security=tls&"} {
+		for _, q := range []string{"type=grpc&mode=multi", "type=grpc&authority=another.example.test", "type=grpc&serviceName=one&serviceName=two", "type=ws&pcs=fixture", "type=xhttp&pcs=fixture", "type=xhttp&extra=%7B%7D", "type=ws&allowInsecure=true&insecure=false", "type=tcp&serviceName=unexpected"} {
+			if _, err := ParseURI(prefix + q); !errors.Is(err, ErrUnsupported) {
+				t.Fatalf("lossy import accepted: %s: %v", q, err)
+			}
+		}
+		p := importLink(t, prefix+"type=grpc&mode=gun&serviceName=Fixture.Transport")
+		p.Sub("grpc-opts")["authority"] = "another.example.test"
+		if _, err := ToURI(p); !errors.Is(err, ErrUnsupported) {
+			t.Fatal("lost gRPC authority")
+		}
+		delete(p.Sub("grpc-opts"), "authority")
+		p.Params["fingerprint"] = strings.Repeat("ab", 32)
+		if _, err := ToURI(p); !errors.Is(err, ErrUnsupported) {
+			t.Fatal("lost certificate pin")
+		}
+	}
+	for _, suffix := range []string{"grpc=true, grpc-service-name=Fixture", "ws-headers=Host:route.example.test", "ws=true, ws-headers=Other:custom", "server-cert-fingerprint-sha256=fixture"} {
+		if _, err := ParseSurgeLine("f = trojan, node.example.test, 443, password=fixture, " + suffix); err == nil {
+			t.Fatal("unrepresentable native Trojan accepted")
+		}
 	}
 }

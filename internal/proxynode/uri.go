@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -17,20 +18,46 @@ var ErrUnsupported = errors.New("unsupported share link")
 // ParseURI parses one share link (ss://, vmess://, vless://, trojan://,
 // hysteria2://, hy2://, tuic://, anytls://, snell://, socks5://, http://).
 func ParseURI(raw string) (Proxy, error) {
+	if len(raw) > 16<<20 {
+		return Proxy{}, errors.New("节点链接过大")
+	}
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return Proxy{}, errors.New("empty link")
 	}
-	if !strings.Contains(raw, "://") {
-		if looksLikeSurgeLine(raw) {
-			return ParseSurgeLine(raw)
-		}
-		return Proxy{}, ErrUnsupported
+	if looksLikeSurgeLine(raw) {
+		return ParseSurgeLine(raw)
 	}
 	idx := strings.Index(raw, "://")
 	if idx < 0 {
 		return Proxy{}, ErrUnsupported
 	}
+	beforeFragment, _, _ := strings.Cut(raw, "#")
+	if _, query, ok := strings.Cut(beforeFragment, "?"); ok {
+		values, err := url.ParseQuery(query)
+		if err != nil {
+			return Proxy{}, errors.New("节点查询参数无效")
+		}
+		if values.Has("dialer-proxy") || values.Has("underlying-proxy") {
+			return Proxy{}, unsupported("单节点链接不能表示前置代理")
+		}
+	}
+	p, err := parseLink(raw, idx)
+	if errors.Is(err, ErrUnsupported) {
+		return Proxy{}, err
+	}
+	if err != nil {
+		return Proxy{}, errors.New("节点链接格式或选项无效")
+	}
+	if p.Type == "vless" || p.Type == "trojan" {
+		if err := validateProxy(p); err != nil {
+			return Proxy{}, err
+		}
+	}
+	return p, nil
+}
+
+func parseLink(raw string, idx int) (Proxy, error) {
 	scheme := strings.ToLower(raw[:idx])
 	switch scheme {
 	case "ss":
@@ -54,7 +81,7 @@ func ParseURI(raw string) (Proxy, error) {
 	case "http", "https":
 		return parseHTTP(raw)
 	}
-	return Proxy{}, fmt.Errorf("%w: %s", ErrUnsupported, scheme)
+	return Proxy{}, ErrUnsupported
 }
 
 func decodeB64(s string) ([]byte, error) {
@@ -70,9 +97,6 @@ func decodeB64(s string) ([]byte, error) {
 
 func fragmentName(u *url.URL, fallback string) string {
 	if u.Fragment != "" {
-		if n, err := url.QueryUnescape(u.Fragment); err == nil {
-			return strings.TrimSpace(n)
-		}
 		return u.Fragment
 	}
 	return fallback
@@ -318,20 +342,40 @@ func parseVMess(raw string) (Proxy, error) {
 	return p, nil
 }
 
+func unsupported(reason string) error { return fmt.Errorf("%w: %s", ErrUnsupported, reason) }
+
+func strictBool(s string) (bool, error) {
+	switch strings.ToLower(s) {
+	case "1", "true", "on", "yes":
+		return true, nil
+	case "0", "false", "off", "no":
+		return false, nil
+	}
+	return false, errors.New("布尔参数无效")
+}
+
 // applyTransport maps the shared type/path/host/serviceName query params of
 // vless/trojan links onto Clash network options.
-func applyTransport(p *Proxy, u *url.URL) {
+func applyTransport(p *Proxy, u *url.URL) error {
 	network := q(u, "type")
+	// These TLS links do not have a generic extension bag: e.g. dropping
+	// authority, multi-stream gRPC, or a certificate pin changes the peer.
+	switch network {
+	case "", "tcp", "grpc", "ws", "xhttp", "splithttp":
+		if err := checkBasicTransportURI(p, u, network); err != nil {
+			return err
+		}
+	}
 	switch network {
 	case "", "tcp":
 		if q(u, "headerType") == "http" {
 			p.Params["network"] = "http"
 			opts := map[string]any{}
 			if pa := q(u, "path"); pa != "" {
-				opts["path"] = strings.Split(pa, ",")
+				opts["path"] = splitList(pa)
 			}
 			if h := q(u, "host"); h != "" {
-				opts["headers"] = map[string]any{"Host": strings.Split(h, ",")}
+				opts["headers"] = map[string]any{"Host": splitList(h)}
 			}
 			p.Params["http-opts"] = opts
 		}
@@ -359,7 +403,7 @@ func applyTransport(p *Proxy, u *url.URL) {
 			opts["path"] = pa
 		}
 		if h := q(u, "host"); h != "" {
-			opts["host"] = strings.Split(h, ",")
+			opts["host"] = splitList(h)
 		}
 		p.Params["h2-opts"] = opts
 	case "xhttp", "splithttp":
@@ -378,6 +422,72 @@ func applyTransport(p *Proxy, u *url.URL) {
 	default:
 		p.Params["network"] = network
 	}
+	return nil
+}
+
+func checkBasicTransportURI(p *Proxy, u *url.URL, network string) error {
+	v := u.Query()
+	allowed := strings.Fields("type security")
+	if p.Type == "vless" {
+		allowed = append(allowed, "encryption", "flow", "packetEncoding", "packet-encoding")
+	}
+	switch network {
+	case "xhttp", "splithttp":
+		allowed = append(allowed, "path", "host", "mode")
+	case "ws":
+		allowed = append(allowed, "path", "host", "ed")
+		if v.Has("ed") {
+			n, err := strconv.ParseUint(v.Get("ed"), 10, 31)
+			if err != nil || n == 0 {
+				return unsupported("无效的 WS early data")
+			}
+		}
+	case "grpc":
+		allowed = append(allowed, "serviceName", "mode")
+		if mode := v.Get("mode"); mode != "" && mode != "gun" {
+			return unsupported("不能无损表示此 gRPC 模式")
+		}
+	default:
+		allowed = append(allowed, "headerType")
+		if v.Get("headerType") == "http" {
+			allowed = append(allowed, "path", "host")
+		} else if s := v.Get("headerType"); s != "" && s != "none" {
+			return unsupported("不支持此 TCP 请求头类型")
+		}
+	}
+	sec := v.Get("security")
+	enabled := sec == "tls" || sec == "reality" || sec == "" && p.Type == "trojan"
+	if !enabled && (p.Type == "trojan" || sec != "" && sec != "none") {
+		return unsupported("不能无损表示此安全层")
+	}
+	if enabled {
+		allowed = append(allowed, "sni", "peer", "fp", "alpn", "allowInsecure", "insecure", "skip-cert-verify")
+	}
+	if sec == "reality" {
+		allowed = append(allowed, "pbk", "sid")
+		if v.Get("pbk") == "" {
+			return unsupported("REALITY 缺少公钥")
+		}
+	}
+	for k, values := range v {
+		if len(values) != 1 || !slices.Contains(allowed, k) {
+			return unsupported("链接含未知、重复或与传输不符的选项")
+		}
+	}
+	var insecure *bool
+	for _, key := range []string{"allowInsecure", "insecure", "skip-cert-verify"} {
+		if v.Has(key) {
+			b, err := strictBool(v.Get(key))
+			if err != nil || insecure != nil && *insecure != b || b && sec == "reality" {
+				return unsupported("证书校验选项无效或冲突")
+			}
+			insecure = &b
+		}
+	}
+	if v.Has("sni") && v.Has("peer") && v.Get("sni") != v.Get("peer") {
+		return unsupported("SNI 选项冲突")
+	}
+	return nil
 }
 
 func applyTLS(p *Proxy, u *url.URL, defaultOn bool) {
@@ -402,7 +512,7 @@ func applyTLS(p *Proxy, u *url.URL, defaultOn bool) {
 		p.Set("servername", q(u, "sni", "peer"))
 		p.Set("client-fingerprint", q(u, "fp"))
 		if alpn := q(u, "alpn"); alpn != "" {
-			p.Params["alpn"] = strings.Split(alpn, ",")
+			p.Params["alpn"] = splitList(alpn)
 		}
 		if toBool(q(u, "allowInsecure", "insecure", "skip-cert-verify")) {
 			p.Params["skip-cert-verify"] = true
@@ -431,7 +541,9 @@ func parseVLESS(raw string) (Proxy, error) {
 		p.Params["encryption"] = enc
 	}
 	applyTLS(&p, u, false)
-	applyTransport(&p, u)
+	if err := applyTransport(&p, u); err != nil {
+		return p, err
+	}
 	if pf := q(u, "packetEncoding", "packet-encoding"); pf != "" {
 		p.Params["packet-encoding"] = pf
 	}
@@ -450,7 +562,7 @@ func parseTrojan(raw string) (Proxy, error) {
 		return p, fmt.Errorf("trojan: %v", err)
 	}
 	pw := u.User.Username()
-	if pass, ok := u.User.Password(); ok && pass != "" {
+	if pass, ok := u.User.Password(); ok {
 		pw = pw + ":" + pass
 	}
 	if pw == "" {
@@ -465,7 +577,9 @@ func parseTrojan(raw string) (Proxy, error) {
 		delete(p.Params, "servername")
 	}
 	delete(p.Params, "tls")
-	applyTransport(&p, u)
+	if err := applyTransport(&p, u); err != nil {
+		return p, err
+	}
 	p.Name = fragmentName(u, p.HostPort())
 	return p, nil
 }

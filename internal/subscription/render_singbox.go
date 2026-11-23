@@ -15,6 +15,22 @@ import (
 // SingBoxOutbound converts a proxy into a sing-box client outbound. ok=false
 // when the protocol has no sing-box outbound (e.g. snell).
 func SingBoxOutbound(p proxynode.Proxy, via string) (map[string]any, bool) {
+	// Stock sing-box has no XHTTP transport, SOCKS TLS wrapper, or
+	// whole-certificate SHA-256 pin (its public-key pin is not equivalent).
+	if ambiguousSimpleTLS(p) || surgeOnlyFingerprint(p) || p.Str("fingerprint") != "" || p.Type == "socks5" && (p.Bool("tls") || p.Bool("remote-dns-resolve") || p.Params["headers"] != nil) || p.Type == "vless" && !oneOf(p.Str("encryption"), "", "none") || p.Type == "tuic" && !isTUICv5(p) {
+		return nil, false
+	}
+	if p.Type == "http" && (p.Params["headers"] != nil || p.Str("servername") != "" && p.Str("servername") != p.Str("sni")) || p.Type == "tuic" && p.Bool("disable-sni") {
+		return nil, false
+	}
+	if oneOf(p.Type, "vmess", "vless", "trojan") && !oneOf(p.Str("network"), "", "tcp", "ws", "httpupgrade", "grpc", "h2", "http") {
+		return nil, false
+	}
+	if p.Str("network") == "grpc" {
+		if _, ok := p.BasicGRPCService(); !ok {
+			return nil, false
+		}
+	}
 	o := map[string]any{"tag": p.Name, "server": p.Server, "server_port": p.Port}
 	tls := func(serverNameKey string, force bool) map[string]any {
 		if !force && !p.Bool("tls") {
@@ -54,12 +70,10 @@ func SingBoxOutbound(p proxynode.Proxy, via string) (map[string]any, bool) {
 					tr["path"] = path
 				}
 				if h, ok := wo["headers"].(map[string]any); ok {
-					if host := fmt.Sprint(h["Host"]); host != "" && host != "<nil>" {
-						if tr["type"] == "ws" {
-							tr["headers"] = map[string]any{"Host": host}
-						} else {
-							tr["host"] = host
-						}
+					if tr["type"] == "ws" {
+						tr["headers"] = h
+					} else if host := mapStr(h, "Host"); host != "" {
+						tr["host"] = host
 					}
 				}
 				if ed, ok := wo["max-early-data"]; ok {
@@ -416,39 +430,58 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 	var nodeEndpoints []map[string]any
 	knownTags := map[string]bool{"direct": true}
 	var nodeTags []string
-	for _, p := range b.Proxies {
-		if ep, ok := SingBoxEndpoint(p, ""); ok {
-			nodeEndpoints = append(nodeEndpoints, ep)
-			nodeTags = append(nodeTags, p.Name)
-			knownTags[p.Name] = true
-			continue
-		}
-		if o, ok := SingBoxOutbound(p, ""); ok {
-			nodeOutbounds = append(nodeOutbounds, o)
-			nodeTags = append(nodeTags, p.Name)
-			knownTags[p.Name] = true
-		}
+	if doc == nil {
+		return nil, fmt.Errorf("sing-box 模板必须为 JSON 对象")
 	}
-	for _, c := range b.Chains {
-		if ep, ok := SingBoxEndpoint(c.Proxy, c.Via); ok && knownTags[c.Via] {
-			nodeEndpoints = append(nodeEndpoints, ep)
-			nodeTags = append(nodeTags, c.Proxy.Name)
-			knownTags[c.Proxy.Name] = true
-			continue
+	outByName, epByName := map[string]map[string]any{}, map[string]map[string]any{}
+	b, omitted := projectNodes(b, func(p proxynode.Proxy, via string) bool {
+		if ep, ok := SingBoxEndpoint(p, via); ok {
+			epByName[p.Name] = ep
+			return true
 		}
-		if o, ok := SingBoxOutbound(c.Proxy, c.Via); ok && knownTags[c.Via] {
-			nodeOutbounds = append(nodeOutbounds, o)
-			nodeTags = append(nodeTags, c.Proxy.Name)
-			knownTags[c.Proxy.Name] = true
+		if o, ok := SingBoxOutbound(p, via); ok {
+			outByName[p.Name] = o
+			return true
 		}
+		return false
+	})
+	nodeTags = b.AllProxyNames()
+	if len(nodeTags) == 0 && !b.ValidationOnly && (len(omitted) > 0 || b.Template == nil && len(b.Groups) == 0) {
+		return nil, noRenderPath(FormatSingBox)
 	}
-	groups := b.Groups
-	if len(groups) == 0 {
-		if extracted := extractTemplateGroups(doc, nodeTags); len(extracted) > 0 {
-			groups = extracted
+	for _, name := range nodeTags {
+		knownTags[name] = true
+		if ep := epByName[name]; ep != nil {
+			nodeEndpoints = append(nodeEndpoints, ep)
 		} else {
-			groups = []domain.ProxyGroup{{Name: "PROXY", Type: "select", Proxies: nodeTags}}
+			nodeOutbounds = append(nodeOutbounds, outByName[name])
 		}
+	}
+	groups := append([]domain.ProxyGroup(nil), b.Groups...)
+	existingGroups := map[string]bool{}
+	for _, g := range groups {
+		existingGroups[g.Name] = true
+	}
+	for _, g := range extractTemplateGroups(doc, nodeTags, b.ValidationOnly) {
+		if !existingGroups[g.Name] {
+			groups = append(groups, g)
+		}
+	}
+	// Include actual system and endpoint tags when checking selectors.
+	for _, key := range []string{"outbounds", "endpoints"} {
+		list, _ := doc[key].([]any)
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok {
+				typ, _ := m["type"].(string)
+				tag, _ := m["tag"].(string)
+				if tag != "" && (key == "endpoints" || oneOf(typ, "direct", "block", "dns")) {
+					knownTags[tag] = true
+				}
+			}
+		}
+	}
+	if len(groups) == 0 && (len(nodeTags) > 0 || b.ValidationOnly) {
+		groups = []domain.ProxyGroup{{Name: "PROXY", Type: "select", Proxies: nodeTags}}
 	}
 	for _, g := range groups {
 		knownTags[g.Name] = true
@@ -456,6 +489,9 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 	var groupOutbounds []map[string]any
 	for _, g := range groups {
 		var members []string
+		if g.Type == "relay" {
+			return nil, fmt.Errorf("%w：sing-box 无法将 relay 转为选择组", ErrNoRenderPath)
+		}
 		for _, m := range g.Proxies {
 			switch m {
 			case "DIRECT":
@@ -465,10 +501,15 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 			default:
 				if knownTags[m] {
 					members = append(members, m)
+				} else if !omitted[m] && !b.ValidationOnly {
+					return nil, fmt.Errorf("%w：sing-box 代理组引用不可用的策略 %q", ErrNoRenderPath, m)
 				}
 			}
 		}
 		if len(members) == 0 {
+			if !b.ValidationOnly {
+				return nil, fmt.Errorf("%w：sing-box 代理组 %q 没有可用成员", ErrNoRenderPath, g.Name)
+			}
 			members = []string{"direct"}
 		}
 		o := map[string]any{"tag": g.Name, "outbounds": members}
@@ -498,8 +539,14 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 			}
 		}
 	}
-	if len(sys) == 0 {
-		sys = []any{map[string]any{"type": "direct", "tag": "direct"}}
+	hasDirect := false
+	for _, v := range sys {
+		if v.(map[string]any)["tag"] == "direct" {
+			hasDirect = true
+		}
+	}
+	if !hasDirect {
+		sys = append(sys, map[string]any{"type": "direct", "tag": "direct"})
 	}
 	outbounds := make([]any, 0, len(groupOutbounds)+len(nodeOutbounds)+len(sys))
 	for _, g := range groupOutbounds {
@@ -515,7 +562,7 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 		var merged []any
 		for _, raw := range existing {
 			ep, ok := raw.(map[string]any)
-			if ok && !knownTags[fmt.Sprint(ep["tag"])] {
+			if ok && epByName[fmt.Sprint(ep["tag"])] == nil {
 				merged = append(merged, ep)
 			}
 		}
@@ -537,6 +584,12 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 			}
 		}
 	}
+	for _, r := range b.Rules {
+		target := rulePolicy(r)
+		if target != "" && !oneOf(target, "DIRECT", "REJECT", "REJECT-DROP") && !knownTags[target] && !b.ValidationOnly {
+			return nil, fmt.Errorf("%w：sing-box 规则引用不可用的策略 %q", ErrNoRenderPath, target)
+		}
+	}
 	converted, final, addedSets := singboxRules(b.Rules, knownTags, ruleSets)
 	if len(addedSets) > 0 {
 		list, _ := route["rule_set"].([]any)
@@ -545,15 +598,20 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 		}
 		route["rule_set"] = list
 	}
-	fallback := "direct"
-	if len(groups) > 0 {
-		fallback = groups[0].Name
+	if err := validateDNSDetours(doc, knownTags); err != nil && !b.ValidationOnly {
+		return nil, err
 	}
-	rewriteDNSDetours(doc, knownTags, fallback)
 
 	var existing []any
 	if list, ok := route["rules"].([]any); ok {
-		existing = filterKnownOutbounds(list, knownTags)
+		existing = list
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok {
+				if target, _ := m["outbound"].(string); target != "" && !knownTags[target] && !b.ValidationOnly {
+					return nil, fmt.Errorf("%w：sing-box 模板规则引用不可用的策略 %q", ErrNoRenderPath, target)
+				}
+			}
+		}
 	}
 	for _, r := range converted {
 		existing = append(existing, r)
@@ -564,17 +622,23 @@ func RenderSingBox(b *Bundle) (*Rendered, error) {
 	} else if _, ok := route["final"]; !ok && len(groups) > 0 {
 		route["final"] = groups[0].Name
 	}
+	if target, _ := route["final"].(string); target != "" && !knownTags[target] && !b.ValidationOnly {
+		return nil, fmt.Errorf("%w：sing-box final 引用不可用的策略 %q", ErrNoRenderPath, target)
+	}
+	if len(nodeTags) == 0 && len(groups) == 0 && !b.ValidationOnly && route["final"] != "direct" {
+		return nil, noRenderPath(FormatSingBox)
+	}
 	doc["route"] = route
 	body, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return nil, err
 	}
-	return &Rendered{Body: body, ContentType: "application/json; charset=utf-8", Filename: b.Name + ".json", Format: FormatSingBox}, nil
+	return &Rendered{EmittedNames: nodeTags, Body: body, ContentType: "application/json; charset=utf-8", Filename: b.Name + ".json", Format: FormatSingBox}, nil
 }
 
 // extractTemplateGroups turns selector/urltest outbounds in the skeleton into
 // groups and expands {{all}} / {{all|regex}} against generated node tags.
-func extractTemplateGroups(doc map[string]any, allNames []string) []domain.ProxyGroup {
+func extractTemplateGroups(doc map[string]any, allNames []string, validationOnly bool) []domain.ProxyGroup {
 	list, ok := doc["outbounds"].([]any)
 	if !ok {
 		return nil
@@ -602,16 +666,24 @@ func extractTemplateGroups(doc map[string]any, allNames []string) []domain.Proxy
 				names = append(names, fmt.Sprint(o))
 			}
 		}
-		g.Proxies = expandAllMarkers(names, allNames)
+		if len(allNames) == 0 && !validationOnly {
+			for _, n := range names {
+				if !allMarker.MatchString(n) {
+					g.Proxies = append(g.Proxies, n)
+				}
+			}
+		} else {
+			g.Proxies = expandAllMarkers(names, allNames)
+		}
 		out = append(out, g)
 	}
 	return out
 }
 
-func rewriteDNSDetours(doc map[string]any, knownTags map[string]bool, fallback string) {
+func validateDNSDetours(doc map[string]any, knownTags map[string]bool) error {
 	dns, ok := doc["dns"].(map[string]any)
 	if !ok {
-		return
+		return nil
 	}
 	servers, _ := dns["servers"].([]any)
 	for _, s := range servers {
@@ -623,23 +695,7 @@ func rewriteDNSDetours(doc map[string]any, knownTags map[string]bool, fallback s
 		if d == "" || d == "direct" || knownTags[d] {
 			continue
 		}
-		m["detour"] = fallback
+		return fmt.Errorf("%w：sing-box DNS 引用不可用的策略 %q", ErrNoRenderPath, d)
 	}
-}
-
-func filterKnownOutbounds(rules []any, knownTags map[string]bool) []any {
-	kept := make([]any, 0, len(rules))
-	for _, item := range rules {
-		m, ok := item.(map[string]any)
-		if !ok {
-			kept = append(kept, item)
-			continue
-		}
-		ob, _ := m["outbound"].(string)
-		if ob != "" && ob != "direct" && ob != "reject" && !knownTags[ob] {
-			continue
-		}
-		kept = append(kept, item)
-	}
-	return kept
+	return nil
 }

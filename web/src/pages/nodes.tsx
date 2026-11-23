@@ -501,7 +501,7 @@ export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | 
   const [confirmRegen, setConfirmRegen] = React.useState(false);
   const [showQR, setShowQR] = React.useState(true);
  const [trafficDays,setTrafficDays]=React.useState(30);
-  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash: Record<string, unknown>; surge: string; wireguard?: string; singbox?: Record<string, unknown>; singbox_endpoint?: Record<string, unknown> }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node && node.ipv6_ingress_ready !== false });
+  const uri = useQuery({ queryKey: ["nodes", node?.id, "uri"], queryFn: () => get<{ uri: string; clash?: Record<string, unknown>; surge: string; wireguard?: string; singbox?: Record<string, unknown>; singbox_endpoint?: Record<string, unknown> }>(`/api/v1/nodes/${node!.id}/uri`), enabled: !!node && node.ipv6_ingress_ready !== false });
   const traffic = useQuery({ queryKey: ["nodes", node?.id, "traffic",trafficDays], queryFn: () => get<Series>(`/api/v1/nodes/${node!.id}/traffic?days=${trafficDays}`), refetchInterval:30000, enabled: !!node && node.source === "deployed" });
   const delM = useMutation({ mutationFn: () => del(`/api/v1/nodes/${node!.id}`), onSuccess: () => { toast.success("已删除"); qc.invalidateQueries({ queryKey: ["nodes"] }); qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (e) => toast.fromError(e) });
   const regen = useMutation({ mutationFn: () => post(`/api/v1/nodes/${node!.id}/regenerate`), onSuccess: () => { toast.success("凭据已重置，订阅将自动更新"); setConfirmRegen(false); qc.invalidateQueries({ queryKey: ["nodes"] }); }, onError: (e) => toast.fromError(e) });
@@ -551,8 +551,8 @@ export function NodeDetailDialog({ node: initialNode, onClose }: { node: Node | 
           <div className="space-y-3">
             {uri.data && (
               <div>
-                <div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{["ssh", "wireguard", "mieru"].includes(node.protocol) ? "mihomo" : "Clash / mihomo"}</span><Button size="sm" variant="ghost" onClick={async () => { await copyText(JSON.stringify(uri.data!.clash, null, 2)); toast.success("已复制"); }}><Copy className="h-4 w-4" /></Button></div>
-                <Pre className="max-h-64">{JSON.stringify(uri.data.clash, null, 2)}</Pre>
+                {uri.data.clash && <><div className="mb-1 flex items-center justify-between"><span className="text-xs font-medium text-muted-foreground">{["ssh", "wireguard", "mieru"].includes(node.protocol) ? "mihomo" : "Clash / mihomo"}</span><Button size="sm" variant="ghost" onClick={async () => { await copyText(JSON.stringify(uri.data!.clash, null, 2)); toast.success("已复制"); }}><Copy className="h-4 w-4" /></Button></div>
+                <Pre className="max-h-64">{JSON.stringify(uri.data.clash, null, 2)}</Pre></>}
                 {uri.data.wireguard && <div className="mt-3"><div className="mb-1 flex items-center justify-between"><span className="text-xs text-muted-foreground">标准 WireGuard 配置</span><Button size="sm" variant="ghost" onClick={async () => {await copyText(uri.data!.wireguard!);toast.success("已复制");}}><Copy className="h-4 w-4" /></Button></div><Pre className="max-h-64">{uri.data.wireguard}</Pre></div>}
                 {(uri.data.singbox || uri.data.singbox_endpoint) && <div className="mt-3"><span className="text-xs text-muted-foreground">{uri.data.singbox_endpoint ? "sing-box 1.11+ endpoint" : "sing-box outbound"}</span><Pre className="max-h-64">{JSON.stringify(uri.data.singbox_endpoint ?? uri.data.singbox,null,2)}</Pre></div>}
               </div>

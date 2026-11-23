@@ -109,25 +109,28 @@ func TestRenderMihomoFiltersUnsupportedSnell(t *testing.T) {
 				b.Rules = nil
 				b.Template = &domain.RuleTemplate{Kind: "mihomo", Content: "proxy-groups:\n  - name: selection\n    type: select\n    proxies: [unsupported, dependent-one, dependent-two, unsupported-chain]\n  - name: all\n    type: select\n    proxies: ['{{all}}']\nrules: ['DOMAIN,example.com,unsupported', 'MATCH,selection']\n"}
 			}
+			if r, err := RenderMihomo(b); err == nil || r != nil {
+				t.Fatal("a rule/group with only omitted paths must not become DIRECT")
+			}
+			// With a healthy member, partial compatibility is useful and safe.
+			if templateGroups {
+				b.Template.Content = strings.ReplaceAll(b.Template.Content, "[unsupported,", "['TW SS', unsupported,")
+				b.Template.Content = strings.ReplaceAll(b.Template.Content, "DOMAIN,example.com,unsupported", "DOMAIN,example.com,selection")
+			} else {
+				b.Groups[0].Proxies = append(b.Groups[0].Proxies, "TW SS")
+				b.Rules = []string{"MATCH,selection"}
+			}
 			r, err := RenderMihomo(b)
 			if err != nil {
 				t.Fatal(err)
 			}
 			for _, name := range []string{"unsupported", "dependent-one", "dependent-two", "unsupported-chain"} {
 				if strings.Contains(string(r.Body), name) {
-					t.Fatalf("dangling reference to %s: %s", name, r.Body)
+					t.Fatalf("dangling reference: %s", name)
 				}
 			}
-			var doc map[string]any
-			if err := yaml.Unmarshal(r.Body, &doc); err != nil {
-				t.Fatal(err)
-			}
-			if len(doc["proxies"].([]any)) != 6 {
+			if len(r.EmittedNames) != 6 {
 				t.Fatal("compatible nodes were removed")
-			}
-			members := doc["proxy-groups"].([]any)[0].(map[string]any)["proxies"].([]any)
-			if len(members) != 1 || members[0] != "DIRECT" {
-				t.Fatalf("empty group fallback: %v", members)
 			}
 			if len(b.Proxies) != 6 || len(b.Chains) != 4 || b.Proxies[5].Int("version") != 6 {
 				t.Fatal("render mutated source bundle")
@@ -242,7 +245,7 @@ func TestRenderRawAndSurge(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(dec)), "\n")
-	if len(lines) != 1+5+1 || !strings.HasPrefix(lines[1], "vless://") || !strings.HasPrefix(lines[3], "snell://") {
+	if len(lines) != 1+5 || strings.Contains(string(dec), "landing.example.com") || !strings.HasPrefix(lines[1], "vless://") || !strings.HasPrefix(lines[3], "snell://") {
 		t.Fatalf("raw lines: %v", lines)
 	}
 	s, err := RenderSurge(b)
@@ -341,7 +344,7 @@ func TestRenderShadowrocket(t *testing.T) {
 			t.Fatalf("shadowrocket should not contain %q", drop)
 		}
 	}
-	empty, err := RenderShadowrocket(&Bundle{Name: "check"})
+	empty, err := RenderShadowrocket(&Bundle{Name: "check", ValidationOnly: true})
 	if err != nil {
 		t.Fatal(err)
 	}

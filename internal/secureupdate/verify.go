@@ -220,7 +220,7 @@ func (v *Verifier) VerifyReader(ctx context.Context, component, version, arch st
 	if e != nil {
 		return e
 	}
-	if component != "agent" && component != "controller" && component != "sing-box" && component != "snell-server" && component != "mita" && component != "installer" && component != "verifier" {
+	if component != "agent" && component != "controller" && component != "sing-box" && component != "snell-server" && component != "mita" && component != "xray" && component != "installer" && component != "verifier" {
 		return errors.New("未知更新组件")
 	}
 	if e := os.MkdirAll(v.Dir, 0700); e != nil {

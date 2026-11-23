@@ -60,9 +60,9 @@ func TestPersonalTemplatesSessionIsolationAndShareTransfer(t *testing.T) {
 	if _, ok := draftPreview["nodes"].([]any); !ok {
 		t.Fatal("draft node diagnostics missing")
 	}
-	warningPreview, _ := keyRequest(t, c, "POST", sharePath+"/preview-draft", aKey, map[string]any{"content": "proxy-groups: []\nrules: ['DOMAIN-SUFFIX,example.test,unknown-node']\n"}, nil, 200)
-	if warnings, ok := warningPreview["warnings"].([]any); !ok || len(warnings) != 1 {
-		t.Fatal("missing unknown policy diagnostic")
+	invalidDraft, diagnostic := keyRequest(t, c, "POST", sharePath+"/preview-draft", aKey, map[string]any{"content": "proxy-groups: []\nrules: ['DOMAIN-SUFFIX,example.test,unknown-node']\n"}, nil, 400)
+	if invalidDraft["body"] != nil || !strings.Contains(string(diagnostic), "unknown-node") {
+		t.Fatal("dangling policy must fail with a diagnostic, not a downloadable configuration")
 	}
 	selection := map[string]any{"template_id": templateID, "format": "mihomo"}
 	keyRequest(t, c, "POST", sharePath+"/preview", bKey, selection, nil, 403)

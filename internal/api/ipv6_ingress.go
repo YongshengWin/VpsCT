@@ -173,6 +173,9 @@ func (a *API) checkIPv6Deployment(ctx context.Context, server domain.Server, in 
 	if in.IngressFamily != "ipv6" || in.Network == nil || in.Network.IngressFamily != "ipv6" || in.Network.EgressProfileID != 0 || in.Network.Ingress != nil || server.IsNAT {
 		return node, preview, httpx.BadRequest("仅 IPv6 部署需要独立公网和仅 IPv6 监听；出口及来源限制可在部署后单独设置")
 	}
+	if (in.VLESS != nil && in.VLESS.Security == "tls") || (in.Trojan != nil && (in.Trojan.Transport == "ws" || in.Trojan.Transport == "grpc")) {
+		return node, preview, httpx.BadRequest("该 TLS 传输组合目前只支持普通接入")
+	}
 	used, err := a.Store.UsedListenPorts(ctx, server.ID)
 	if err != nil {
 		return node, preview, err
@@ -186,9 +189,7 @@ func (a *API) checkIPv6Deployment(ctx context.Context, server domain.Server, in 
 	} else if used[port] {
 		return node, preview, httpx.Conflict(fmt.Sprintf("端口 %d 已被占用", port))
 	}
-	options := provision.Options{Name: in.Name, Protocol: in.Protocol, Port: port, SNI: in.SNI, Domain: in.Domain, Obfs: in.Obfs,
-		SSMethod: in.SSMethod, SSNetwork: in.SSNetwork, CertMode: in.CertMode, CertID: in.CertID,
-		Network: in.Network, AdvertiseHost: in.AdvertiseHost}
+	options := in.options(port)
 	node, err = provision.NewNode(server, "", options)
 	if err != nil {
 		return node, preview, httpx.BadRequest(err.Error())

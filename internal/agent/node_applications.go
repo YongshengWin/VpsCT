@@ -97,7 +97,9 @@ func (a *Agent) finishNodeApplications(ds *agentproto.DesiredState, nodes []agen
 		if ready[n.Core] {
 			receipt.Status = "applied"
 			actual, ok := prepared[n.NodeID]
-			if !ok || actual.Blocked {
+			if !ok {
+				receipt.Status = "failed"
+			} else if actual.Blocked {
 				receipt.Status = "blocked"
 			} else if actual.Network != nil && actual.Network.Policy.IngressFamily == "ipv6" {
 				if actual.RuntimeNetwork == nil {
@@ -106,6 +108,12 @@ func (a *Agent) finishNodeApplications(ds *agentproto.DesiredState, nodes []agen
 					receipt.ListenIPv6 = actual.RuntimeNetwork.ListenAddress
 				}
 			}
+		}
+		if receipt.Status == "applied" && agentproto.NeedsTLSTransport(n.Protocol, n.Params) {
+			receipt.TLSTransportVersion = ds.TLSTransportVersion
+		}
+		if receipt.Core == "xray" && receipt.Status == "applied" {
+			receipt.CoreVersion = ds.Versions["xray"].Version
 		}
 		a.State.NodeApplications = append(a.State.NodeApplications, receipt)
 	}
@@ -118,4 +126,31 @@ func (a *Agent) finishNodeApplications(ds *agentproto.DesiredState, nodes []agen
 		failures = append(failures, fmt.Errorf("persist resource application receipts: %w", err))
 	}
 	return errors.Join(failures...)
+}
+
+// Surface a local certificate refusal without revealing the policy, certificate
+// alias, file paths or node credentials. Only a later successful apply can
+// restore this node's (revision, hash, sequence)-bound positive receipt.
+func (a *Agent) rejectTLSCertificate(ctx context.Context, ds *agentproto.DesiredState, n agentproto.NodeSpec, remote bool) {
+	if ds.TLSTransportVersion != agentproto.TLSTransportVersion || !agentproto.NeedsTLSTransport(n.Protocol, n.Params) {
+		return
+	}
+	const detail = "本机证书策略未授权此 TLS 节点，请检查登记证书或 ACME 域名后重试"
+	prev := a.State.NodeApplicationSequence
+	a.State.ApplyError = detail
+	a.State.NodeApplicationRevision, a.State.NodeApplicationHash = ds.Revision, ds.Hash
+	a.State.NodeApplicationSequence++
+	a.State.NodeApplications = []agentproto.NodeApplication{{NodeID: n.NodeID, Core: n.Core, Status: "failed"}}
+	if err := a.State.Save(a.StateDir); err != nil {
+		a.State.NodeApplications = nil
+		a.State.NodeApplicationSequence = prev
+		a.State.NodeApplicationRevision, a.State.NodeApplicationHash = 0, ""
+		a.Logger.Error("persist local TLS certificate rejection", "err", err)
+		return
+	}
+	if remote {
+		if err := a.Client.Report(ctx, agentproto.ApplyReport{Revision: ds.Revision, Hash: ds.Hash, Status: "failed", Error: detail, NodeApplicationSequence: a.State.NodeApplicationSequence, NodeApplications: a.State.NodeApplications}); err != nil {
+			a.Logger.Warn("report local TLS certificate rejection", "err", err)
+		}
+	}
 }

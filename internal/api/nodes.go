@@ -90,8 +90,8 @@ func (a *API) nodeViews(r *http.Request, nodes []domain.Node) []NodeView {
 				v.Params = nil
 			}
 		}
-		if available {
-			if uri, err := proxynode.ToURI(subscription.ProxyFor(n, hosts)); err == nil {
+		if available && n.Source != domain.NodeChain && n.ChainFrontNodeID == nil {
+			if uri, err := subscription.StandaloneURI(subscription.ProxyFor(n, hosts)); err == nil {
 				v.URI = uri
 			}
 		}
@@ -573,6 +573,9 @@ func (a *API) nodeURI(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	p := subscription.ProxyFor(n, a.serverHosts(r))
+	if n.Source == domain.NodeChain || n.ChainFrontNodeID != nil || p.Str("dialer-proxy") != "" {
+		return httpx.E(http.StatusUnprocessableEntity, "requires_front_proxy", "此节点依赖前置代理，请使用包含完整链路的订阅")
+	}
 	if p.Type == "ssh" || p.Type == "wireguard" || p.Type == "mieru" {
 		if err := proxynode.Validate(p); err != nil {
 			return httpx.BadRequest(err.Error())
@@ -593,13 +596,21 @@ func (a *API) nodeURI(w http.ResponseWriter, r *http.Request) error {
 		httpx.OK(w, result)
 		return nil
 	}
-	uri, err := proxynode.ToURI(p)
-	if err != nil {
+	transportNode := p.Type == "vless" || p.Type == "trojan"
+	uri, err := subscription.StandaloneURI(p)
+	if err != nil && (!transportNode || !errors.Is(err, proxynode.ErrUnsupported)) {
 		return httpx.BadRequest(err.Error())
 	}
-	clash := p.ClashMap()
-	surge := subscription.SurgeProxyLine(p, "")
-	httpx.OK(w, map[string]any{"uri": uri, "clash": clash, "surge": surge})
+	result := map[string]any{"uri": uri, "surge": subscription.SurgeProxyLine(p, "")}
+	if clash := subscription.StandaloneMihomo(p); clash != nil {
+		result["clash"] = clash
+	}
+	if transportNode {
+		if out, ok := subscription.SingBoxOutbound(p, ""); ok {
+			result["singbox"] = out
+		}
+	}
+	httpx.OK(w, result)
 	return nil
 }
 
@@ -636,7 +647,7 @@ func (a *API) regenerateNode(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	if err := a.Store.UpdateNodeCredentials(r.Context(), &n); err != nil {
-		return err
+		return natAPIError(err)
 	}
 	_, _, _ = a.Desired.Publish(r.Context(), s.ID)
 	a.audit(r, "node.regenerate", n.Name, nil)

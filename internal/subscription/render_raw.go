@@ -3,8 +3,6 @@ package subscription
 import (
 	"encoding/base64"
 	"strings"
-
-	"ctlvps/internal/proxynode"
 )
 
 // RenderRaw produces a base64 encoded list of share links (V2rayN, NekoBox,
@@ -15,22 +13,21 @@ func RenderRaw(b *Bundle, plain bool) (*Rendered, error) {
 		// Shadowrocket shows a "STATUS=" comment line; harmless for others.
 		lines = append(lines, "STATUS="+strings.Join(b.InfoNodes, " | "))
 	}
+	// Independent links cannot express a required front. Never turn the
+	// landing proxy into an apparently equivalent stand-alone link.
+	var names []string
 	for _, p := range b.Proxies {
-		if uri, err := proxynode.ToURI(p); err == nil {
+		if uri, err := StandaloneURI(p); err == nil {
 			lines = append(lines, uri)
+			names = append(names, p.Name)
 		}
 	}
-	// Chains cannot be expressed in share links; export the landing node only
-	// under the chain name so the user still sees it.
-	for _, c := range b.Chains {
-		p := c.Proxy
-		if uri, err := proxynode.ToURI(p); err == nil {
-			lines = append(lines, uri)
-		}
+	if len(names) == 0 && !b.ValidationOnly {
+		return nil, noRenderPath(FormatURIList)
 	}
 	body := strings.Join(lines, "\n") + "\n"
 	if plain {
-		return &Rendered{Body: []byte(body), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".txt", Format: FormatURIList}, nil
+		return &Rendered{EmittedNames: names, Body: []byte(body), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".txt", Format: FormatURIList}, nil
 	}
-	return &Rendered{Body: []byte(base64.StdEncoding.EncodeToString([]byte(body))), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".txt", Format: FormatRaw}, nil
+	return &Rendered{EmittedNames: names, Body: []byte(base64.StdEncoding.EncodeToString([]byte(body))), ContentType: "text/plain; charset=utf-8", Filename: b.Name + ".txt", Format: FormatRaw}, nil
 }

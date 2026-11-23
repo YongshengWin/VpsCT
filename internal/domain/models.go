@@ -152,6 +152,7 @@ const (
 	CoreSingBox Core = "singbox"
 	CoreSnell   Core = "snell"
 	CoreMita    Core = "mieru"
+	CoreXray    Core = "xray"
 )
 
 // Node is a proxy endpoint. Params holds the client-facing protocol
@@ -345,7 +346,8 @@ const (
 type ShareTarget struct {
 	Network    *networkconfig.Node `json:"network,omitempty"`
 	ServerID   int64               `json:"server_id"`
-	Protocols  []string            `json:"protocols"`
+	Protocols  []string            `json:"protocols"` // legacy default inbounds; retain their original identity and settings
+	Entries    []ShareEntry        `json:"entries,omitempty"`
 	QuotaBytes map[string]int64    `json:"quota_bytes,omitempty"` // per-protocol dedicated entry limits; 0 = unlimited
 }
 
@@ -657,6 +659,11 @@ func (s Share) NodeQuota(n Node) int64 {
 	}
 	for _, t := range s.Targets {
 		if t.ServerID == *n.ServerID {
+			for _, entry := range t.Entries {
+				if entry.NodeID == n.ID && n.ID != 0 {
+					return entry.QuotaBytes
+				}
+			}
 			return t.QuotaBytes[n.Protocol]
 		}
 	}
@@ -671,6 +678,9 @@ func (s Share) NodeExhausted(n Node) bool {
 
 func ValidateShareNodeQuotas(targets []ShareTarget) error {
 	for _, t := range targets {
+		if err := t.ValidateEntries(); err != nil {
+			return err
+		}
 		for protocol, quota := range t.QuotaBytes {
 			if quota < 0 {
 				return fmt.Errorf("节点配额不能为负数")

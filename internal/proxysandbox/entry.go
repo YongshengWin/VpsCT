@@ -25,6 +25,15 @@ func Command(args []string) (string, []string, error) {
 		return "/opt/ctlvps/bin/sing-box", []string{action, "-c", filepath.Join(base, profile, file)}, nil
 	}
 	port, err := strconv.Atoi(profile)
+	if kind == "xray" && err == nil && port > 0 && port <= 65535 && strconv.Itoa(port) == profile {
+		dir := filepath.Join(base, "xray-"+profile)
+		switch action {
+		case "run":
+			return "/opt/ctlvps/bin/xray", []string{"run", "-config", filepath.Join(dir, "config.json")}, nil
+		case "candidate":
+			return "/opt/ctlvps/bin/xray", []string{"run", "-test", "-config", filepath.Join(dir, "candidate.json")}, nil
+		}
+	}
 	if kind == "mieru" && action == "run" && err == nil && port >= 1025 && port <= 65535 && strconv.Itoa(port) == profile {
 		return "/opt/ctlvps/bin/mita", []string{"run"}, nil
 	}

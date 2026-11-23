@@ -33,7 +33,7 @@ export function AccessRoutes({ server }: { server: Server }) {
  const refresh = () => { void qc.invalidateQueries({ queryKey: ["access-routes"] }); void qc.invalidateQueries({ queryKey: ["server-forwards"] }); void qc.invalidateQueries({ queryKey: ["subscriptions"] }); };
  const remove = useMutation({ mutationFn: (r: AccessRoute) => api(`/api/v1/access-routes/${r.id}`, { method: "DELETE", json: { expected_revision: r.revision } }), onSuccess: () => { setStop(null); refresh(); toast.success("正在停止线路，按顺序清理线路转发"); }, onError: e => toast.fromError(e) });
  const retry = useMutation({ mutationFn: (r: AccessRoute) => post(`/api/v1/access-routes/${r.id}/retry`, { expected_revision: r.revision }), onSuccess: refresh, onError: e => toast.fromError(e) });
- const copy = useMutation({ mutationFn: async (r: AccessRoute) => { const n = await get<{ uri: string }>(`/api/v1/access-routes/${r.id}/node`); if (!await copyText(n.uri)) throw new Error("复制失败，请允许浏览器访问剪贴板后重试"); }, onSuccess: () => toast.success("已复制线路接入节点"), onError: e => toast.fromError(e) });
+ const copy = useMutation({ mutationFn: async (r: AccessRoute) => { const n = await get<{ uri: string }>(`/api/v1/access-routes/${r.id}/node`); if (!n.uri) throw new Error("单节点链接无法保留此线路的连接参数，请点「查看订阅」选择兼容格式"); if (!await copyText(n.uri)) throw new Error("复制失败，请允许浏览器访问剪贴板后重试"); }, onSuccess: () => toast.success("已复制线路接入节点"), onError: e => toast.fromError(e) });
  return <Card>
   <CardHeader className="flex-row flex-wrap items-center justify-between gap-3"><div><CardTitle>转发线路</CardTitle><p className="mt-1 text-sm text-muted-foreground">选择入口和落地节点；可按需增加一台中转，自动配置转发并生成订阅。</p></div><Button onClick={() => setOpen(true)}>创建线路</Button></CardHeader>
   <CardContent className="space-y-3">

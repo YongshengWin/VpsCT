@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"ctlvps/internal/domain"
@@ -98,6 +99,11 @@ func (s *Store) setNodeNetwork(ctx context.Context, q querier, nodeID, expected 
 		return empty, ErrManagedTransit
 	}
 	if policy != nil {
+		if _, needed, err := tlsTransportParams(n); err != nil {
+			return empty, err
+		} else if needed {
+			return empty, fmt.Errorf("%w: 不支持自定义网络绑定或出口", ErrTLSTransportUnavailable)
+		}
 		if n.Core != domain.CoreSingBox && policy.EgressProfileID != 0 {
 			return empty, ErrNetworkCoreVersion
 		}

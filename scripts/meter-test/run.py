@@ -4,6 +4,7 @@ Run only in the disposable container launched by test-meter-container.sh.
 import subprocess,sys,json,time,os,socket,threading,atexit,textwrap
 from pathlib import Path
 rules=Path(sys.argv[1])
+xray=len(sys.argv)>2 and sys.argv[2]=='xray'
 def run(*a):return subprocess.check_output(a,text=True)
 for ns in ('client','origin'):
  run('ip','netns','add',ns)
@@ -53,7 +54,10 @@ def cleanup():
   try:p.wait(timeout=3)
   except subprocess.TimeoutExpired:p.kill();p.wait()
 atexit.register(cleanup)
-binary=os.environ.get('CTLVPS_SINGBOX')
+# Xray uses no origin mark and only the ingress-facing TCP bytes qualify.
+if xray:
+ subprocess.run(['nft','-f','-'],input='flush chain inet reference input\nflush chain inet reference output\nadd rule inet reference input iifname "v-client" tcp dport { 21001,21002 } counter name rx\nadd rule inet reference output oifname "v-client" tcp sport { 21001,21002 } counter name tx\n',text=True,check=True)
+binary=None if xray else os.environ.get('CTLVPS_SINGBOX')
 if binary:
  config={"log":{"level":"error"},"inbounds":[],"outbounds":[],"route":{"rules":[]}}
  for node in (1,2):
@@ -77,7 +81,9 @@ else:
      while True:
       c,_=s.accept()
       def relay(c):
-       o=socket.socket(socket.AF_INET6);o.setsockopt(socket.SOL_SOCKET,36,0x43000000|node);o.connect(('2001:db8:2::2',22000))
+       o=socket.socket(socket.AF_INET6)
+       if not xray:o.setsockopt(socket.SOL_SOCKET,36,0x43000000|node)
+       o.connect(('2001:db8:2::2',22000))
        with c,o:
         while True:
          d=c.recv(65536)
@@ -91,7 +97,8 @@ else:
     threading.Thread(target=accept,args=(s,node),daemon=True).start()
    else:
     def relay_udp(s,node):
-     o=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM);o.setsockopt(socket.SOL_SOCKET,36,0x43000000|node);o.settimeout(2)
+     o=socket.socket(socket.AF_INET6,socket.SOCK_DGRAM);o.settimeout(2)
+     if not xray:o.setsockopt(socket.SOL_SOCKET,36,0x43000000|node)
      while True:
       d,a=s.recvfrom(65536)
       try:
@@ -154,20 +161,24 @@ for node in (1,2):
     delta=after[f'n{node}_{direction}']-before[f'n{node}_{direction}']
     reference=ref_after[direction]-ref_before[direction]
     assert delta==reference,(node,udp,ipv6,direction,delta,reference)
-    assert delta>=2*8192,(node,udp,ipv6,direction,delta)
+    if xray and udp:assert delta==0,(node,ipv6,direction,delta)
+    else:assert delta>=(8192 if xray else 2*8192),(node,udp,ipv6,direction,delta)
     other=3-node;assert after[f'n{other}_{direction}']==before[f'n{other}_{direction}'],'cross billing'
 # Reapplying rules preserves both counter objects.
 before=snapshot();run('nft','-f',str(rules/'active.nft'));assert snapshot()==before
 run('nft','-f',str(rules/'blocked.nft'))
-transfer(1,blocked=True);transfer(1,udp=True,blocked=True);transfer(2)
+transfer(1,blocked=True);transfer(1,udp=True,blocked=not xray);transfer(2)
 # Retired counters must freeze while other nodes keep carrying traffic.
 run('nft','-f',str(rules/'retired.nft'))
 before=snapshot()
-transfer(1,blocked=True);transfer(1,udp=True,blocked=True);transfer(2)
+# A retired Xray listener is stopped by its driver, not by port matching:
+# a fresh connection to a reused port must never revive its retired counters.
+transfer(1,blocked=not xray);transfer(1,udp=True,blocked=not xray);transfer(2)
 after=snapshot()
 for direction in ('rx','tx'):
  assert after[f'n1_{direction}']==before[f'n1_{direction}'],'retired counter not frozen'
  assert after[f'n2_{direction}']>before[f'n2_{direction}'],'active node interrupted'
 print('PASS retired counters frozen with active traffic continuing')
-print(('sing-box: ' if binary else 'synthetic: ')+'PASS IPv4/IPv6 TCP/UDP exact kernel byte equality on both legs; per-node isolation; counters survive rule replacement; node-only blocking')
+if xray:print('synthetic Xray: PASS IPv4/IPv6 ingress TCP byte equality; origin and UDP excluded; stable counters and per-node blocking')
+else:print(('sing-box: ' if binary else 'synthetic: ')+'PASS IPv4/IPv6 TCP/UDP exact kernel byte equality on both legs; per-node isolation; counters survive rule replacement; node-only blocking')
 for p in procs:p.terminate()

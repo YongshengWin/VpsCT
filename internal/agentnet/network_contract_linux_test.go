@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"ctlvps/internal/networkconfig"
+	"ctlvps/internal/nodecombo"
 )
 
 // Opt-in because the actual dedicated unprivileged helper needs a fixture CA
@@ -29,7 +30,7 @@ func TestNetworkContractContainer(t *testing.T) {
 		if r.Header.Get("X-Unrelated-Header") != "" {
 			t.Error("arbitrary header escaped the isolated transport allowlist")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]string{"version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader), "forward": r.Header.Get(networkconfig.ForwardHeader), "udp": r.Header.Get(networkconfig.ForwardUDPHeader), "ipv6": r.Header.Get(networkconfig.IPv6IngressHeader)})
+		_ = json.NewEncoder(w).Encode(map[string]string{"xray": r.Header.Get(nodecombo.XrayHeader), "tls": r.Header.Get(nodecombo.TLSTransportHeader), "version": r.Header.Get(networkconfig.BindingHeader), "egress": r.Header.Get(networkconfig.EgressHeader), "ssh": r.Header.Get(networkconfig.SSHHeader), "forward": r.Header.Get(networkconfig.ForwardHeader), "udp": r.Header.Get(networkconfig.ForwardUDPHeader), "ipv6": r.Header.Get(networkconfig.IPv6IngressHeader)})
 	}))
 	srv.Listener.Close()
 	listener, err := net.Listen("tcp6", "[::1]:0")
@@ -53,10 +54,13 @@ func TestNetworkContractContainer(t *testing.T) {
 		{"GET", "/api/agent/v1/desired", "1", "1", "1", "1", "1", "1", false},
 		{"GET", "/api/agent/v1/desired", "1", "1", "", "", "", "", false},
 		{"GET", "/api/agent/v1/desired", "", "", "", "", "", "", false},
+		{"POST", "/api/agent/v1/apply-report", "1", "", "", "", "", "", false},
 		{"POST", "/api/agent/v1/heartbeat", "1", "", "1", "", "1", "", false},
 		{"GET", "/dl/fixture", "1", "", "1", "", "1", "", true},
 	} {
 		req, _ := http.NewRequest(tc.method, srv.URL+tc.path, nil)
+		req.Header.Set(nodecombo.XrayHeader, tc.version)
+		req.Header.Set(nodecombo.TLSTransportHeader, tc.version)
 		req.Header.Set(networkconfig.BindingHeader, tc.version)
 		req.Header.Set(networkconfig.EgressHeader, tc.egress)
 		req.Header.Set(networkconfig.IngressHeader, tc.version)
@@ -74,11 +78,20 @@ func TestNetworkContractContainer(t *testing.T) {
 		var got map[string]string
 		err = json.NewDecoder(resp.Body).Decode(&got)
 		resp.Body.Close()
-		if err != nil || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress || got["forward"] != tc.want || got["udp"] != strings.ReplaceAll(tc.want, "1", "2") || got["ipv6"] != tc.wantIPv6 {
+		wantTLS := ""
+		if tc.path == "/api/agent/v1/desired" || tc.path == "/api/agent/v1/apply-report" {
+			wantTLS = tc.version
+		}
+		if err != nil || got["xray"] != tc.want || got["tls"] != wantTLS || got["version"] != tc.want || got["egress"] != tc.wantEgress || got["ssh"] != tc.wantEgress || got["forward"] != tc.want || got["udp"] != strings.ReplaceAll(tc.want, "1", "2") || got["ipv6"] != tc.wantIPv6 {
 			t.Fatal("isolated worker lost or invented parent capability", got, tc, err)
 		}
 	}
 	req, _ := http.NewRequest("GET", srv.URL+"/api/agent/v1/desired", nil)
+	req.Header.Set(nodecombo.XrayHeader, "2")
+	if _, err := (Transport{}).RoundTrip(req); err == nil || !strings.Contains(err.Error(), "unsupported Xray request version") {
+		t.Fatal("unknown Xray request capability accepted", err)
+	}
+	req.Header.Del(nodecombo.XrayHeader)
 	req.Header.Set(networkconfig.BindingHeader, "2")
 	if _, err := (Transport{}).RoundTrip(req); err == nil {
 		t.Fatal("unknown protocol version accepted")

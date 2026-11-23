@@ -23,7 +23,7 @@
   },
   "RefreshIPv6Endpoints": {
     "query_parameters": [],
-    "source": "internal/api/ipv6_ingress.go:270"
+    "source": "internal/api/ipv6_ingress.go:271"
   },
   "accessLog": {
     "query_parameters": [
@@ -61,11 +61,11 @@
   },
   "accessRouteNode": {
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:108"
+    "source": "internal/api/access_routes.go:109"
   },
   "agentAccessRouteRequestSchema": {
     "query_parameters": [],
-    "source": "internal/api/agent_route_schema.go:34"
+    "source": "internal/api/agent_route_schema.go:36"
   },
   "agentApplyReport": {
     "request_body": {
@@ -76,19 +76,19 @@
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/agentproto/proto.go:322"
+          "x-source": "internal/agentproto/proto.go:326"
         },
         "error": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:321"
+          "x-source": "internal/agentproto/proto.go:325"
         },
         "hash": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:319"
+          "x-source": "internal/agentproto/proto.go:323"
         },
         "node_application_sequence": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:317"
+          "x-source": "internal/agentproto/proto.go:321"
         },
         "node_applications": {
           "items": {
@@ -96,42 +96,50 @@
             "properties": {
               "core": {
                 "type": "string",
-                "x-source": "internal/agentproto/node_application.go:12"
+                "x-source": "internal/agentproto/node_application.go:15"
               },
-              "listen_ipv6": {
+              "core_version": {
                 "type": "string",
                 "x-source": "internal/agentproto/node_application.go:13"
               },
+              "listen_ipv6": {
+                "type": "string",
+                "x-source": "internal/agentproto/node_application.go:16"
+              },
               "node_id": {
                 "type": "integer",
-                "x-source": "internal/agentproto/node_application.go:11"
+                "x-source": "internal/agentproto/node_application.go:14"
               },
               "status": {
                 "type": "string",
-                "x-source": "internal/agentproto/node_application.go:14"
+                "x-source": "internal/agentproto/node_application.go:17"
+              },
+              "tls_transport_version": {
+                "type": "integer",
+                "x-source": "internal/agentproto/node_application.go:12"
               }
             },
             "type": "object",
-            "x-source": "internal/agentproto/node_application.go:10"
+            "x-source": "internal/agentproto/node_application.go:11"
           },
           "type": "array",
-          "x-source": "internal/agentproto/proto.go:316"
+          "x-source": "internal/agentproto/proto.go:320"
         },
         "revision": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:318"
+          "x-source": "internal/agentproto/proto.go:322"
         },
         "status": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:320"
+          "x-source": "internal/agentproto/proto.go:324"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/agent.go:522",
-      "x-source": "internal/agentproto/proto.go:315"
+      "x-decode-source": "internal/api/agent.go:549",
+      "x-source": "internal/agentproto/proto.go:319"
     },
     "query_parameters": [],
-    "source": "internal/api/agent.go:519"
+    "source": "internal/api/agent.go:546"
   },
   "agentBinaryCandidates": {
     "query_parameters": [],
@@ -151,7 +159,7 @@
   },
   "agentConnlog": {
     "query_parameters": [],
-    "source": "internal/api/agent.go:559"
+    "source": "internal/api/agent.go:593"
   },
   "agentDescribeRequestBody": {
     "query_parameters": [],
@@ -166,10 +174,10 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/agent.go:509"
+        "x-source": "internal/api/agent.go:536"
       }
     ],
-    "source": "internal/api/agent.go:414"
+    "source": "internal/api/agent.go:425"
   },
   "agentEgressConfigSchema": {
     "query_parameters": [],
@@ -221,34 +229,34 @@
       "properties": {
         "applied_hash": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:183"
+          "x-source": "internal/agentproto/proto.go:185"
         },
         "applied_revision": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:182"
+          "x-source": "internal/agentproto/proto.go:184"
         },
         "apply_error": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:185"
+          "x-source": "internal/agentproto/proto.go:187"
         },
         "apply_status": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:184"
+          "x-source": "internal/agentproto/proto.go:186"
         },
         "binary_sha256": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:173"
+          "x-source": "internal/agentproto/proto.go:175"
         },
         "diagnostics": {
           "additionalProperties": true,
           "properties": {
             "bbr": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:151"
+              "x-source": "internal/agentproto/proto.go:153"
             },
             "binary_sha256": {
               "type": "string",
-              "x-source": "internal/agentproto/proto.go:162"
+              "x-source": "internal/agentproto/proto.go:164"
             },
             "certs": {
               "items": {
@@ -276,19 +284,19 @@
                 "x-source": "internal/agentproto/proto.go:98"
               },
               "type": "array",
-              "x-source": "internal/agentproto/proto.go:149"
+              "x-source": "internal/agentproto/proto.go:151"
             },
             "clock_skew_ms": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:150"
+              "x-source": "internal/agentproto/proto.go:152"
             },
             "congestion_ctl": {
               "type": "string",
-              "x-source": "internal/agentproto/proto.go:152"
+              "x-source": "internal/agentproto/proto.go:154"
             },
             "connlog_lag": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:161"
+              "x-source": "internal/agentproto/proto.go:163"
             },
             "cores": {
               "items": {
@@ -344,11 +352,11 @@
                 "x-source": "internal/agentproto/proto.go:83"
               },
               "type": "array",
-              "x-source": "internal/agentproto/proto.go:148"
+              "x-source": "internal/agentproto/proto.go:150"
             },
             "forward_dns_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:135"
+              "x-source": "internal/agentproto/proto.go:137"
             },
             "forward_grants": {
               "items": {
@@ -375,15 +383,15 @@
                 "x-source": "internal/networkconfig/forward_grant.go:11"
               },
               "type": "array",
-              "x-source": "internal/agentproto/proto.go:138"
+              "x-source": "internal/agentproto/proto.go:140"
             },
             "forward_private_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:136"
+              "x-source": "internal/agentproto/proto.go:138"
             },
             "forward_transport_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:137"
+              "x-source": "internal/agentproto/proto.go:139"
             },
             "forward_udp": {
               "anyOf": [
@@ -439,23 +447,23 @@
             },
             "ipv4_reachable": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:154"
+              "x-source": "internal/agentproto/proto.go:156"
             },
             "ipv6_ingress_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:130"
+              "x-source": "internal/agentproto/proto.go:132"
             },
             "ipv6_reachable": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:153"
+              "x-source": "internal/agentproto/proto.go:155"
             },
             "listen_binding_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:139"
+              "x-source": "internal/agentproto/proto.go:141"
             },
             "maintenance": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:147"
+              "x-source": "internal/agentproto/proto.go:149"
             },
             "meter_inventory_version": {
               "type": "integer",
@@ -463,11 +471,11 @@
             },
             "metering_error": {
               "type": "string",
-              "x-source": "internal/agentproto/proto.go:146"
+              "x-source": "internal/agentproto/proto.go:148"
             },
             "mita_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:127"
+              "x-source": "internal/agentproto/proto.go:129"
             },
             "nat": {
               "anyOf": [
@@ -560,45 +568,45 @@
             },
             "network_billing_error": {
               "type": "string",
-              "x-source": "internal/agentproto/proto.go:142"
+              "x-source": "internal/agentproto/proto.go:144"
             },
             "network_billing_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:141"
+              "x-source": "internal/agentproto/proto.go:143"
             },
             "network_binding_errors": {
               "additionalProperties": {
                 "type": "string"
               },
               "type": "object",
-              "x-source": "internal/agentproto/proto.go:133"
+              "x-source": "internal/agentproto/proto.go:135"
             },
             "network_binding_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:131"
+              "x-source": "internal/agentproto/proto.go:133"
             },
             "network_configure_allowed": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:132"
+              "x-source": "internal/agentproto/proto.go:134"
             },
             "network_egress_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:128"
+              "x-source": "internal/agentproto/proto.go:130"
             },
             "network_forward_errors": {
               "additionalProperties": {
                 "type": "string"
               },
               "type": "object",
-              "x-source": "internal/agentproto/proto.go:134"
+              "x-source": "internal/agentproto/proto.go:136"
             },
             "network_forward_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:129"
+              "x-source": "internal/agentproto/proto.go:131"
             },
             "network_guard_error": {
               "type": "string",
-              "x-source": "internal/agentproto/proto.go:140"
+              "x-source": "internal/agentproto/proto.go:142"
             },
             "network_proxy_inbound_version": {
               "type": "integer",
@@ -618,18 +626,18 @@
             },
             "nftables": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:156"
+              "x-source": "internal/agentproto/proto.go:158"
             },
             "oom_events": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:155"
+              "x-source": "internal/agentproto/proto.go:157"
             },
             "recent_errors": {
               "items": {
                 "type": "string"
               },
               "type": "array",
-              "x-source": "internal/agentproto/proto.go:160"
+              "x-source": "internal/agentproto/proto.go:162"
             },
             "retained_node_meters": {
               "items": {
@@ -640,23 +648,27 @@
             },
             "security_paused": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:145"
+              "x-source": "internal/agentproto/proto.go:147"
             },
             "security_policy": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:144"
+              "x-source": "internal/agentproto/proto.go:146"
             },
             "security_version": {
               "type": "integer",
-              "x-source": "internal/agentproto/proto.go:143"
+              "x-source": "internal/agentproto/proto.go:145"
             },
             "systemd": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:157"
+              "x-source": "internal/agentproto/proto.go:159"
             },
             "time_sync": {
               "type": "boolean",
-              "x-source": "internal/agentproto/proto.go:158"
+              "x-source": "internal/agentproto/proto.go:160"
+            },
+            "tls_transport_version": {
+              "type": "integer",
+              "x-source": "internal/agentproto/proto.go:127"
             },
             "transport_grants": {
               "items": {
@@ -702,15 +714,19 @@
                 "type": "string"
               },
               "type": "array",
-              "x-source": "internal/agentproto/proto.go:159"
+              "x-source": "internal/agentproto/proto.go:161"
+            },
+            "xray_version": {
+              "type": "integer",
+              "x-source": "internal/agentproto/proto.go:128"
             }
           },
           "type": "object",
-          "x-source": "internal/agentproto/proto.go:190"
+          "x-source": "internal/agentproto/proto.go:192"
         },
         "epoch": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:174"
+          "x-source": "internal/agentproto/proto.go:176"
         },
         "final_meters": {
           "anyOf": [
@@ -781,7 +797,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/agentproto/proto.go:171"
+          "x-source": "internal/agentproto/proto.go:173"
         },
         "forward_counters": {
           "items": {
@@ -816,7 +832,7 @@
             "x-source": "internal/agentproto/forward_meter.go:13"
           },
           "type": "array",
-          "x-source": "internal/agentproto/proto.go:180"
+          "x-source": "internal/agentproto/proto.go:182"
         },
         "forward_receipt": {
           "anyOf": [
@@ -883,7 +899,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/agentproto/proto.go:181"
+          "x-source": "internal/agentproto/proto.go:183"
         },
         "metrics": {
           "additionalProperties": true,
@@ -1126,11 +1142,11 @@
             }
           },
           "type": "object",
-          "x-source": "internal/agentproto/proto.go:178"
+          "x-source": "internal/agentproto/proto.go:180"
         },
         "network_billing_held": {
           "type": "boolean",
-          "x-source": "internal/agentproto/proto.go:167"
+          "x-source": "internal/agentproto/proto.go:169"
         },
         "network_billing_legacy": {
           "anyOf": [
@@ -1157,11 +1173,11 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/agentproto/proto.go:169"
+          "x-source": "internal/agentproto/proto.go:171"
         },
         "network_billing_revision": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:168"
+          "x-source": "internal/agentproto/proto.go:170"
         },
         "network_billing_switch": {
           "anyOf": [
@@ -1382,19 +1398,19 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/agentproto/proto.go:170"
+          "x-source": "internal/agentproto/proto.go:172"
         },
         "node_application_hash": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:187"
+          "x-source": "internal/agentproto/proto.go:189"
         },
         "node_application_revision": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:186"
+          "x-source": "internal/agentproto/proto.go:188"
         },
         "node_application_sequence": {
           "type": "integer",
-          "x-source": "internal/agentproto/proto.go:188"
+          "x-source": "internal/agentproto/proto.go:190"
         },
         "node_applications": {
           "items": {
@@ -1402,26 +1418,34 @@
             "properties": {
               "core": {
                 "type": "string",
-                "x-source": "internal/agentproto/node_application.go:12"
+                "x-source": "internal/agentproto/node_application.go:15"
               },
-              "listen_ipv6": {
+              "core_version": {
                 "type": "string",
                 "x-source": "internal/agentproto/node_application.go:13"
               },
+              "listen_ipv6": {
+                "type": "string",
+                "x-source": "internal/agentproto/node_application.go:16"
+              },
               "node_id": {
                 "type": "integer",
-                "x-source": "internal/agentproto/node_application.go:11"
+                "x-source": "internal/agentproto/node_application.go:14"
               },
               "status": {
                 "type": "string",
-                "x-source": "internal/agentproto/node_application.go:14"
+                "x-source": "internal/agentproto/node_application.go:17"
+              },
+              "tls_transport_version": {
+                "type": "integer",
+                "x-source": "internal/agentproto/node_application.go:12"
               }
             },
             "type": "object",
-            "x-source": "internal/agentproto/node_application.go:10"
+            "x-source": "internal/agentproto/node_application.go:11"
           },
           "type": "array",
-          "x-source": "internal/agentproto/proto.go:189"
+          "x-source": "internal/agentproto/proto.go:191"
         },
         "ports": {
           "items": {
@@ -1468,29 +1492,29 @@
             "x-source": "internal/agentproto/proto.go:70"
           },
           "type": "array",
-          "x-source": "internal/agentproto/proto.go:179"
+          "x-source": "internal/agentproto/proto.go:181"
         },
         "public_ipv4": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:176"
+          "x-source": "internal/agentproto/proto.go:178"
         },
         "public_ipv6": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:177"
+          "x-source": "internal/agentproto/proto.go:179"
         },
         "ts": {
           "format": "date-time",
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:175"
+          "x-source": "internal/agentproto/proto.go:177"
         },
         "version": {
           "type": "string",
-          "x-source": "internal/agentproto/proto.go:172"
+          "x-source": "internal/agentproto/proto.go:174"
         }
       },
       "type": "object",
       "x-decode-source": "internal/api/agent.go:108",
-      "x-source": "internal/agentproto/proto.go:166"
+      "x-source": "internal/agentproto/proto.go:168"
     },
     "query_parameters": [],
     "source": "internal/api/agent.go:105"
@@ -1501,7 +1525,7 @@
   },
   "agentJSONTypeSchema": {
     "query_parameters": [],
-    "source": "internal/api/agent_egress_schema.go:156"
+    "source": "internal/api/agent_egress_schema.go:159"
   },
   "agentMaintenanceNeedsRetry": {
     "query_parameters": [],
@@ -1533,15 +1557,19 @@
   },
   "agentRouteResponseSchema": {
     "query_parameters": [],
-    "source": "internal/api/agent_route_schema.go:55"
+    "source": "internal/api/agent_route_schema.go:57"
   },
   "agentSchemaProperties": {
     "query_parameters": [],
-    "source": "internal/api/agent_egress_schema.go:252"
+    "source": "internal/api/agent_egress_schema.go:255"
   },
   "agentSettingsContract": {
     "query_parameters": [],
     "source": "internal/api/agent_settings.go:6"
+  },
+  "agentShareEntryRequestSchema": {
+    "query_parameters": [],
+    "source": "internal/api/agent_protocol_schema.go:60"
   },
   "agentSkill": {
     "query_parameters": [],
@@ -1561,23 +1589,35 @@
   },
   "agentStatus": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:55"
+    "source": "internal/api/servers.go:59"
   },
   "agentStatusMustHave": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:636"
+    "source": "internal/api/servers.go:632"
+  },
+  "agentTLSChoices": {
+    "query_parameters": [],
+    "source": "internal/api/agent_protocol_schema.go:12"
+  },
+  "agentTrojanCombinationSchema": {
+    "query_parameters": [],
+    "source": "internal/api/agent_protocol_schema.go:32"
   },
   "agentUnresolvedJSONSchema": {
     "query_parameters": [],
-    "source": "internal/api/agent_egress_schema.go:152"
+    "source": "internal/api/agent_egress_schema.go:155"
   },
   "agentUpdateInfo": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:113"
+    "source": "internal/api/servers.go:120"
   },
   "agentUpdateSpec": {
     "query_parameters": [],
     "source": "internal/api/agentbin.go:97"
+  },
+  "agentVLESSCombinationSchema": {
+    "query_parameters": [],
+    "source": "internal/api/agent_protocol_schema.go:41"
   },
   "agentWorkflows": {
     "query_parameters": [],
@@ -1597,7 +1637,7 @@
   },
   "applySubInput": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:141"
+    "source": "internal/api/subscriptions.go:142"
   },
   "archiveInterface": {
     "request_body": {
@@ -1636,11 +1676,11 @@
   },
   "banned": {
     "query_parameters": [],
-    "source": "internal/api/public.go:22"
+    "source": "internal/api/public.go:23"
   },
   "base64Std": {
     "query_parameters": [],
-    "source": "internal/api/public.go:200"
+    "source": "internal/api/public.go:213"
   },
   "baseURL": {
     "query_parameters": [],
@@ -1690,7 +1730,7 @@
   },
   "canSeeSubscription": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:67"
+    "source": "internal/api/subscriptions.go:68"
   },
   "cancelObsoleteAgentUpdate": {
     "query_parameters": [],
@@ -1726,7 +1766,7 @@
   },
   "checkDiagnostics": {
     "query_parameters": [],
-    "source": "internal/api/agent.go:376"
+    "source": "internal/api/agent.go:387"
   },
   "checkIPv6Deployment": {
     "query_parameters": [],
@@ -1754,7 +1794,7 @@
   },
   "checkServerQuota": {
     "query_parameters": [],
-    "source": "internal/api/agent.go:289"
+    "source": "internal/api/agent.go:300"
   },
   "claimMaintenance": {
     "query_parameters": [],
@@ -1777,7 +1817,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:444"
+        "x-source": "internal/api/shares.go:473"
       },
       {
         "name": "host",
@@ -1786,7 +1826,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:442"
+        "x-source": "internal/api/shares.go:471"
       },
       {
         "name": "limit",
@@ -1796,7 +1836,7 @@
           "default": 100,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:446"
+        "x-source": "internal/api/shares.go:475"
       },
       {
         "name": "node_id",
@@ -1815,7 +1855,7 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:447"
+        "x-source": "internal/api/shares.go:476"
       },
       {
         "name": "server_id",
@@ -1833,7 +1873,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:449"
+        "x-source": "internal/api/shares.go:478"
       },
       {
         "name": "src",
@@ -1842,7 +1882,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:443"
+        "x-source": "internal/api/shares.go:472"
       },
       {
         "name": "to",
@@ -1851,14 +1891,14 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:445"
+        "x-source": "internal/api/shares.go:474"
       }
     ],
-    "source": "internal/api/shares.go:437"
+    "source": "internal/api/shares.go:466"
   },
   "connlogStats": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:573"
+    "source": "internal/api/shares.go:602"
   },
   "connlogSummary": {
     "query_parameters": [
@@ -1869,7 +1909,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:444"
+        "x-source": "internal/api/shares.go:473"
       },
       {
         "name": "host",
@@ -1878,7 +1918,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:442"
+        "x-source": "internal/api/shares.go:471"
       },
       {
         "name": "limit",
@@ -1888,7 +1928,7 @@
           "default": 15,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:533"
+        "x-source": "internal/api/shares.go:562"
       },
       {
         "name": "node_id",
@@ -1907,7 +1947,7 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:447"
+        "x-source": "internal/api/shares.go:476"
       },
       {
         "name": "server_id",
@@ -1925,7 +1965,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:449"
+        "x-source": "internal/api/shares.go:478"
       },
       {
         "name": "src",
@@ -1934,7 +1974,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:443"
+        "x-source": "internal/api/shares.go:472"
       },
       {
         "name": "to",
@@ -1943,10 +1983,10 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:445"
+        "x-source": "internal/api/shares.go:474"
       }
     ],
-    "source": "internal/api/shares.go:528"
+    "source": "internal/api/shares.go:557"
   },
   "consumeSecondFactor": {
     "query_parameters": [],
@@ -2115,11 +2155,11 @@
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/access_routes.go:56",
+      "x-decode-source": "internal/api/access_routes.go:57",
       "x-source": "internal/store/access_routes.go:26"
     },
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:54"
+    "source": "internal/api/access_routes.go:55"
   },
   "createBan": {
     "request_body": {
@@ -2520,29 +2560,29 @@
       "properties": {
         "content": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:472"
+          "x-source": "internal/api/subscriptions.go:483"
         },
         "description": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:471"
+          "x-source": "internal/api/subscriptions.go:482"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:470"
+          "x-source": "internal/api/subscriptions.go:481"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:469"
+          "x-source": "internal/api/subscriptions.go:480"
         },
         "variables": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:473"
+          "x-source": "internal/api/subscriptions.go:484"
         }
       },
       "type": "object",
       "x-decode-source": "internal/api/personal_templates.go:39",
-      "x-source": "internal/api/subscriptions.go:468"
+      "x-source": "internal/api/subscriptions.go:479"
     },
     "query_parameters": [],
     "source": "internal/api/personal_templates.go:37"
@@ -2557,111 +2597,111 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:590"
+          "x-source": "internal/api/subscriptions.go:601"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:589"
+          "x-source": "internal/api/subscriptions.go:600"
         },
         "rules": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:591"
+          "x-source": "internal/api/subscriptions.go:602"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:596",
-      "x-source": "internal/api/subscriptions.go:588"
+      "x-decode-source": "internal/api/subscriptions.go:607",
+      "x-source": "internal/api/subscriptions.go:599"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:594"
+    "source": "internal/api/subscriptions.go:605"
   },
   "createServer": {
     "request_body": {
@@ -2669,11 +2709,11 @@
       "properties": {
         "cert_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:172"
+          "x-source": "internal/api/servers.go:179"
         },
         "core_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:170"
+          "x-source": "internal/api/servers.go:177"
         },
         "enabled": {
           "anyOf": [
@@ -2684,11 +2724,11 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:173"
+          "x-source": "internal/api/servers.go:180"
         },
         "ipv4_only": {
           "type": "boolean",
-          "x-source": "internal/api/servers.go:171"
+          "x-source": "internal/api/servers.go:178"
         },
         "is_nat": {
           "anyOf": [
@@ -2699,24 +2739,24 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:157"
+          "x-source": "internal/api/servers.go:164"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/servers.go:158"
+          "x-source": "internal/api/servers.go:165"
         },
         "nat_config": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/servers.go:156"
+          "x-source": "internal/api/servers.go:163"
         },
         "notes": {
           "type": "string",
-          "x-source": "internal/api/servers.go:163"
+          "x-source": "internal/api/servers.go:170"
         },
         "public_host": {
           "type": "string",
-          "x-source": "internal/api/servers.go:160"
+          "x-source": "internal/api/servers.go:167"
         },
         "public_host_ipv6": {
           "anyOf": [
@@ -2727,15 +2767,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:161"
+          "x-source": "internal/api/servers.go:168"
         },
         "quota_billing": {
           "type": "string",
-          "x-source": "internal/api/servers.go:166"
+          "x-source": "internal/api/servers.go:173"
         },
         "quota_bytes": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:164"
+          "x-source": "internal/api/servers.go:171"
         },
         "quota_calibrated_inbound_bytes": {
           "anyOf": [
@@ -2746,7 +2786,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:168"
+          "x-source": "internal/api/servers.go:175"
         },
         "quota_calibrated_outbound_bytes": {
           "anyOf": [
@@ -2757,7 +2797,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:169"
+          "x-source": "internal/api/servers.go:176"
         },
         "quota_calibrated_usage_bytes": {
           "anyOf": [
@@ -2768,30 +2808,30 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:167"
+          "x-source": "internal/api/servers.go:174"
         },
         "quota_reset_day": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:165"
+          "x-source": "internal/api/servers.go:172"
         },
         "region": {
           "type": "string",
-          "x-source": "internal/api/servers.go:159"
+          "x-source": "internal/api/servers.go:166"
         },
         "tags": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/servers.go:162"
+          "x-source": "internal/api/servers.go:169"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/servers.go:273",
-      "x-source": "internal/api/servers.go:155"
+      "x-decode-source": "internal/api/servers.go:280",
+      "x-source": "internal/api/servers.go:162"
     },
     "query_parameters": [],
-    "source": "internal/api/servers.go:271"
+    "source": "internal/api/servers.go:278"
   },
   "createShare": {
     "request_body": {
@@ -2799,11 +2839,15 @@
       "properties": {
         "billing_mode": {
           "type": "string",
-          "x-source": "internal/api/shares.go:108"
+          "x-source": "internal/api/shares.go:109"
         },
         "connlog_enabled": {
           "type": "boolean",
-          "x-source": "internal/api/shares.go:112"
+          "x-source": "internal/api/shares.go:113"
+        },
+        "entry_version": {
+          "type": "integer",
+          "x-source": "internal/api/shares.go:103"
         },
         "expires_at": {
           "anyOf": [
@@ -2815,35 +2859,262 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:110"
+          "x-source": "internal/api/shares.go:111"
         },
         "extra_node_ids": {
           "items": {
             "type": "integer"
           },
           "type": "array",
-          "x-source": "internal/api/shares.go:106"
+          "x-source": "internal/api/shares.go:107"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/shares.go:103"
+          "x-source": "internal/api/shares.go:104"
         },
         "notes": {
           "type": "string",
-          "x-source": "internal/api/shares.go:113"
+          "x-source": "internal/api/shares.go:114"
         },
         "quota_bytes": {
           "type": "integer",
-          "x-source": "internal/api/shares.go:107"
+          "x-source": "internal/api/shares.go:108"
         },
         "reset_day": {
           "type": "integer",
-          "x-source": "internal/api/shares.go:109"
+          "x-source": "internal/api/shares.go:110"
         },
         "targets": {
           "items": {
             "additionalProperties": true,
             "properties": {
+              "entries": {
+                "items": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "x-source": "internal/domain/share_entry.go:15"
+                    },
+                    "node_id": {
+                      "type": "integer",
+                      "x-source": "internal/domain/share_entry.go:18"
+                    },
+                    "quota_bytes": {
+                      "type": "integer",
+                      "x-source": "internal/domain/share_entry.go:17"
+                    },
+                    "snapshot": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "cert_id": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:29"
+                        },
+                        "cert_mode": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:28"
+                        },
+                        "domain": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:27"
+                        },
+                        "mieru_transport": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:33"
+                        },
+                        "obfs": {
+                          "type": "boolean",
+                          "x-source": "internal/domain/share_entry.go:34"
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:24"
+                        },
+                        "snell_version": {
+                          "type": "integer",
+                          "x-source": "internal/domain/share_entry.go:32"
+                        },
+                        "ss_method": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:30"
+                        },
+                        "ss_network": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:31"
+                        },
+                        "trojan": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "grpc": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "service_name": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:46"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:45"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/tls.go:53"
+                                },
+                                "security": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/tls.go:51"
+                                },
+                                "transport": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/tls.go:50"
+                                },
+                                "ws": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:42"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:41"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:40"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/tls.go:52"
+                                }
+                              },
+                              "type": "object",
+                              "x-source": "internal/nodecombo/tls.go:49"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-source": "internal/domain/share_entry.go:26"
+                        },
+                        "vless": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "flow": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:23"
+                                },
+                                "grpc": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "service_name": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:46"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:45"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:26"
+                                },
+                                "security": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:22"
+                                },
+                                "transport": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:21"
+                                },
+                                "ws": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:42"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:41"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:40"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:25"
+                                },
+                                "xhttp": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:31"
+                                        },
+                                        "mode": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:32"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:30"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/vless.go:29"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:24"
+                                }
+                              },
+                              "type": "object",
+                              "x-source": "internal/nodecombo/vless.go:20"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-source": "internal/domain/share_entry.go:25"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/domain/share_entry.go:16"
+                    }
+                  },
+                  "type": "object",
+                  "x-source": "internal/domain/share_entry.go:14"
+                },
+                "type": "array",
+                "x-source": "internal/domain/models.go:350"
+              },
               "network": {
                 "anyOf": [
                   {
@@ -2944,32 +3215,32 @@
                     "type": "null"
                   }
                 ],
-                "x-source": "internal/domain/models.go:346"
+                "x-source": "internal/domain/models.go:347"
               },
               "protocols": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:348"
+                "x-source": "internal/domain/models.go:349"
               },
               "quota_bytes": {
                 "additionalProperties": {
                   "type": "integer"
                 },
                 "type": "object",
-                "x-source": "internal/domain/models.go:349"
+                "x-source": "internal/domain/models.go:351"
               },
               "server_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:347"
+                "x-source": "internal/domain/models.go:348"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:345"
+            "x-source": "internal/domain/models.go:346"
           },
           "type": "array",
-          "x-source": "internal/api/shares.go:105"
+          "x-source": "internal/api/shares.go:106"
         },
         "template_id": {
           "anyOf": [
@@ -2980,7 +3251,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:111"
+          "x-source": "internal/api/shares.go:112"
         },
         "user_id": {
           "anyOf": [
@@ -2991,15 +3262,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:104"
+          "x-source": "internal/api/shares.go:105"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/shares.go:189",
+      "x-decode-source": "internal/api/shares.go:215",
       "x-source": "internal/api/shares.go:102"
     },
     "query_parameters": [],
-    "source": "internal/api/shares.go:187"
+    "source": "internal/api/shares.go:213"
   },
   "createSubscription": {
     "request_body": {
@@ -3010,7 +3281,7 @@
             "type": "integer"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:136"
+          "x-source": "internal/api/subscriptions.go:137"
         },
         "chains": {
           "items": {
@@ -3018,26 +3289,26 @@
             "properties": {
               "front_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:262"
+                "x-source": "internal/domain/models.go:263"
               },
               "landing_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:263"
+                "x-source": "internal/domain/models.go:264"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:261"
+                "x-source": "internal/domain/models.go:262"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:260"
+            "x-source": "internal/domain/models.go:261"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:124"
+          "x-source": "internal/api/subscriptions.go:125"
         },
         "default_format": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:122"
+          "x-source": "internal/api/subscriptions.go:123"
         },
         "enabled": {
           "anyOf": [
@@ -3048,7 +3319,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:137"
+          "x-source": "internal/api/subscriptions.go:138"
         },
         "expire_at": {
           "anyOf": [
@@ -3060,15 +3331,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:131"
+          "x-source": "internal/api/subscriptions.go:132"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:120"
+          "x-source": "internal/api/subscriptions.go:121"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:119"
+          "x-source": "internal/api/subscriptions.go:120"
         },
         "node_selection": {
           "anyOf": [
@@ -3077,53 +3348,53 @@
               "properties": {
                 "exclude_filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:274"
+                  "x-source": "internal/domain/models.go:275"
                 },
                 "external_sub_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:271"
+                  "x-source": "internal/domain/models.go:272"
                 },
                 "filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:273"
+                  "x-source": "internal/domain/models.go:274"
                 },
                 "include_all": {
                   "type": "boolean",
-                  "x-source": "internal/domain/models.go:269"
+                  "x-source": "internal/domain/models.go:270"
                 },
                 "node_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:270"
+                  "x-source": "internal/domain/models.go:271"
                 },
                 "route_ids": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:268"
+                  "x-source": "internal/domain/models.go:269"
                 },
                 "tags": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:272"
+                  "x-source": "internal/domain/models.go:273"
                 }
               },
               "type": "object",
-              "x-source": "internal/domain/models.go:267"
+              "x-source": "internal/domain/models.go:268"
             },
             {
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:127"
+          "x-source": "internal/api/subscriptions.go:128"
         },
         "proxy_groups": {
           "items": {
@@ -3131,92 +3402,92 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:123"
+          "x-source": "internal/api/subscriptions.go:124"
         },
         "reset_day": {
           "anyOf": [
@@ -3227,19 +3498,19 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:133"
+          "x-source": "internal/api/subscriptions.go:134"
         },
         "rule_providers": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:126"
+          "x-source": "internal/api/subscriptions.go:127"
         },
         "rules": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:125"
+          "x-source": "internal/api/subscriptions.go:126"
         },
         "short_link": {
           "anyOf": [
@@ -3250,7 +3521,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:138"
+          "x-source": "internal/api/subscriptions.go:139"
         },
         "show_info_nodes": {
           "anyOf": [
@@ -3261,7 +3532,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:135"
+          "x-source": "internal/api/subscriptions.go:136"
         },
         "source_external_id": {
           "anyOf": [
@@ -3272,7 +3543,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:130"
+          "x-source": "internal/api/subscriptions.go:131"
         },
         "template_id": {
           "anyOf": [
@@ -3283,7 +3554,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:121"
+          "x-source": "internal/api/subscriptions.go:122"
         },
         "traffic_limit_bytes": {
           "anyOf": [
@@ -3294,12 +3565,12 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:132"
+          "x-source": "internal/api/subscriptions.go:133"
         },
         "uploaded_content": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:129"
+          "x-source": "internal/api/subscriptions.go:130"
         },
         "userinfo_header": {
           "anyOf": [
@@ -3310,15 +3581,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:134"
+          "x-source": "internal/api/subscriptions.go:135"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:262",
-      "x-source": "internal/api/subscriptions.go:118"
+      "x-decode-source": "internal/api/subscriptions.go:263",
+      "x-source": "internal/api/subscriptions.go:119"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:260"
+    "source": "internal/api/subscriptions.go:261"
   },
   "createTemplate": {
     "request_body": {
@@ -3326,32 +3597,32 @@
       "properties": {
         "content": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:472"
+          "x-source": "internal/api/subscriptions.go:483"
         },
         "description": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:471"
+          "x-source": "internal/api/subscriptions.go:482"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:470"
+          "x-source": "internal/api/subscriptions.go:481"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:469"
+          "x-source": "internal/api/subscriptions.go:480"
         },
         "variables": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:473"
+          "x-source": "internal/api/subscriptions.go:484"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:504",
-      "x-source": "internal/api/subscriptions.go:468"
+      "x-decode-source": "internal/api/subscriptions.go:515",
+      "x-source": "internal/api/subscriptions.go:479"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:502"
+    "source": "internal/api/subscriptions.go:513"
   },
   "createUser": {
     "request_body": {
@@ -3517,27 +3788,27 @@
   },
   "deletePreset": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:635"
+    "source": "internal/api/subscriptions.go:646"
   },
   "deleteServer": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:409"
+    "source": "internal/api/servers.go:405"
   },
   "deleteShare": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:323"
+    "source": "internal/api/shares.go:349"
   },
   "deleteShareConnlog": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:592"
+    "source": "internal/api/shares.go:621"
   },
   "deleteSubscription": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:333"
+    "source": "internal/api/subscriptions.go:334"
   },
   "deleteTemplate": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:547"
+    "source": "internal/api/subscriptions.go:558"
   },
   "deleteUnavailablePort": {
     "query_parameters": [],
@@ -3549,7 +3820,7 @@
   },
   "deployIPv6Node": {
     "query_parameters": [],
-    "source": "internal/api/ipv6_ingress.go:224"
+    "source": "internal/api/ipv6_ingress.go:225"
   },
   "deployNode": {
     "request_body": {
@@ -3557,35 +3828,35 @@
       "properties": {
         "advertise_host": {
           "type": "string",
-          "x-source": "internal/api/servers.go:666"
+          "x-source": "internal/api/servers.go:664"
         },
         "cert_id": {
           "type": "string",
-          "x-source": "internal/api/servers.go:679"
+          "x-source": "internal/api/servers.go:677"
         },
         "cert_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:680"
+          "x-source": "internal/api/servers.go:678"
         },
         "domain": {
           "type": "string",
-          "x-source": "internal/api/servers.go:673"
+          "x-source": "internal/api/servers.go:671"
         },
         "expected_ipv6": {
           "type": "string",
-          "x-source": "internal/api/servers.go:668"
+          "x-source": "internal/api/servers.go:666"
         },
         "ingress_family": {
           "type": "string",
-          "x-source": "internal/api/servers.go:664"
+          "x-source": "internal/api/servers.go:662"
         },
         "mieru_transport": {
           "type": "string",
-          "x-source": "internal/api/servers.go:678"
+          "x-source": "internal/api/servers.go:676"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/servers.go:670"
+          "x-source": "internal/api/servers.go:668"
         },
         "network": {
           "anyOf": [
@@ -3687,54 +3958,215 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:665"
+          "x-source": "internal/api/servers.go:663"
         },
         "obfs": {
           "type": "boolean",
-          "x-source": "internal/api/servers.go:674"
+          "x-source": "internal/api/servers.go:672"
         },
         "operation_id": {
           "type": "string",
-          "x-source": "internal/api/servers.go:667"
+          "x-source": "internal/api/servers.go:665"
         },
         "port": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:671"
+          "x-source": "internal/api/servers.go:669"
         },
         "protocol": {
           "type": "string",
-          "x-source": "internal/api/servers.go:669"
+          "x-source": "internal/api/servers.go:667"
         },
         "snell_version": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:675"
+          "x-source": "internal/api/servers.go:673"
         },
         "sni": {
           "type": "string",
-          "x-source": "internal/api/servers.go:672"
+          "x-source": "internal/api/servers.go:670"
         },
         "ss_method": {
           "type": "string",
-          "x-source": "internal/api/servers.go:676"
+          "x-source": "internal/api/servers.go:674"
         },
         "ss_network": {
           "type": "string",
-          "x-source": "internal/api/servers.go:677"
+          "x-source": "internal/api/servers.go:675"
         },
         "tags": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/servers.go:681"
+          "x-source": "internal/api/servers.go:679"
+        },
+        "trojan": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "grpc": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "service_name": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:46"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:45"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/tls.go:53"
+                },
+                "security": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/tls.go:51"
+                },
+                "transport": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/tls.go:50"
+                },
+                "ws": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:42"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:41"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:40"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/tls.go:52"
+                }
+              },
+              "type": "object",
+              "x-source": "internal/nodecombo/tls.go:49"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-source": "internal/api/servers.go:660"
+        },
+        "vless": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "flow": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:23"
+                },
+                "grpc": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "service_name": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:46"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:45"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:26"
+                },
+                "security": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:22"
+                },
+                "transport": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:21"
+                },
+                "ws": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:42"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:41"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:40"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:25"
+                },
+                "xhttp": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:31"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:32"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:30"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/vless.go:29"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:24"
+                }
+              },
+              "type": "object",
+              "x-source": "internal/nodecombo/vless.go:20"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-source": "internal/api/servers.go:661"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/servers.go:694",
-      "x-source": "internal/api/servers.go:663"
+      "x-decode-source": "internal/api/servers.go:715",
+      "x-source": "internal/api/servers.go:659"
     },
     "query_parameters": [],
-    "source": "internal/api/servers.go:684"
+    "source": "internal/api/servers.go:705"
   },
   "dirSize": {
     "query_parameters": [],
@@ -3756,11 +4188,11 @@
   },
   "encodeFilename": {
     "query_parameters": [],
-    "source": "internal/api/public.go:206"
+    "source": "internal/api/public.go:219"
   },
   "enrollToken": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:429"
+    "source": "internal/api/servers.go:425"
   },
   "ensureSingleUserShare": {
     "query_parameters": [],
@@ -3779,7 +4211,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:444"
+        "x-source": "internal/api/shares.go:473"
       },
       {
         "name": "host",
@@ -3788,7 +4220,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:442"
+        "x-source": "internal/api/shares.go:471"
       },
       {
         "name": "limit",
@@ -3798,7 +4230,7 @@
           "default": 100,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:446"
+        "x-source": "internal/api/shares.go:475"
       },
       {
         "name": "node_id",
@@ -3817,7 +4249,7 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:447"
+        "x-source": "internal/api/shares.go:476"
       },
       {
         "name": "server_id",
@@ -3835,7 +4267,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:449"
+        "x-source": "internal/api/shares.go:478"
       },
       {
         "name": "src",
@@ -3844,7 +4276,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:443"
+        "x-source": "internal/api/shares.go:472"
       },
       {
         "name": "to",
@@ -3853,14 +4285,14 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:445"
+        "x-source": "internal/api/shares.go:474"
       }
     ],
-    "source": "internal/api/shares.go:563"
+    "source": "internal/api/shares.go:592"
   },
   "extFor": {
     "query_parameters": [],
-    "source": "internal/api/public.go:202"
+    "source": "internal/api/public.go:215"
   },
   "externalTraffic": {
     "query_parameters": [
@@ -3883,7 +4315,7 @@
   },
   "finishIPv6Deployment": {
     "query_parameters": [],
-    "source": "internal/api/ipv6_ingress.go:255"
+    "source": "internal/api/ipv6_ingress.go:256"
   },
   "finishLogin": {
     "query_parameters": [],
@@ -3891,7 +4323,7 @@
   },
   "firstNonEmpty": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:133"
+    "source": "internal/api/servers.go:140"
   },
   "geoipCountries": {
     "query_parameters": [],
@@ -3899,7 +4331,7 @@
   },
   "getAccessRoute": {
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:13"
+    "source": "internal/api/access_routes.go:14"
   },
   "getEgressProfile": {
     "query_parameters": [
@@ -3944,7 +4376,7 @@
   },
   "getServer": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:319"
+    "source": "internal/api/servers.go:326"
   },
   "getServerIPv6Endpoint": {
     "query_parameters": [
@@ -3966,15 +4398,15 @@
   },
   "getShare": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:233"
+    "source": "internal/api/shares.go:259"
   },
   "getShareByPublicID": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:251"
+    "source": "internal/api/shares.go:277"
   },
   "getSubscription": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:285"
+    "source": "internal/api/subscriptions.go:286"
   },
   "getUnavailablePort": {
     "query_parameters": [],
@@ -3994,7 +4426,7 @@
   },
   "humanBytes": {
     "query_parameters": [],
-    "source": "internal/api/agent.go:401"
+    "source": "internal/api/agent.go:412"
   },
   "implementedDelegation": {
     "query_parameters": [],
@@ -4131,7 +4563,7 @@
   },
   "listAccessRoutes": {
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:26"
+    "source": "internal/api/access_routes.go:27"
   },
   "listAudit": {
     "query_parameters": [
@@ -4257,11 +4689,11 @@
   },
   "listPresets": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:579"
+    "source": "internal/api/subscriptions.go:590"
   },
   "listServers": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:142"
+    "source": "internal/api/servers.go:149"
   },
   "listSharePersonalTemplates": {
     "query_parameters": [],
@@ -4280,10 +4712,10 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/subscriptions.go:109"
+        "x-source": "internal/api/subscriptions.go:110"
       }
     ],
-    "source": "internal/api/subscriptions.go:98"
+    "source": "internal/api/subscriptions.go:99"
   },
   "listTemplateVersions": {
     "query_parameters": [],
@@ -4291,7 +4723,7 @@
   },
   "listTemplates": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:459"
+    "source": "internal/api/subscriptions.go:470"
   },
   "listUnavailablePorts": {
     "query_parameters": [],
@@ -4347,7 +4779,7 @@
   },
   "lookupSrc": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:468"
+    "source": "internal/api/shares.go:497"
   },
   "maintenanceAuth": {
     "request_body": {
@@ -4471,10 +4903,10 @@
           "default": 30,
           "type": "integer"
         },
-        "x-source": "internal/api/nodes.go:611"
+        "x-source": "internal/api/nodes.go:622"
       }
     ],
-    "source": "internal/api/nodes.go:606"
+    "source": "internal/api/nodes.go:617"
   },
   "nodeURI": {
     "query_parameters": [],
@@ -4498,7 +4930,7 @@
   },
   "officialAgentCommand": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:741"
+    "source": "internal/api/servers.go:769"
   },
   "operationScope": {
     "query_parameters": [],
@@ -4526,7 +4958,7 @@
   },
   "parseTimeParam": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:424"
+    "source": "internal/api/shares.go:453"
   },
   "permissionReauth": {
     "query_parameters": [],
@@ -4633,11 +5065,11 @@
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/access_routes.go:44",
+      "x-decode-source": "internal/api/access_routes.go:45",
       "x-source": "internal/store/access_routes.go:26"
     },
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:42"
+    "source": "internal/api/access_routes.go:43"
   },
   "previewAdminShareTemplateDraft": {
     "request_body": {
@@ -4931,35 +5363,35 @@
       "properties": {
         "advertise_host": {
           "type": "string",
-          "x-source": "internal/api/servers.go:666"
+          "x-source": "internal/api/servers.go:664"
         },
         "cert_id": {
           "type": "string",
-          "x-source": "internal/api/servers.go:679"
+          "x-source": "internal/api/servers.go:677"
         },
         "cert_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:680"
+          "x-source": "internal/api/servers.go:678"
         },
         "domain": {
           "type": "string",
-          "x-source": "internal/api/servers.go:673"
+          "x-source": "internal/api/servers.go:671"
         },
         "expected_ipv6": {
           "type": "string",
-          "x-source": "internal/api/servers.go:668"
+          "x-source": "internal/api/servers.go:666"
         },
         "ingress_family": {
           "type": "string",
-          "x-source": "internal/api/servers.go:664"
+          "x-source": "internal/api/servers.go:662"
         },
         "mieru_transport": {
           "type": "string",
-          "x-source": "internal/api/servers.go:678"
+          "x-source": "internal/api/servers.go:676"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/servers.go:670"
+          "x-source": "internal/api/servers.go:668"
         },
         "network": {
           "anyOf": [
@@ -5061,51 +5493,212 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:665"
+          "x-source": "internal/api/servers.go:663"
         },
         "obfs": {
           "type": "boolean",
-          "x-source": "internal/api/servers.go:674"
+          "x-source": "internal/api/servers.go:672"
         },
         "operation_id": {
           "type": "string",
-          "x-source": "internal/api/servers.go:667"
+          "x-source": "internal/api/servers.go:665"
         },
         "port": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:671"
+          "x-source": "internal/api/servers.go:669"
         },
         "protocol": {
           "type": "string",
-          "x-source": "internal/api/servers.go:669"
+          "x-source": "internal/api/servers.go:667"
         },
         "snell_version": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:675"
+          "x-source": "internal/api/servers.go:673"
         },
         "sni": {
           "type": "string",
-          "x-source": "internal/api/servers.go:672"
+          "x-source": "internal/api/servers.go:670"
         },
         "ss_method": {
           "type": "string",
-          "x-source": "internal/api/servers.go:676"
+          "x-source": "internal/api/servers.go:674"
         },
         "ss_network": {
           "type": "string",
-          "x-source": "internal/api/servers.go:677"
+          "x-source": "internal/api/servers.go:675"
         },
         "tags": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/servers.go:681"
+          "x-source": "internal/api/servers.go:679"
+        },
+        "trojan": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "grpc": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "service_name": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:46"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:45"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/tls.go:53"
+                },
+                "security": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/tls.go:51"
+                },
+                "transport": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/tls.go:50"
+                },
+                "ws": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:42"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:41"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:40"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/tls.go:52"
+                }
+              },
+              "type": "object",
+              "x-source": "internal/nodecombo/tls.go:49"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-source": "internal/api/servers.go:660"
+        },
+        "vless": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "properties": {
+                "flow": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:23"
+                },
+                "grpc": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "service_name": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:46"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:45"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:26"
+                },
+                "security": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:22"
+                },
+                "transport": {
+                  "type": "string",
+                  "x-source": "internal/nodecombo/vless.go:21"
+                },
+                "ws": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:42"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/tls.go:41"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/tls.go:40"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:25"
+                },
+                "xhttp": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "host": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:31"
+                        },
+                        "mode": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:32"
+                        },
+                        "path": {
+                          "type": "string",
+                          "x-source": "internal/nodecombo/vless.go:30"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/nodecombo/vless.go:29"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "x-source": "internal/nodecombo/vless.go:24"
+                }
+              },
+              "type": "object",
+              "x-source": "internal/nodecombo/vless.go:20"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "x-source": "internal/api/servers.go:661"
         }
       },
       "type": "object",
       "x-decode-source": "internal/api/ipv6_ingress.go:150",
-      "x-source": "internal/api/servers.go:663"
+      "x-source": "internal/api/servers.go:659"
     },
     "query_parameters": [],
     "source": "internal/api/ipv6_ingress.go:140"
@@ -5469,7 +6062,7 @@
             "type": "integer"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:136"
+          "x-source": "internal/api/subscriptions.go:137"
         },
         "chains": {
           "items": {
@@ -5477,26 +6070,26 @@
             "properties": {
               "front_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:262"
+                "x-source": "internal/domain/models.go:263"
               },
               "landing_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:263"
+                "x-source": "internal/domain/models.go:264"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:261"
+                "x-source": "internal/domain/models.go:262"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:260"
+            "x-source": "internal/domain/models.go:261"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:124"
+          "x-source": "internal/api/subscriptions.go:125"
         },
         "default_format": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:122"
+          "x-source": "internal/api/subscriptions.go:123"
         },
         "enabled": {
           "anyOf": [
@@ -5507,7 +6100,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:137"
+          "x-source": "internal/api/subscriptions.go:138"
         },
         "expire_at": {
           "anyOf": [
@@ -5519,19 +6112,19 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:131"
+          "x-source": "internal/api/subscriptions.go:132"
         },
         "format": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:406"
+          "x-source": "internal/api/subscriptions.go:422"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:120"
+          "x-source": "internal/api/subscriptions.go:121"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:119"
+          "x-source": "internal/api/subscriptions.go:120"
         },
         "node_selection": {
           "anyOf": [
@@ -5540,53 +6133,57 @@
               "properties": {
                 "exclude_filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:274"
+                  "x-source": "internal/domain/models.go:275"
                 },
                 "external_sub_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:271"
+                  "x-source": "internal/domain/models.go:272"
                 },
                 "filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:273"
+                  "x-source": "internal/domain/models.go:274"
                 },
                 "include_all": {
                   "type": "boolean",
-                  "x-source": "internal/domain/models.go:269"
+                  "x-source": "internal/domain/models.go:270"
                 },
                 "node_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:270"
+                  "x-source": "internal/domain/models.go:271"
                 },
                 "route_ids": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:268"
+                  "x-source": "internal/domain/models.go:269"
                 },
                 "tags": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:272"
+                  "x-source": "internal/domain/models.go:273"
                 }
               },
               "type": "object",
-              "x-source": "internal/domain/models.go:267"
+              "x-source": "internal/domain/models.go:268"
             },
             {
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:127"
+          "x-source": "internal/api/subscriptions.go:128"
+        },
+        "profile": {
+          "type": "string",
+          "x-source": "internal/api/subscriptions.go:423"
         },
         "proxy_groups": {
           "items": {
@@ -5594,92 +6191,92 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:123"
+          "x-source": "internal/api/subscriptions.go:124"
         },
         "reset_day": {
           "anyOf": [
@@ -5690,19 +6287,19 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:133"
+          "x-source": "internal/api/subscriptions.go:134"
         },
         "rule_providers": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:126"
+          "x-source": "internal/api/subscriptions.go:127"
         },
         "rules": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:125"
+          "x-source": "internal/api/subscriptions.go:126"
         },
         "short_link": {
           "anyOf": [
@@ -5713,7 +6310,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:138"
+          "x-source": "internal/api/subscriptions.go:139"
         },
         "show_info_nodes": {
           "anyOf": [
@@ -5724,7 +6321,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:135"
+          "x-source": "internal/api/subscriptions.go:136"
         },
         "source_external_id": {
           "anyOf": [
@@ -5735,7 +6332,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:130"
+          "x-source": "internal/api/subscriptions.go:131"
         },
         "template_id": {
           "anyOf": [
@@ -5746,7 +6343,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:121"
+          "x-source": "internal/api/subscriptions.go:122"
         },
         "traffic_limit_bytes": {
           "anyOf": [
@@ -5757,12 +6354,12 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:132"
+          "x-source": "internal/api/subscriptions.go:133"
         },
         "uploaded_content": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:129"
+          "x-source": "internal/api/subscriptions.go:130"
         },
         "userinfo_header": {
           "anyOf": [
@@ -5773,15 +6370,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:134"
+          "x-source": "internal/api/subscriptions.go:135"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:408",
-      "x-source": "internal/api/subscriptions.go:404"
+      "x-decode-source": "internal/api/subscriptions.go:425",
+      "x-source": "internal/api/subscriptions.go:420"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:403"
+    "source": "internal/api/subscriptions.go:419"
   },
   "previewTransitRetirement": {
     "query_parameters": [],
@@ -5804,10 +6401,19 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/public.go:66"
+        "x-source": "internal/api/public.go:67"
+      },
+      {
+        "name": "profile",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "x-source": "internal/api/public.go:129"
       }
     ],
-    "source": "internal/api/public.go:60"
+    "source": "internal/api/public.go:61"
   },
   "publicSubscription": {
     "query_parameters": [
@@ -5818,10 +6424,19 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/public.go:77"
+        "x-source": "internal/api/public.go:78"
+      },
+      {
+        "name": "profile",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "x-source": "internal/api/public.go:129"
       }
     ],
-    "source": "internal/api/public.go:53"
+    "source": "internal/api/public.go:54"
   },
   "putSettings": {
     "request_body": {
@@ -5844,7 +6459,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:444"
+        "x-source": "internal/api/shares.go:473"
       },
       {
         "name": "host",
@@ -5853,7 +6468,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:442"
+        "x-source": "internal/api/shares.go:471"
       },
       {
         "name": "limit",
@@ -5863,7 +6478,7 @@
           "default": 100,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:446"
+        "x-source": "internal/api/shares.go:475"
       },
       {
         "name": "node_id",
@@ -5882,7 +6497,7 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:447"
+        "x-source": "internal/api/shares.go:476"
       },
       {
         "name": "server_id",
@@ -5900,7 +6515,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:449"
+        "x-source": "internal/api/shares.go:478"
       },
       {
         "name": "src",
@@ -5909,7 +6524,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:443"
+        "x-source": "internal/api/shares.go:472"
       },
       {
         "name": "to",
@@ -5918,10 +6533,10 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:445"
+        "x-source": "internal/api/shares.go:474"
       }
     ],
-    "source": "internal/api/shares.go:484"
+    "source": "internal/api/shares.go:513"
   },
   "queryInt64Ptr": {
     "query_parameters": [],
@@ -6065,7 +6680,7 @@
   },
   "redact": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:561"
+    "source": "internal/api/servers.go:557"
   },
   "refreshGeoIP": {
     "query_parameters": [],
@@ -6077,7 +6692,7 @@
   },
   "regenerateNode": {
     "query_parameters": [],
-    "source": "internal/api/nodes.go:619"
+    "source": "internal/api/nodes.go:630"
   },
   "registerAgentOperation": {
     "query_parameters": [],
@@ -6096,10 +6711,19 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/subscriptions.go:390"
+        "x-source": "internal/api/subscriptions.go:406"
+      },
+      {
+        "name": "profile",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "x-source": "internal/api/subscriptions.go:410"
       }
     ],
-    "source": "internal/api/subscriptions.go:378"
+    "source": "internal/api/subscriptions.go:394"
   },
   "reorderNodes": {
     "request_body": {
@@ -6241,15 +6865,15 @@
   },
   "requireSystemTemplateForDelegatedManager": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:563"
+    "source": "internal/api/subscriptions.go:574"
   },
   "resetAgentToken": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:453"
+    "source": "internal/api/servers.go:449"
   },
   "resolveIPv6Endpoint": {
     "query_parameters": [],
-    "source": "internal/api/ipv6_ingress.go:308"
+    "source": "internal/api/ipv6_ingress.go:309"
   },
   "retireManagedTransit": {
     "request_body": {
@@ -6273,15 +6897,15 @@
       "properties": {
         "expected_revision": {
           "type": "integer",
-          "x-source": "internal/api/access_routes.go:93"
+          "x-source": "internal/api/access_routes.go:94"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/access_routes.go:95",
-      "x-source": "internal/api/access_routes.go:92"
+      "x-decode-source": "internal/api/access_routes.go:96",
+      "x-source": "internal/api/access_routes.go:93"
     },
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:87"
+    "source": "internal/api/access_routes.go:88"
   },
   "retryManagedTransit": {
     "request_body": {
@@ -6348,7 +6972,7 @@
   },
   "rotateSubscriptionToken": {
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:353"
+    "source": "internal/api/subscriptions.go:354"
   },
   "routes": {
     "request_body": {
@@ -6751,11 +7375,11 @@
         "description": "由服务端校验"
       },
       "type": "object",
-      "x-decode-source": "internal/api/nat.go:80",
-      "x-source": "internal/api/nat.go:80"
+      "x-decode-source": "internal/api/nat.go:86",
+      "x-source": "internal/api/nat.go:86"
     },
     "query_parameters": [],
-    "source": "internal/api/nat.go:74"
+    "source": "internal/api/nat.go:80"
   },
   "saveUnavailablePort": {
     "request_body": {
@@ -6808,14 +7432,33 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/public.go:77"
+        "x-source": "internal/api/public.go:78"
+      },
+      {
+        "name": "profile",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "x-source": "internal/api/public.go:129"
       }
     ],
-    "source": "internal/api/public.go:69"
+    "source": "internal/api/public.go:70"
   },
   "serveSub": {
-    "query_parameters": [],
-    "source": "internal/api/public.go:82"
+    "query_parameters": [
+      {
+        "name": "profile",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "x-source": "internal/api/public.go:129"
+      }
+    ],
+    "source": "internal/api/public.go:83"
   },
   "serverDesired": {
     "query_parameters": [
@@ -6827,10 +7470,10 @@
           "default": 10,
           "type": "integer"
         },
-        "x-source": "internal/api/servers.go:536"
+        "x-source": "internal/api/servers.go:532"
       }
     ],
-    "source": "internal/api/servers.go:531"
+    "source": "internal/api/servers.go:527"
   },
   "serverHosts": {
     "query_parameters": [],
@@ -6842,7 +7485,7 @@
   },
   "serverNAT": {
     "query_parameters": [],
-    "source": "internal/api/nat.go:61"
+    "source": "internal/api/nat.go:67"
   },
   "serverNetwork": {
     "query_parameters": [],
@@ -6893,11 +7536,11 @@
   },
   "serverQuotaBillingLabel": {
     "query_parameters": [],
-    "source": "internal/api/agent.go:363"
+    "source": "internal/api/agent.go:374"
   },
   "serverRepublish": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:644"
+    "source": "internal/api/servers.go:640"
   },
   "serverSamples": {
     "query_parameters": [
@@ -6909,10 +7552,10 @@
           "default": 24,
           "type": "integer"
         },
-        "x-source": "internal/api/servers.go:503"
+        "x-source": "internal/api/servers.go:499"
       }
     ],
-    "source": "internal/api/servers.go:498"
+    "source": "internal/api/servers.go:494"
   },
   "serverTraffic": {
     "query_parameters": [
@@ -6924,7 +7567,7 @@
           "default": 30,
           "type": "integer"
         },
-        "x-source": "internal/api/servers.go:487"
+        "x-source": "internal/api/servers.go:483"
       },
       {
         "name": "period",
@@ -6933,14 +7576,14 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/servers.go:474"
+        "x-source": "internal/api/servers.go:470"
       }
     ],
-    "source": "internal/api/servers.go:469"
+    "source": "internal/api/servers.go:465"
   },
   "serverView": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:69"
+    "source": "internal/api/servers.go:73"
   },
   "sessionName": {
     "query_parameters": [],
@@ -7055,15 +7698,15 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "x-source": "internal/api/shares.go:308"
+          "x-source": "internal/api/shares.go:334"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/shares.go:310",
-      "x-source": "internal/api/shares.go:307"
+      "x-decode-source": "internal/api/shares.go:336",
+      "x-source": "internal/api/shares.go:333"
     },
     "query_parameters": [],
-    "source": "internal/api/shares.go:295"
+    "source": "internal/api/shares.go:321"
   },
   "setSharePersonalTemplate": {
     "request_body": {
@@ -7113,9 +7756,13 @@
     "query_parameters": [],
     "source": "internal/api/auth.go:23"
   },
+  "shareAPIError": {
+    "query_parameters": [],
+    "source": "internal/api/shares.go:198"
+  },
   "shareAction": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:344"
+    "source": "internal/api/shares.go:370"
   },
   "shareEvents": {
     "query_parameters": [
@@ -7127,10 +7774,10 @@
           "default": 100,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:394"
+        "x-source": "internal/api/shares.go:423"
       }
     ],
-    "source": "internal/api/shares.go:382"
+    "source": "internal/api/shares.go:411"
   },
   "shareTraffic": {
     "query_parameters": [
@@ -7142,10 +7789,10 @@
           "default": 30,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:414"
+        "x-source": "internal/api/shares.go:443"
       }
     ],
-    "source": "internal/api/shares.go:402"
+    "source": "internal/api/shares.go:431"
   },
   "shareView": {
     "query_parameters": [],
@@ -7269,15 +7916,15 @@
       "properties": {
         "expected_revision": {
           "type": "integer",
-          "x-source": "internal/api/access_routes.go:72"
+          "x-source": "internal/api/access_routes.go:73"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/access_routes.go:74",
-      "x-source": "internal/api/access_routes.go:71"
+      "x-decode-source": "internal/api/access_routes.go:75",
+      "x-source": "internal/api/access_routes.go:72"
     },
     "query_parameters": [],
-    "source": "internal/api/access_routes.go:66"
+    "source": "internal/api/access_routes.go:67"
   },
   "strconvI": {
     "query_parameters": [],
@@ -7297,7 +7944,7 @@
           "default": 100,
           "type": "integer"
         },
-        "x-source": "internal/api/subscriptions.go:449"
+        "x-source": "internal/api/subscriptions.go:460"
       },
       {
         "name": "offset",
@@ -7307,18 +7954,18 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/subscriptions.go:449"
+        "x-source": "internal/api/subscriptions.go:460"
       }
     ],
-    "source": "internal/api/subscriptions.go:444"
+    "source": "internal/api/subscriptions.go:455"
   },
   "subscriptionBrowserRequest": {
     "query_parameters": [],
-    "source": "internal/api/public.go:161"
+    "source": "internal/api/public.go:169"
   },
   "surgeManagedBody": {
     "query_parameters": [],
-    "source": "internal/api/public.go:177"
+    "source": "internal/api/public.go:185"
   },
   "syncExternal": {
     "query_parameters": [],
@@ -7346,7 +7993,7 @@
           "default": 7,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:513"
+        "x-source": "internal/api/shares.go:542"
       },
       {
         "name": "from",
@@ -7355,7 +8002,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:444"
+        "x-source": "internal/api/shares.go:473"
       },
       {
         "name": "host",
@@ -7364,7 +8011,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:442"
+        "x-source": "internal/api/shares.go:471"
       },
       {
         "name": "limit",
@@ -7374,7 +8021,7 @@
           "default": 50,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:516"
+        "x-source": "internal/api/shares.go:545"
       },
       {
         "name": "node_id",
@@ -7393,7 +8040,7 @@
           "default": 0,
           "type": "integer"
         },
-        "x-source": "internal/api/shares.go:447"
+        "x-source": "internal/api/shares.go:476"
       },
       {
         "name": "server_id",
@@ -7411,7 +8058,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:449"
+        "x-source": "internal/api/shares.go:478"
       },
       {
         "name": "src",
@@ -7420,7 +8067,7 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:443"
+        "x-source": "internal/api/shares.go:472"
       },
       {
         "name": "to",
@@ -7429,10 +8076,10 @@
         "schema": {
           "type": "string"
         },
-        "x-source": "internal/api/shares.go:445"
+        "x-source": "internal/api/shares.go:474"
       }
     ],
-    "source": "internal/api/shares.go:507"
+    "source": "internal/api/shares.go:536"
   },
   "trafficOverview": {
     "query_parameters": [
@@ -7607,11 +8254,11 @@
   },
   "updateAgent": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:574"
+    "source": "internal/api/servers.go:570"
   },
   "updateAllAgents": {
     "query_parameters": [],
-    "source": "internal/api/servers.go:607"
+    "source": "internal/api/servers.go:603"
   },
   "updateBan": {
     "request_body": {
@@ -7954,29 +8601,29 @@
       "properties": {
         "content": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:472"
+          "x-source": "internal/api/subscriptions.go:483"
         },
         "description": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:471"
+          "x-source": "internal/api/subscriptions.go:482"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:470"
+          "x-source": "internal/api/subscriptions.go:481"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:469"
+          "x-source": "internal/api/subscriptions.go:480"
         },
         "variables": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:473"
+          "x-source": "internal/api/subscriptions.go:484"
         }
       },
       "type": "object",
       "x-decode-source": "internal/api/personal_templates.go:84",
-      "x-source": "internal/api/subscriptions.go:468"
+      "x-source": "internal/api/subscriptions.go:479"
     },
     "query_parameters": [],
     "source": "internal/api/personal_templates.go:78"
@@ -7991,111 +8638,111 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:590"
+          "x-source": "internal/api/subscriptions.go:601"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:589"
+          "x-source": "internal/api/subscriptions.go:600"
         },
         "rules": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:591"
+          "x-source": "internal/api/subscriptions.go:602"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:620",
-      "x-source": "internal/api/subscriptions.go:588"
+      "x-decode-source": "internal/api/subscriptions.go:631",
+      "x-source": "internal/api/subscriptions.go:599"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:614"
+    "source": "internal/api/subscriptions.go:625"
   },
   "updateServer": {
     "request_body": {
@@ -8103,11 +8750,11 @@
       "properties": {
         "cert_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:172"
+          "x-source": "internal/api/servers.go:179"
         },
         "core_mode": {
           "type": "string",
-          "x-source": "internal/api/servers.go:170"
+          "x-source": "internal/api/servers.go:177"
         },
         "enabled": {
           "anyOf": [
@@ -8118,11 +8765,11 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:173"
+          "x-source": "internal/api/servers.go:180"
         },
         "ipv4_only": {
           "type": "boolean",
-          "x-source": "internal/api/servers.go:171"
+          "x-source": "internal/api/servers.go:178"
         },
         "is_nat": {
           "anyOf": [
@@ -8133,24 +8780,24 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:157"
+          "x-source": "internal/api/servers.go:164"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/servers.go:158"
+          "x-source": "internal/api/servers.go:165"
         },
         "nat_config": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/servers.go:156"
+          "x-source": "internal/api/servers.go:163"
         },
         "notes": {
           "type": "string",
-          "x-source": "internal/api/servers.go:163"
+          "x-source": "internal/api/servers.go:170"
         },
         "public_host": {
           "type": "string",
-          "x-source": "internal/api/servers.go:160"
+          "x-source": "internal/api/servers.go:167"
         },
         "public_host_ipv6": {
           "anyOf": [
@@ -8161,15 +8808,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:161"
+          "x-source": "internal/api/servers.go:168"
         },
         "quota_billing": {
           "type": "string",
-          "x-source": "internal/api/servers.go:166"
+          "x-source": "internal/api/servers.go:173"
         },
         "quota_bytes": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:164"
+          "x-source": "internal/api/servers.go:171"
         },
         "quota_calibrated_inbound_bytes": {
           "anyOf": [
@@ -8180,7 +8827,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:168"
+          "x-source": "internal/api/servers.go:175"
         },
         "quota_calibrated_outbound_bytes": {
           "anyOf": [
@@ -8191,7 +8838,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:169"
+          "x-source": "internal/api/servers.go:176"
         },
         "quota_calibrated_usage_bytes": {
           "anyOf": [
@@ -8202,30 +8849,30 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/servers.go:167"
+          "x-source": "internal/api/servers.go:174"
         },
         "quota_reset_day": {
           "type": "integer",
-          "x-source": "internal/api/servers.go:165"
+          "x-source": "internal/api/servers.go:172"
         },
         "region": {
           "type": "string",
-          "x-source": "internal/api/servers.go:159"
+          "x-source": "internal/api/servers.go:166"
         },
         "tags": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/servers.go:162"
+          "x-source": "internal/api/servers.go:169"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/servers.go:342",
-      "x-source": "internal/api/servers.go:155"
+      "x-decode-source": "internal/api/servers.go:349",
+      "x-source": "internal/api/servers.go:162"
     },
     "query_parameters": [],
-    "source": "internal/api/servers.go:332"
+    "source": "internal/api/servers.go:339"
   },
   "updateShare": {
     "request_body": {
@@ -8233,11 +8880,15 @@
       "properties": {
         "billing_mode": {
           "type": "string",
-          "x-source": "internal/api/shares.go:108"
+          "x-source": "internal/api/shares.go:109"
         },
         "connlog_enabled": {
           "type": "boolean",
-          "x-source": "internal/api/shares.go:112"
+          "x-source": "internal/api/shares.go:113"
+        },
+        "entry_version": {
+          "type": "integer",
+          "x-source": "internal/api/shares.go:103"
         },
         "expires_at": {
           "anyOf": [
@@ -8249,35 +8900,262 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:110"
+          "x-source": "internal/api/shares.go:111"
         },
         "extra_node_ids": {
           "items": {
             "type": "integer"
           },
           "type": "array",
-          "x-source": "internal/api/shares.go:106"
+          "x-source": "internal/api/shares.go:107"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/shares.go:103"
+          "x-source": "internal/api/shares.go:104"
         },
         "notes": {
           "type": "string",
-          "x-source": "internal/api/shares.go:113"
+          "x-source": "internal/api/shares.go:114"
         },
         "quota_bytes": {
           "type": "integer",
-          "x-source": "internal/api/shares.go:107"
+          "x-source": "internal/api/shares.go:108"
         },
         "reset_day": {
           "type": "integer",
-          "x-source": "internal/api/shares.go:109"
+          "x-source": "internal/api/shares.go:110"
         },
         "targets": {
           "items": {
             "additionalProperties": true,
             "properties": {
+              "entries": {
+                "items": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "x-source": "internal/domain/share_entry.go:15"
+                    },
+                    "node_id": {
+                      "type": "integer",
+                      "x-source": "internal/domain/share_entry.go:18"
+                    },
+                    "quota_bytes": {
+                      "type": "integer",
+                      "x-source": "internal/domain/share_entry.go:17"
+                    },
+                    "snapshot": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "cert_id": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:29"
+                        },
+                        "cert_mode": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:28"
+                        },
+                        "domain": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:27"
+                        },
+                        "mieru_transport": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:33"
+                        },
+                        "obfs": {
+                          "type": "boolean",
+                          "x-source": "internal/domain/share_entry.go:34"
+                        },
+                        "protocol": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:24"
+                        },
+                        "snell_version": {
+                          "type": "integer",
+                          "x-source": "internal/domain/share_entry.go:32"
+                        },
+                        "ss_method": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:30"
+                        },
+                        "ss_network": {
+                          "type": "string",
+                          "x-source": "internal/domain/share_entry.go:31"
+                        },
+                        "trojan": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "grpc": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "service_name": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:46"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:45"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/tls.go:53"
+                                },
+                                "security": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/tls.go:51"
+                                },
+                                "transport": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/tls.go:50"
+                                },
+                                "ws": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:42"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:41"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:40"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/tls.go:52"
+                                }
+                              },
+                              "type": "object",
+                              "x-source": "internal/nodecombo/tls.go:49"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-source": "internal/domain/share_entry.go:26"
+                        },
+                        "vless": {
+                          "anyOf": [
+                            {
+                              "additionalProperties": true,
+                              "properties": {
+                                "flow": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:23"
+                                },
+                                "grpc": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "service_name": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:46"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:45"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:26"
+                                },
+                                "security": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:22"
+                                },
+                                "transport": {
+                                  "type": "string",
+                                  "x-source": "internal/nodecombo/vless.go:21"
+                                },
+                                "ws": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:42"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/tls.go:41"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/tls.go:40"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:25"
+                                },
+                                "xhttp": {
+                                  "anyOf": [
+                                    {
+                                      "additionalProperties": true,
+                                      "properties": {
+                                        "host": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:31"
+                                        },
+                                        "mode": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:32"
+                                        },
+                                        "path": {
+                                          "type": "string",
+                                          "x-source": "internal/nodecombo/vless.go:30"
+                                        }
+                                      },
+                                      "type": "object",
+                                      "x-source": "internal/nodecombo/vless.go:29"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ],
+                                  "x-source": "internal/nodecombo/vless.go:24"
+                                }
+                              },
+                              "type": "object",
+                              "x-source": "internal/nodecombo/vless.go:20"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "x-source": "internal/domain/share_entry.go:25"
+                        }
+                      },
+                      "type": "object",
+                      "x-source": "internal/domain/share_entry.go:16"
+                    }
+                  },
+                  "type": "object",
+                  "x-source": "internal/domain/share_entry.go:14"
+                },
+                "type": "array",
+                "x-source": "internal/domain/models.go:350"
+              },
               "network": {
                 "anyOf": [
                   {
@@ -8378,32 +9256,32 @@
                     "type": "null"
                   }
                 ],
-                "x-source": "internal/domain/models.go:346"
+                "x-source": "internal/domain/models.go:347"
               },
               "protocols": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:348"
+                "x-source": "internal/domain/models.go:349"
               },
               "quota_bytes": {
                 "additionalProperties": {
                   "type": "integer"
                 },
                 "type": "object",
-                "x-source": "internal/domain/models.go:349"
+                "x-source": "internal/domain/models.go:351"
               },
               "server_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:347"
+                "x-source": "internal/domain/models.go:348"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:345"
+            "x-source": "internal/domain/models.go:346"
           },
           "type": "array",
-          "x-source": "internal/api/shares.go:105"
+          "x-source": "internal/api/shares.go:106"
         },
         "template_id": {
           "anyOf": [
@@ -8414,7 +9292,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:111"
+          "x-source": "internal/api/shares.go:112"
         },
         "user_id": {
           "anyOf": [
@@ -8425,15 +9303,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/shares.go:104"
+          "x-source": "internal/api/shares.go:105"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/shares.go:276",
+      "x-decode-source": "internal/api/shares.go:302",
       "x-source": "internal/api/shares.go:102"
     },
     "query_parameters": [],
-    "source": "internal/api/shares.go:266"
+    "source": "internal/api/shares.go:292"
   },
   "updateSubscription": {
     "request_body": {
@@ -8444,7 +9322,7 @@
             "type": "integer"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:136"
+          "x-source": "internal/api/subscriptions.go:137"
         },
         "chains": {
           "items": {
@@ -8452,26 +9330,26 @@
             "properties": {
               "front_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:262"
+                "x-source": "internal/domain/models.go:263"
               },
               "landing_node_id": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:263"
+                "x-source": "internal/domain/models.go:264"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:261"
+                "x-source": "internal/domain/models.go:262"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:260"
+            "x-source": "internal/domain/models.go:261"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:124"
+          "x-source": "internal/api/subscriptions.go:125"
         },
         "default_format": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:122"
+          "x-source": "internal/api/subscriptions.go:123"
         },
         "enabled": {
           "anyOf": [
@@ -8482,7 +9360,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:137"
+          "x-source": "internal/api/subscriptions.go:138"
         },
         "expire_at": {
           "anyOf": [
@@ -8494,15 +9372,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:131"
+          "x-source": "internal/api/subscriptions.go:132"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:120"
+          "x-source": "internal/api/subscriptions.go:121"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:119"
+          "x-source": "internal/api/subscriptions.go:120"
         },
         "node_selection": {
           "anyOf": [
@@ -8511,53 +9389,53 @@
               "properties": {
                 "exclude_filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:274"
+                  "x-source": "internal/domain/models.go:275"
                 },
                 "external_sub_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:271"
+                  "x-source": "internal/domain/models.go:272"
                 },
                 "filter": {
                   "type": "string",
-                  "x-source": "internal/domain/models.go:273"
+                  "x-source": "internal/domain/models.go:274"
                 },
                 "include_all": {
                   "type": "boolean",
-                  "x-source": "internal/domain/models.go:269"
+                  "x-source": "internal/domain/models.go:270"
                 },
                 "node_ids": {
                   "items": {
                     "type": "integer"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:270"
+                  "x-source": "internal/domain/models.go:271"
                 },
                 "route_ids": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:268"
+                  "x-source": "internal/domain/models.go:269"
                 },
                 "tags": {
                   "items": {
                     "type": "string"
                   },
                   "type": "array",
-                  "x-source": "internal/domain/models.go:272"
+                  "x-source": "internal/domain/models.go:273"
                 }
               },
               "type": "object",
-              "x-source": "internal/domain/models.go:267"
+              "x-source": "internal/domain/models.go:268"
             },
             {
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:127"
+          "x-source": "internal/api/subscriptions.go:128"
         },
         "proxy_groups": {
           "items": {
@@ -8565,92 +9443,92 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:123"
+          "x-source": "internal/api/subscriptions.go:124"
         },
         "reset_day": {
           "anyOf": [
@@ -8661,19 +9539,19 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:133"
+          "x-source": "internal/api/subscriptions.go:134"
         },
         "rule_providers": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:126"
+          "x-source": "internal/api/subscriptions.go:127"
         },
         "rules": {
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:125"
+          "x-source": "internal/api/subscriptions.go:126"
         },
         "short_link": {
           "anyOf": [
@@ -8684,7 +9562,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:138"
+          "x-source": "internal/api/subscriptions.go:139"
         },
         "show_info_nodes": {
           "anyOf": [
@@ -8695,7 +9573,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:135"
+          "x-source": "internal/api/subscriptions.go:136"
         },
         "source_external_id": {
           "anyOf": [
@@ -8706,7 +9584,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:130"
+          "x-source": "internal/api/subscriptions.go:131"
         },
         "template_id": {
           "anyOf": [
@@ -8717,7 +9595,7 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:121"
+          "x-source": "internal/api/subscriptions.go:122"
         },
         "traffic_limit_bytes": {
           "anyOf": [
@@ -8728,12 +9606,12 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:132"
+          "x-source": "internal/api/subscriptions.go:133"
         },
         "uploaded_content": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:129"
+          "x-source": "internal/api/subscriptions.go:130"
         },
         "userinfo_header": {
           "anyOf": [
@@ -8744,15 +9622,15 @@
               "type": "null"
             }
           ],
-          "x-source": "internal/api/subscriptions.go:134"
+          "x-source": "internal/api/subscriptions.go:135"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:311",
-      "x-source": "internal/api/subscriptions.go:118"
+      "x-decode-source": "internal/api/subscriptions.go:312",
+      "x-source": "internal/api/subscriptions.go:119"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:301"
+    "source": "internal/api/subscriptions.go:302"
   },
   "updateTemplate": {
     "request_body": {
@@ -8760,32 +9638,32 @@
       "properties": {
         "content": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:472"
+          "x-source": "internal/api/subscriptions.go:483"
         },
         "description": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:471"
+          "x-source": "internal/api/subscriptions.go:482"
         },
         "kind": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:470"
+          "x-source": "internal/api/subscriptions.go:481"
         },
         "name": {
           "type": "string",
-          "x-source": "internal/api/subscriptions.go:469"
+          "x-source": "internal/api/subscriptions.go:480"
         },
         "variables": {
           "additionalProperties": true,
           "description": "由服务端校验",
-          "x-source": "internal/api/subscriptions.go:473"
+          "x-source": "internal/api/subscriptions.go:484"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:532",
-      "x-source": "internal/api/subscriptions.go:468"
+      "x-decode-source": "internal/api/subscriptions.go:543",
+      "x-source": "internal/api/subscriptions.go:479"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:519"
+    "source": "internal/api/subscriptions.go:530"
   },
   "updateUser": {
     "request_body": {
@@ -8886,100 +9764,100 @@
             "properties": {
               "dialer_proxy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:239"
+                "x-source": "internal/domain/models.go:240"
               },
               "disable_udp": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:242"
+                "x-source": "internal/domain/models.go:243"
               },
               "exclude_filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:240"
+                "x-source": "internal/domain/models.go:241"
               },
               "expected_status": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:245"
+                "x-source": "internal/domain/models.go:246"
               },
               "filter": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:232"
+                "x-source": "internal/domain/models.go:233"
               },
               "hidden": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:238"
+                "x-source": "internal/domain/models.go:239"
               },
               "icon": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:237"
+                "x-source": "internal/domain/models.go:238"
               },
               "include_all": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:231"
+                "x-source": "internal/domain/models.go:232"
               },
               "interface_name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:243"
+                "x-source": "internal/domain/models.go:244"
               },
               "interval": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:234"
+                "x-source": "internal/domain/models.go:235"
               },
               "lazy": {
                 "type": "boolean",
-                "x-source": "internal/domain/models.go:236"
+                "x-source": "internal/domain/models.go:237"
               },
               "name": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:227"
+                "x-source": "internal/domain/models.go:228"
               },
               "node_ids": {
                 "items": {
                   "type": "integer"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:230"
+                "x-source": "internal/domain/models.go:231"
               },
               "proxies": {
                 "items": {
                   "type": "string"
                 },
                 "type": "array",
-                "x-source": "internal/domain/models.go:229"
+                "x-source": "internal/domain/models.go:230"
               },
               "routing_mark": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:244"
+                "x-source": "internal/domain/models.go:245"
               },
               "strategy": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:241"
+                "x-source": "internal/domain/models.go:242"
               },
               "tolerance": {
                 "type": "integer",
-                "x-source": "internal/domain/models.go:235"
+                "x-source": "internal/domain/models.go:236"
               },
               "type": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:228"
+                "x-source": "internal/domain/models.go:229"
               },
               "url": {
                 "type": "string",
-                "x-source": "internal/domain/models.go:233"
+                "x-source": "internal/domain/models.go:234"
               }
             },
             "type": "object",
-            "x-source": "internal/domain/models.go:226"
+            "x-source": "internal/domain/models.go:227"
           },
           "type": "array",
-          "x-source": "internal/api/subscriptions.go:435"
+          "x-source": "internal/api/subscriptions.go:446"
         }
       },
       "type": "object",
-      "x-decode-source": "internal/api/subscriptions.go:437",
-      "x-source": "internal/api/subscriptions.go:434"
+      "x-decode-source": "internal/api/subscriptions.go:448",
+      "x-source": "internal/api/subscriptions.go:445"
     },
     "query_parameters": [],
-    "source": "internal/api/subscriptions.go:433"
+    "source": "internal/api/subscriptions.go:444"
   },
   "validateKeyOperations": {
     "query_parameters": [],
@@ -8999,7 +9877,7 @@
   },
   "verifyIPv6Endpoint": {
     "query_parameters": [],
-    "source": "internal/api/ipv6_ingress.go:299"
+    "source": "internal/api/ipv6_ingress.go:300"
   },
   "visibleAgentOperations": {
     "query_parameters": [],
@@ -9007,7 +9885,7 @@
   },
   "warmSrc": {
     "query_parameters": [],
-    "source": "internal/api/shares.go:475"
+    "source": "internal/api/shares.go:504"
   },
   "withCommon": {
     "query_parameters": [],

@@ -43,7 +43,7 @@ func InstallEntry(args []string) (bool, error) {
 	if err = json.Unmarshal(b, &r); err != nil {
 		return true, err
 	}
-	if (r.Name != "sing-box" && r.Name != "snell-server" && r.Name != "mita") || !filepath.IsAbs(r.BinDir) || filepath.Clean(r.BinDir) != r.BinDir {
+	if (r.Name != "sing-box" && r.Name != "snell-server" && r.Name != "mita" && r.Name != "xray") || !filepath.IsAbs(r.BinDir) || filepath.Clean(r.BinDir) != r.BinDir {
 		return true, errors.New("invalid install request")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)

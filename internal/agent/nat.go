@@ -131,7 +131,15 @@ func (a *Agent) applyNATChoice(ctx context.Context, choice *agentproto.NATStatus
 	}
 	if err == nil {
 		var rules string
-		rules, err = nft.NATRules(cfg, nodes, forwards)
+		for _, n := range nodes {
+			if n.Core == "xray" && !n.Blocked && len(cfg.Mappings) > 0 {
+				err = errors.New("Xray does not support NAT")
+				break
+			}
+		}
+		if err == nil {
+			rules, err = nft.NATRules(cfg, nodes, forwards)
+		}
 		if err == nil && rules != "" {
 			err = checkNATListeners(rules, cfg)
 		}
@@ -402,6 +410,9 @@ func (a *Agent) invalidateNATApplications() error {
 	a.State.NodeApplicationSequence++
 	for i := range a.State.NodeApplications {
 		a.State.NodeApplications[i].Status = "failed"
+		a.State.NodeApplications[i].TLSTransportVersion = 0
+		a.State.NodeApplications[i].CoreVersion = ""
+		a.State.NodeApplications[i].ListenIPv6 = ""
 	}
 	if err := a.State.Save(a.StateDir); err != nil {
 		a.State.NodeApplicationRevision, a.State.NodeApplicationHash = 0, ""

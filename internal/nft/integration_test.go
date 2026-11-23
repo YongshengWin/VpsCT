@@ -31,12 +31,60 @@ func TestNodeRulesValidation(t *testing.T) {
 	}
 }
 
-func TestKernelNodeAccounting(t *testing.T) {
+func TestXrayCountsOnlyClientTCP(t *testing.T) {
+	x := agentproto.NodeSpec{NodeID: 9, ListenPort: 24443, Core: "xray", Protocol: "vless"}
+	group := "/ctlvps.slice/ctlvps-proxy.slice/ctlvps-proxy-n9.slice"
+	for _, state := range []string{"active", "blocked", "retired"} {
+		x.Blocked, x.Retired = state == "blocked", state == "retired"
+		nodes := []agentproto.NodeSpec{x}
+		rules, err := NodeRules(nodes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(rules, "add counter inet ctlvps_nodes n9_rx\nadd counter inet ctlvps_nodes n9_tx\n") {
+			t.Fatal("lost final meters")
+		}
+		if strings.Contains(rules, "th dport 24443") || strings.Contains(rules, "udp dport 24443") {
+			t.Fatal("charged non-TCP traffic")
+		}
+		rx := "ct direction original tcp dport 24443 ct mark 0x43000009 counter name n9_rx "
+		tx := "ct direction reply tcp sport 24443 ct mark 0x43000009 counter name n9_tx return"
+		if strings.Contains(rules, rx+"return") != (state == "active") || strings.Contains(rules, tx) != (state == "active") || strings.Contains(rules, rx+"drop") != (state == "blocked") {
+			t.Fatal(state, rules)
+		}
+		if strings.Contains(rules, "tcp dport 24443 ct mark &") == x.Retired || strings.Contains(rules, "ct mark 0x43000009 counter") && x.Retired {
+			t.Fatal("wrong mark lifetime", state)
+		}
+		egress, err := EgressRules(nodes, map[int64]string{9: group}, []string{"127.0.0.53"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(egress, `ct direction original drop`) != x.Blocked || strings.Contains(egress, "meta mark != 0 drop") != (state == "active") || strings.Contains(egress, "169.254.0.0/16") != (state == "active") {
+			t.Fatal(state, egress)
+		}
+	}
+	x.Blocked, x.Retired = false, false
+	if _, err := NodeRules([]agentproto.NodeSpec{x, {NodeID: 1, Core: "singbox", ListenPort: 24443}}); err == nil {
+		t.Fatal("accepted overlapping meter")
+	}
+	if _, err := EgressRules([]agentproto.NodeSpec{x}, map[int64]string{9: "/unrelated"}, nil); err == nil {
+		t.Fatal("accepted unprotected slice")
+	}
+	x.AllowPrivate = true
+	if _, err := EgressRules([]agentproto.NodeSpec{x}, map[int64]string{9: group}, nil); err == nil {
+		t.Fatal("accepted private Xray egress")
+	}
+}
+
+func TestKernelNodeAccounting(t *testing.T)        { kernelNodeAccounting(t, "singbox") }
+func TestKernelXrayIngressAccounting(t *testing.T) { kernelNodeAccounting(t, "xray") }
+
+func kernelNodeAccounting(t *testing.T, core string) {
 	if runtime.GOOS != "linux" || os.Getenv("CTLVPS_KERNEL_TEST") != "1" {
 		t.Skip("isolated Linux network namespace test")
 	}
 	dir := t.TempDir()
-	nodes := []agentproto.NodeSpec{{NodeID: 1, ListenPort: 21001, Core: "singbox"}, {NodeID: 2, ListenPort: 21002, Core: "singbox"}}
+	nodes := []agentproto.NodeSpec{{NodeID: 1, ListenPort: 21001, Core: core}, {NodeID: 2, ListenPort: 21002, Core: core}}
 	for _, name := range []string{"active", "blocked", "retired"} {
 		if name == "blocked" {
 			nodes[0].Blocked = true
@@ -52,7 +100,7 @@ func TestKernelNodeAccounting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("python3", "/work/scripts/meter-test/run.py", dir)
+	cmd := exec.Command("python3", "-I", "/work/scripts/meter-test/run.py", dir, core)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

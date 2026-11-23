@@ -226,6 +226,8 @@ func coreUnitAllowed(binary, unit string) bool {
 	switch filepath.Base(binary) {
 	case "sing-box":
 		return unit == singboxUnit || unit == "ctlvps-singbox-private.service" || instance("ctlvps-singbox@")
+	case "xray":
+		return instance("ctlvps-xray@")
 	case "snell-server":
 		return instance("ctlvps-snell@")
 	case "mita":
@@ -245,6 +247,9 @@ func coreConfigAllowed(binary, path string) bool {
 	switch filepath.Base(binary) {
 	case "sing-box":
 		return (parts[0] == "public" || parts[0] == "private") && parts[1] == "config.json"
+	case "xray":
+		port, ok := strings.CutPrefix(parts[0], "xray-")
+		return ok && coreUnitAllowed(binary, "ctlvps-xray@"+port+".service") && parts[1] == "config.json"
 	case "snell-server":
 		return strings.HasPrefix(parts[0], "snell-") && parts[1] == "config.conf"
 	case "mita":
@@ -255,6 +260,9 @@ func coreConfigAllowed(binary, path string) bool {
 func managedCoreUnits(ctx context.Context, binary string, sd *Systemd, wanted []string) []string {
 	units := append([]string(nil), wanted...)
 	pattern := "ctlvps-singbox*.service"
+	if filepath.Base(binary) == "xray" {
+		pattern = "ctlvps-xray@*.service"
+	}
 	if filepath.Base(binary) == "snell-server" {
 		pattern = "ctlvps-snell@*.service"
 	}
@@ -287,6 +295,12 @@ func corePolicyFingerprint(nodes []agentproto.NodeSpec, forwards []agentproto.Fo
 	native := make([]any, 0, len(ns))
 	for _, n := range ns {
 		credentials := map[string]any{}
+		if agentproto.NeedsTLSTransport(n.Protocol, n.Params) {
+			native = append(native, []any{n.ListenPort, n.Params, n.Cert})
+		}
+		if n.Core == "xray" { // endpoint, path, mode and host are part of the authorized profile
+			native = append(native, []any{n.ListenPort, n.Params})
+		}
 		for _, key := range []string{"password", "uuid", "psk", "username", "users", "private_key", "public_key", "short_id", "peer_public_key", "preshared_key", "pre_shared_key", "reality_private_key", "reality_public_key", "reality_short_id", "obfs_password"} {
 			if value, ok := n.Params[key]; ok {
 				credentials[key] = value
@@ -687,6 +701,9 @@ func (d *Mita) FinishActivation(ctx context.Context, success bool) error {
 func standaloneRecoveryPaths(ctx context.Context, binary string, sd *Systemd, nodes []agentproto.NodeSpec) ([]string, []string) {
 	wanted := []string{}
 	kind, prefix, file := "snell", "snell-", "config.conf"
+	if filepath.Base(binary) == "xray" {
+		kind, prefix, file = "xray", "xray-", "config.json"
+	}
 	if filepath.Base(binary) == "mita" {
 		kind, prefix, file = "mieru", "mita-", "config.json"
 	}

@@ -36,7 +36,7 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 	// acquire it from SO_MARK on output. Conntrack carries it in both directions.
 	ports, ids := map[int]bool{}, map[int64]bool{}
 	for _, n := range nodes {
-		if n.Core != "singbox" {
+		if n.Core != "singbox" && n.Core != "xray" {
 			continue
 		}
 		mark, err := NodeMark(n.NodeID)
@@ -54,7 +54,11 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 		if n.Retired {
 			continue
 		}
-		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct direction original meta l4proto { tcp, udp } th dport %d ct mark & 0x%08x != 0x%08x ct mark set 0x%08x\n", NodeTable, n.ListenPort, MarkMask, MarkPrefix, mark)
+		transport := "meta l4proto { tcp, udp } th"
+		if n.Core == "xray" {
+			transport = "tcp"
+		}
+		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct direction original %s dport %d ct mark & 0x%08x != 0x%08x ct mark set 0x%08x\n", NodeTable, transport, n.ListenPort, MarkMask, MarkPrefix, mark)
 	}
 	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, MarkPrefix)
 	// Bootstrap sockets are opened by root for an unprivileged DNS parser.
@@ -62,13 +66,22 @@ func NodeRules(nodes []agentproto.NodeSpec) (string, error) {
 	fmt.Fprintf(&b, "add rule inet %s output meta mark & 0x%08x == 0x%08x meta skuid != 0 drop\n", NodeTable, MarkMask, agentproto.BootstrapMarkPrefix)
 	fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" meta mark & 0x%08x == 0x%08x ct mark set meta mark\n", NodeTable, MarkMask, agentproto.BootstrapMarkPrefix)
 	for _, n := range nodes {
-		if n.Core != "singbox" || n.Retired {
+		if n.Retired || (n.Core != "singbox" && n.Core != "xray") {
 			continue
 		}
 		mark, _ := NodeMark(n.NodeID)
 		action := " return"
 		if n.Blocked {
 			action = " drop"
+		}
+		if n.Core == "xray" {
+			// Only charge the client leg, never origin or resolver sockets.
+			fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct direction original tcp dport %d ct mark 0x%08x counter name n%d_rx%s\n", NodeTable, n.ListenPort, mark, n.NodeID, action)
+			if !n.Blocked {
+				fmt.Fprintf(&b, "add rule inet %s output oifname != \"lo\" ct direction reply tcp sport %d ct mark 0x%08x counter name n%d_tx return\n", NodeTable, n.ListenPort, mark, n.NodeID)
+			}
+			// Every other packet with this mark hits the default drop below.
+			continue
 		}
 		fmt.Fprintf(&b, "add rule inet %s input iifname != \"lo\" ct mark 0x%08x counter name n%d_rx%s\n", NodeTable, mark, n.NodeID, action)
 		if n.Blocked {

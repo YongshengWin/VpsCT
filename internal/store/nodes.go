@@ -94,6 +94,12 @@ func (s *Store) CreateNode(ctx context.Context, n *domain.Node) error {
 }
 
 func (s *Store) createNode(ctx context.Context, q querier, n *domain.Node) error {
+	if err := s.admitTLSTransport(ctx, q, *n); err != nil {
+		return err
+	}
+	if err := s.validateDedicatedCore(ctx, q, *n); err != nil {
+		return err
+	}
 	if err := s.validateNATNode(ctx, q, *n); err != nil {
 		return err
 	}
@@ -172,7 +178,22 @@ func (s *Store) updateNode(ctx context.Context, q querier, n *domain.Node) error
 	if old.Network != nil {
 		candidate.Server = old.Server
 	}
-	if candidate.Enabled && !candidate.Revoked && (!old.Enabled || old.Revoked || old.Source != candidate.Source || old.ListenPort != candidate.ListenPort || old.Protocol != candidate.Protocol || !natNodeTransportsEqual(old, candidate) || old.Server != candidate.Server || (old.ServerID == nil) != (candidate.ServerID == nil) || (old.ServerID != nil && candidate.ServerID != nil && *old.ServerID != *candidate.ServerID)) {
+	if old.Source == domain.NodeDeployed && (old.Core == domain.CoreXray || candidate.Core == domain.CoreXray) && candidate.Core != old.Core {
+		return fmt.Errorf("%w: 不能改写已有节点的内核", ErrCoreModeInUse)
+	}
+	serverChanged := (old.ServerID == nil) != (candidate.ServerID == nil) || old.ServerID != nil && candidate.ServerID != nil && *old.ServerID != *candidate.ServerID
+	needsAdmission := (!old.Enabled && candidate.Enabled) || old.Revoked || string(old.ServerParams) != string(candidate.ServerParams)
+	if !candidate.Revoked && (needsAdmission || old.Core != candidate.Core || old.Protocol != candidate.Protocol || old.Source != candidate.Source || serverChanged) {
+		if err := s.admitTLSTransport(ctx, q, candidate); err != nil {
+			return err
+		}
+	}
+	if !candidate.Revoked && needsAdmission {
+		if err := s.validateDedicatedCore(ctx, q, candidate); err != nil {
+			return err
+		}
+	}
+	if candidate.Enabled && !candidate.Revoked && (!old.Enabled || old.Revoked || old.Source != candidate.Source || old.ListenPort != candidate.ListenPort || old.Protocol != candidate.Protocol || !natNodeTransportsEqual(old, candidate) || old.Server != candidate.Server || serverChanged) {
 		if err := s.validateNATNode(ctx, q, candidate); err != nil {
 			return err
 		}
@@ -481,6 +502,18 @@ func (s *Store) UpdateNodeCredentials(ctx context.Context, n *domain.Node) error
 		}
 		candidate := old
 		candidate.ServerParams = n.ServerParams
+		candidate.Core = n.Core
+		if err := s.admitTLSTransport(ctx, tx, candidate); err != nil {
+			return err
+		}
+		if old.Core == domain.CoreXray || n.Core == domain.CoreXray {
+			if old.Core != n.Core {
+				return ErrCoreModeInUse
+			}
+			if err := s.validateDedicatedCore(ctx, tx, candidate); err != nil {
+				return err
+			}
+		}
 		if old.Enabled && !old.Revoked && !natNodeTransportsEqual(old, candidate) {
 			if err := s.validateNATNode(ctx, tx, candidate); err != nil {
 				return err

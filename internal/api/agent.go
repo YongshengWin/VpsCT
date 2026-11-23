@@ -206,23 +206,34 @@ func (a *API) agentHeartbeat(w http.ResponseWriter, r *http.Request) error {
 	if hb.ApplyError != "" && status != "pending" {
 		status = "failed"
 	}
-	if len(hb.NodeApplications) > 0 {
-		if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.NodeApplicationRevision, hb.NodeApplicationHash, status, hb.NodeApplications, hb.NodeApplicationSequence); err != nil {
-			return httpx.BadRequest(err.Error())
-		}
-	} else if status == "applied" {
-		if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, nil, 0); err != nil {
-			return httpx.BadRequest(err.Error())
-		}
-	}
-	if err := a.Store.RecordAgentApplication(ctx, ac.Agent.ID, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, hb.ApplyError, hb.NodeApplicationSequence); err != nil {
-		if !errors.Is(err, store.ErrStaleApplication) {
-			return httpx.BadRequest(err.Error())
-		}
-		status = "pending"
-	}
-	if err := a.Store.RecordNetworkApply(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status); err != nil {
+	// A downgraded agent may still report billing and diagnostics. Never
+	// acknowledge a clean-up or applied revision using its legacy semantics.
+	tlsFloor, err := a.Store.TLSTransportVersion(ctx, ac.Server.ID)
+	if err != nil {
 		return err
+	}
+	if tlsFloor == 0 || hb.Diagnostics.TLSTransportVersion == tlsFloor {
+		if tlsFloor != 0 && status == "applied" && len(hb.NodeApplications) > 0 && (hb.NodeApplicationRevision != hb.AppliedRevision || hb.NodeApplicationHash != hb.AppliedHash) {
+			return httpx.BadRequest("TLS 节点回执代次与成功配置不一致")
+		}
+		if len(hb.NodeApplications) > 0 {
+			if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.NodeApplicationRevision, hb.NodeApplicationHash, status, hb.NodeApplications, hb.NodeApplicationSequence); err != nil {
+				return httpx.BadRequest(err.Error())
+			}
+		} else if status == "applied" {
+			if err := a.Store.RecordNodeApplications(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, nil, 0); err != nil {
+				return httpx.BadRequest(err.Error())
+			}
+		}
+		if err := a.Store.RecordAgentApplication(ctx, ac.Agent.ID, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status, hb.ApplyError, hb.NodeApplicationSequence); err != nil {
+			if !errors.Is(err, store.ErrStaleApplication) {
+				return httpx.BadRequest(err.Error())
+			}
+			status = "pending"
+		}
+		if err := a.Store.RecordNetworkApply(ctx, ac.Server.ID, hb.AppliedRevision, hb.AppliedHash, status); err != nil {
+			return err
+		}
 	}
 	// deployed nodes without an explicit public host follow the agent's IP
 	if ac.Server.PublicHost == "" && ipv4 != "" {
@@ -428,6 +439,22 @@ func (a *API) agentDesired(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	tlsVersion, err := a.Store.TLSTransportVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	tlsVersion = max(tlsVersion, ds.TLSTransportVersion)
+	if tlsVersion > 0 && r.Header.Get(agentproto.TLSTransportHeader) != fmt.Sprint(tlsVersion) {
+		return httpx.E(409, "agent_upgrade_required", "当前配置或清理需要支持普通 TLS 传输的 agent；请先升级")
+	}
+	xrayVersion, err := a.Store.XrayVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	xrayVersion = max(xrayVersion, ds.XrayVersion)
+	if xrayVersion > 0 && r.Header.Get(agentproto.XrayHeader) != fmt.Sprint(xrayVersion) {
+		return httpx.E(409, "agent_upgrade_required", "当前配置或清理需要支持 XHTTP 的 agent；请先升级")
+	}
 	version = max(version, ds.NetworkBindingVersion)
 	egressVersion, err := a.Store.NetworkEgressVersion(r.Context(), ac.Server.ID)
 	if err != nil {
@@ -521,6 +548,13 @@ func (a *API) agentApplyReport(w http.ResponseWriter, r *http.Request) error {
 	var rep agentproto.ApplyReport
 	if err := httpx.Decode(r, &rep); err != nil {
 		return err
+	}
+	floor, err := a.Store.TLSTransportVersion(r.Context(), ac.Server.ID)
+	if err != nil {
+		return err
+	}
+	if floor > 0 && r.Header.Get(agentproto.TLSTransportHeader) != fmt.Sprint(floor) {
+		return httpx.E(409, "agent_upgrade_required", "当前配置或清理需要支持普通 TLS 传输的 agent 回执")
 	}
 	status := rep.Status
 	if rep.Error != "" && status != "pending" {

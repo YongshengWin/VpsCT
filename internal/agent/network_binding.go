@@ -528,12 +528,23 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 	if ds.NetworkIngressVersion < ingressRequired {
 		return errors.New("控制端缺少已启用的入口来源策略版本，拒绝回退")
 	}
+	if ds.TLSTransportVersion < a.State.TLSTransportVersion {
+		return errors.New("控制端缺少已启用的 TLS 传输能力，拒绝回退")
+	}
+	if ds.XrayVersion < a.State.XrayVersion {
+		return errors.New("控制端缺少已启用的 Xray 能力，拒绝回退")
+	}
 	if ds.MitaVersion < mitaRequired {
 		return errors.New("控制端缺少已启用的 mita 能力，拒绝回退")
 	}
 	if ds.IPv6IngressVersion < a.State.IPv6IngressVersion {
 		return errors.New("控制端缺少已启用的仅 IPv6 入口版本，拒绝回退")
 	}
+	if ds.TLSTransportVersion != 0 {
+		a.State.TLSIntentRevision, a.State.TLSIntentHash = ds.Revision, ds.Hash
+	}
+	a.State.TLSTransportVersion = ds.TLSTransportVersion
+	a.State.XrayVersion = ds.XrayVersion
 	a.State.MitaVersion = ds.MitaVersion
 	for _, n := range ds.Nodes {
 		if n.Network != nil && n.Core != "singbox" {
@@ -560,7 +571,7 @@ func (a *Agent) rememberNetworkIntent(ds *agentproto.DesiredState) error {
 		}
 	}
 	if ds.NetworkBindingVersion == 0 {
-		if mitaRequired > 0 {
+		if mitaRequired > 0 || ds.XrayVersion > 0 || ds.TLSTransportVersion > 0 {
 			return a.State.Save(a.StateDir)
 		}
 		return nil

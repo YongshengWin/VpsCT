@@ -778,4 +778,12 @@ END;`,
    checked_at TEXT NOT NULL,
    last_good_at TEXT NOT NULL DEFAULT ''
  );`,
+	// v52: stable dedicated share entry identities; legacy rows are not rewritten.
+	shareEntrySchema,
+	// v53: keep the agent version floor even after deleting the last Xray entry.
+	`CREATE TABLE server_xray_requirements(server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,version INTEGER NOT NULL CHECK(version=1));
+ CREATE TRIGGER xray_required_insert AFTER INSERT ON nodes WHEN NEW.source='deployed' AND NEW.core='xray' BEGIN
+ INSERT INTO server_xray_requirements VALUES(NEW.server_id,1) ON CONFLICT DO NOTHING; END;`,
+	// v54: WS/gRPC and VLESS ordinary TLS require a transport-aware agent, even after cleanup.
+	`CREATE TABLE server_tls_transport_requirements(server_id INTEGER PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,version INTEGER NOT NULL CHECK(version=1));`,
 }

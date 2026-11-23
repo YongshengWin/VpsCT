@@ -88,6 +88,9 @@ func FromClashMap(m map[string]any) (Proxy, error) {
 		case "name", "type", "server", "port":
 			continue
 		}
+		if k == "extra" && m["network"] == "xhttp" {
+			return p, fmt.Errorf("不支持的 XHTTP extra")
+		}
 		if p.Type == "ssh" && !sshconfig.Field(k) {
 			return p, fmt.Errorf("SSH 节点包含不支持的字段")
 		}
@@ -142,6 +145,69 @@ func normalizeYAML(v any) any {
 		return out
 	}
 	return v
+}
+
+// BasicWebSocket returns the handshake fields a single-Host client can express.
+// Do not silently drop early data, additional headers, or other WS options.
+func (p Proxy) BasicWebSocket() (path, host string, ok bool) {
+	opts := p.Sub("ws-opts")
+	if _, exists := p.Params["ws-opts"]; exists && opts == nil {
+		return "", "", false
+	}
+	for k, v := range opts {
+		switch k {
+		case "path":
+			if path, ok = v.(string); !ok {
+				return "", "", false
+			}
+		case "headers":
+			h, ok := v.(map[string]any)
+			if !ok || len(h) > 1 {
+				return "", "", false
+			}
+			for name, value := range h {
+				if host, ok = value.(string); !ok || !strings.EqualFold(name, "Host") {
+					return "", "", false
+				}
+			}
+		default:
+			return "", "", false
+		}
+	}
+	return path, host, true
+}
+
+// BasicGRPCService represents the ordinary single-stream gRPC transport only.
+func (p Proxy) BasicGRPCService() (string, bool) {
+	o := p.Sub("grpc-opts")
+	if _, exists := p.Params["grpc-opts"]; exists && o == nil {
+		return "", false
+	}
+	if len(o) == 0 {
+		return "", true
+	}
+	s, ok := o["grpc-service-name"].(string)
+	return s, len(o) == 1 && ok
+}
+
+// URI and YAML imports use the same JSON-compatible list representation.
+// Keep one entry beyond ValidateParams' bound so an oversized list is rejected,
+// not truncated into an acceptable one or unnecessarily materialized in full.
+const overParamListLimit = 2049
+
+func splitList(value string) []any {
+	return stringValues(strings.SplitN(value, ",", overParamListLimit))
+}
+
+func stringValues(values []string) []any {
+	if len(values) > overParamListLimit {
+		values = values[:overParamListLimit]
+	}
+	out := make([]any, len(values))
+	for i, v := range values {
+		out[i] = v
+	}
+	return out
 }
 
 // Str returns a string parameter.

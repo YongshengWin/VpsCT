@@ -157,10 +157,8 @@ func ResolveGroups(groups []domain.ProxyGroup, proxies []proxynode.Proxy, chains
 				add(n)
 			}
 		}
-		if len(members) == 0 {
-			// avoid invalid config: fall back to DIRECT
-			members = []string{"DIRECT"}
-		}
+		// Preserve empty groups for target-format validation. Inventing DIRECT
+		// here silently bypasses the policy selected by the operator.
 		g2 := g
 		g2.Proxies = members
 		g2.NodeIDs = nil

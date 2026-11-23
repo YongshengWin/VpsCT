@@ -6,13 +6,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"ctlvps/internal/auth"
 	"ctlvps/internal/desired"
 	"ctlvps/internal/domain"
-	"ctlvps/internal/provision"
+
 	"ctlvps/internal/store"
 	"ctlvps/internal/traffic"
 )
@@ -40,6 +41,16 @@ func (m *Manager) event(ctx context.Context, sh domain.Share, kind, detail strin
 
 // Create persists a share, provisions its nodes and subscription.
 func (m *Manager) Create(ctx context.Context, sh *domain.Share) (tokenOut string, resultErr error) {
+	if err := normalizeEntries(sh.Targets); err != nil {
+		return "", err
+	}
+	for _, target := range sh.Targets {
+		for _, entry := range target.Entries {
+			if entry.NodeID != 0 {
+				return "", ErrEntryConfig
+			}
+		}
+	}
 	if err := m.Store.ValidateShareNetwork(ctx, sh.Targets); err != nil {
 		return "", err
 	}
@@ -132,7 +143,7 @@ func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
 		return err
 	}
 	sh.SubscriptionID = prev.SubscriptionID
-	if err := m.ensureNodes(ctx, sh, false, true); err != nil {
+	if err := m.reconcile(ctx, prev, sh, true, ""); err != nil {
 		return err
 	}
 	current, err := m.Store.GetShare(ctx, sh.ID)
@@ -140,21 +151,6 @@ func (m *Manager) Update(ctx context.Context, sh *domain.Share) error {
 		return err
 	}
 	*sh = current
-	if sub, err := m.Store.GetSubscriptionByShare(ctx, sh.ID); err == nil {
-		sub.Name = sh.Name
-		sub.TemplateID = sh.TemplateID
-		// Share UI only picks a template; leftover stock groups/rules would
-		// hide ⚡️ smart / 地区组 / RULE-SET from the profile.
-		sub.ProxyGroups = nil
-		sub.Rules = nil
-		if sh.UserID != nil {
-			sub.OwnerUserID = *sh.UserID
-			sub.AllowedUserIDs = []int64{*sh.UserID}
-		} else {
-			sub.AllowedUserIDs = []int64{}
-		}
-		_ = m.Store.UpdateSubscription(ctx, &sub)
-	}
 	if err := m.republishShareServers(ctx, sh.ID); err != nil {
 		return err
 	}
@@ -177,95 +173,15 @@ func (m *Manager) EnsureNodes(ctx context.Context, sh *domain.Share) error {
 }
 
 func (m *Manager) ensureNodes(ctx context.Context, sh *domain.Share, publish, saveSettings bool) error {
-	existing, err := m.Store.ListNodes(ctx, store.NodeFilter{ShareID: &sh.ID, IncludeRevoked: true})
+	prev, err := m.Store.GetShare(ctx, sh.ID)
 	if err != nil {
 		return err
 	}
-	type key struct {
-		server int64
-		proto  string
-	}
-	have := map[key]domain.Node{}
-	for _, n := range existing {
-		if n.ServerID != nil {
-			have[key{*n.ServerID, n.Protocol}] = n
-		}
-	}
-	want := map[key]bool{}
-	affected := map[int64]bool{}
-	creates, updates := []domain.Node{}, []domain.Node{}
-	reserved := map[int64]map[int]bool{}
-	for _, t := range sh.Targets {
-		server, err := m.Store.GetServer(ctx, t.ServerID)
-		if err != nil {
-			continue
-		}
-		for _, proto := range t.Protocols {
-			k := key{t.ServerID, proto}
-			want[k] = true
-			if n, ok := have[k]; ok {
-				if n.Revoked {
-					n.Revoked = false
-					n.Enabled = true
-					_ = provision.RegenerateCredentials(&n, server)
-					updates = append(updates, n)
-					affected[t.ServerID] = true
-				}
-				continue
-			}
-			used := reserved[t.ServerID]
-			if used == nil {
-				used, err = m.Store.UsedListenPorts(ctx, t.ServerID)
-				if err != nil {
-					return err
-				}
-				reserved[t.ServerID] = used
-			}
-			nat, err := m.Store.NATPortConfig(ctx, t.ServerID)
-			if err != nil {
-				return err
-			}
-			port, err := provision.AllocateNodePort(used, nat, proto, map[string]any{"transport": "TCP"})
-			if err != nil {
-				return err
-			}
-			node, err := provision.NewNode(server, "", provision.Options{Name: fmt.Sprintf("%s · %s · %s", sh.Name, server.Name, strings.ToUpper(proto)), Protocol: proto, Port: port})
-			if err != nil {
-				return err
-			}
-			sid := sh.ID
-			node.ShareID = &sid
-			if sh.UserID != nil {
-				node.OwnerUserID = *sh.UserID
-			}
-			node.Network = t.Network
-			creates = append(creates, node)
-			used[port] = true
-			affected[t.ServerID] = true
-		}
-	}
-	for k, n := range have {
-		if !want[k] && !n.Revoked {
-			n.Revoked = true
-			n.Enabled = false
-			updates = append(updates, n)
-			affected[k.server] = true
-		}
-	}
-	var settings *domain.Share
-	if saveSettings {
-		settings = sh
-	}
-	if err := m.Store.ApplyShareSettingsAndNodes(ctx, settings, creates, updates); err != nil {
+	if err = m.reconcile(ctx, prev, sh, saveSettings, ""); err != nil {
 		return err
 	}
-	if !publish {
-		return nil
-	}
-	for sid := range affected {
-		if _, _, err := m.Desired.Publish(ctx, sid); err != nil {
-			return err
-		}
+	if publish {
+		return m.republishShareServers(ctx, sh.ID)
 	}
 	return nil
 }
@@ -279,8 +195,7 @@ func (m *Manager) SetConnlogEnabled(ctx context.Context, id int64, enabled bool)
 	if sh.ConnlogEnabled == enabled {
 		return nil
 	}
-	sh.ConnlogEnabled = enabled
-	if err := m.Store.UpdateShare(ctx, &sh); err != nil {
+	if err := m.Store.SetShareConnlog(ctx, id, enabled); err != nil {
 		return err
 	}
 	return m.republishShareServers(ctx, id)
@@ -382,6 +297,11 @@ func (m *Manager) evaluateAttempt(ctx context.Context, id int64, attempt int) er
 		return m.republishShareServers(ctx, sh.ID)
 	}
 	for _, t := range sh.Targets {
+		for _, e := range t.Entries {
+			if e.QuotaBytes > 0 {
+				return m.republishShareServers(ctx, sh.ID)
+			}
+		}
 		for _, quota := range t.QuotaBytes {
 			if quota > 0 {
 				return m.republishShareServers(ctx, sh.ID)
@@ -431,15 +351,15 @@ func (m *Manager) Resume(ctx context.Context, id int64) error {
 	if sh.Status == domain.ShareRevoked {
 		return errors.New("已撤销的分享需要重新签发")
 	}
-	if err := m.Store.SetShareStatus(ctx, id, domain.ShareActive); err != nil {
+	if err := m.Store.ResumeShare(ctx, id); err != nil {
 		return err
 	}
 	sh.Status = domain.ShareActive
 	m.event(ctx, sh, "resumed", "")
-	if err := m.republishShareServers(ctx, id); err != nil {
+	if err := m.evaluate(ctx, id); err != nil {
 		return err
 	}
-	return m.evaluate(ctx, id)
+	return m.republishShareServers(ctx, id)
 }
 
 // ResetUsage zeroes the current period manually.
@@ -464,23 +384,8 @@ func (m *Manager) Revoke(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-	nodes, err := m.Store.ListNodes(ctx, store.NodeFilter{ShareID: &id, IncludeRevoked: true})
-	if err != nil {
+	if err := m.Store.RevokeShareEntries(ctx, id); err != nil {
 		return err
-	}
-	for _, n := range nodes {
-		n.Revoked = true
-		n.Enabled = false
-		if err := m.Store.UpdateNode(ctx, &n); err != nil {
-			return err
-		}
-	}
-	if err := m.Store.SetShareStatus(ctx, id, domain.ShareRevoked); err != nil {
-		return err
-	}
-	if sub, err := m.Store.GetSubscriptionByShare(ctx, id); err == nil {
-		sub.Enabled = false
-		_ = m.Store.UpdateSubscription(ctx, &sub)
 	}
 	sh.Status = domain.ShareRevoked
 	m.event(ctx, sh, "revoked", "")
@@ -494,52 +399,21 @@ func (m *Manager) Reissue(ctx context.Context, id int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nodes, err := m.Store.ListNodes(ctx, store.NodeFilter{ShareID: &id, IncludeRevoked: true})
-	if err != nil {
-		return "", err
-	}
-	for _, n := range nodes {
-		if n.ServerID == nil {
-			continue
-		}
-		server, err := m.Store.GetServer(ctx, *n.ServerID)
-		if err != nil {
-			continue
-		}
-		if err := provision.RegenerateCredentials(&n, server); err != nil {
-			return "", err
-		}
-		n.Revoked = false
-		n.Enabled = true
-		if err := m.Store.UpdateNode(ctx, &n); err != nil {
-			return "", err
-		}
+	prev := sh
+	prev.Targets = slices.Clone(sh.Targets)
+	for i := range prev.Targets {
+		prev.Targets[i].Entries = slices.Clone(sh.Targets[i].Entries)
 	}
 	token := auth.NewSubscriptionToken()
-	if sub, err := m.Store.GetSubscriptionByShare(ctx, id); err == nil {
-		sub.Token = token
-		sub.TokenHash = auth.HashToken(token)
-		sub.TokenHint = auth.TokenHint(token)
-		sub.Enabled = true
-		if sub.ShortCode != "" {
-			sub.ShortCode = auth.NewSubscriptionToken()
-		}
-		if err := m.Store.UpdateSubscription(ctx, &sub); err != nil {
-			return "", err
-		}
-	}
-	if err := m.Store.SetShareStatus(ctx, id, domain.ShareActive); err != nil {
+	if err := m.reconcile(ctx, prev, &sh, false, token); err != nil {
 		return "", err
 	}
 	sh.Status = domain.ShareActive
 	m.event(ctx, sh, "reissued", "")
-	if err := m.EnsureNodes(ctx, &sh); err != nil {
+	if err := m.evaluate(ctx, id); err != nil {
 		return token, err
 	}
-	if err := m.republishShareServers(ctx, id); err != nil {
-		return token, err
-	}
-	return token, m.evaluate(ctx, id)
+	return token, m.republishShareServers(ctx, id)
 }
 
 // Delete removes a share, its nodes and subscription.

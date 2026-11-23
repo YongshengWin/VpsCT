@@ -470,3 +470,25 @@ func (s *Systemd) RemoveSnellMeter(ctx context.Context, nodeID int64) error {
 	}
 	return s.DaemonReload(ctx)
 }
+
+// Xray requires its own cgroup for firewall admission. Accounting is exclusively
+// nft-node-v1 on the inbound TCP port; do not enable process IPAccounting here.
+func (s *Systemd) EnsureXraySlice(ctx context.Context, id int64) (string, error) {
+	if id < 1 || s.openRC {
+		return "", fmt.Errorf("invalid Xray slice or init system")
+	}
+	name := SnellSlice(id)
+	changed, err := s.WriteUnit(name, "[Unit]\nDescription=VpsCT isolated Xray node\n[Slice]\n")
+	if err != nil {
+		return "", err
+	}
+	if changed {
+		if err = s.DaemonReload(ctx); err != nil {
+			return "", err
+		}
+	}
+	if err = s.StartUnits(ctx, []string{name}); err != nil {
+		return "", err
+	}
+	return s.ControlGroup(ctx, name)
+}

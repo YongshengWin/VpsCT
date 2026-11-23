@@ -113,3 +113,30 @@ func TestApplicationReceiptPersistenceFailureSuppressesUnsafeProof(t *testing.T)
 		t.Fatal("heartbeat may advertise an undurable application proof")
 	}
 }
+
+func TestXrayPartialRollbackReceiptRequiresExactVersionAndIngressMeter(t *testing.T) {
+	ds := &agentproto.DesiredState{Revision: 2, Hash: strings.Repeat("a", 64), Versions: map[string]agentproto.CoreVersion{"xray": agentproto.PinnedXray()}, Nodes: []agentproto.NodeSpec{{NodeID: 1, Core: "xray"}, {NodeID: 2, Core: "xray"}, {NodeID: 3, Core: "xray", Blocked: true}}}
+	a := &Agent{StateDir: t.TempDir(), State: &State{}, Drivers: map[string]core.Driver{"xray": &applicationFinalizer{}}}
+	if e := a.finishNodeApplications(ds, []agentproto.NodeSpec{ds.Nodes[0], ds.Nodes[2]}, map[string]bool{"xray": true}, map[string]bool{"xray": true}); e != nil {
+		t.Fatal(e)
+	}
+	items := a.State.NodeApplications
+	if e := agentproto.ValidateNodeApplications(items); e != nil {
+		t.Fatal(e)
+	}
+	if items[0].Status != "applied" || items[1].Status != "failed" || items[2].Status != "blocked" || a.State.AppliedRevision != 0 {
+		t.Fatal("partial rollback claims wrong resources")
+	}
+	items[0].CoreVersion = ""
+	if agentproto.ValidateNodeApplications(items) == nil {
+		t.Fatal("missing executable version accepted")
+	}
+	c := []agentproto.PortCounter{{NodeID: 1, Source: "nft-node-v1"}, {NodeID: 2, Source: "systemd-v1"}}
+	if verifyXrayMeters(ds.Nodes, c) == nil {
+		t.Fatal("origin/process counter admitted as client ingress")
+	}
+	c[1].Source = "nft-node-v1"
+	if e := verifyXrayMeters(ds.Nodes, c); e != nil {
+		t.Fatal(e)
+	}
+}

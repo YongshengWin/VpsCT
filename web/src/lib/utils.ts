@@ -79,7 +79,7 @@ export async function copyText(text: string): Promise<boolean> {
 }
 
 export const PROTOCOL_LABELS: Record<string, string> = {
-  vless: "VLESS Reality",
+  vless: "VLESS",
   anytls: "AnyTLS",
   hysteria2: "Hysteria2",
   tuic: "TUIC v5",
@@ -145,6 +145,7 @@ export const FORMAT_LABELS: Record<string, string> = {
   auto: "自动识别",
   mihomo: "Clash / mihomo",
   surge: "Surge",
+  "surge-vless": "Surge（iOS 6.1+ / Mac 6.13+）",
   shadowrocket: "Shadowrocket",
   singbox: "sing-box",
   raw: "Base64 (v2rayN / v2rayU)",

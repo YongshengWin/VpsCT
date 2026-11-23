@@ -45,6 +45,12 @@ func natAPIError(err error) error {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return httpx.ErrNotFound
+	case errors.Is(err, store.ErrTLSTransportUnavailable):
+		return httpx.E(409, "tls_transport_unavailable", err.Error())
+	case errors.Is(err, store.ErrXrayUnavailable):
+		return httpx.E(409, "xhttp_unavailable", err.Error())
+	case errors.Is(err, store.ErrCoreModeInUse):
+		return httpx.E(409, "node_combination_conflict", err.Error())
 	case errors.Is(err, store.ErrNATRevision):
 		return httpx.E(409, "nat_revision_conflict", err.Error())
 	case errors.Is(err, store.ErrNATEdit), errors.Is(err, store.ErrNATNotReady):

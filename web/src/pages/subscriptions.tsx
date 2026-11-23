@@ -15,6 +15,16 @@ import { QR } from "@/pages/nodes";
 
 const KIND_LABELS: Record<Subscription["kind"], string> = { generated: "生成", imported: "转换导入", share: "分享" };
 
+const modernSurge = "surge-vless";
+
+function previewFormats(formats: string[] = ["mihomo", "surge", "singbox", "raw"]) {
+  return formats.flatMap((f) => f === "surge" ? [f, modernSurge] : [f]);
+}
+
+function renderTarget(selection: string) {
+  return selection === modernSurge ? { format: "surge", profile: modernSurge } : { format: selection };
+}
+
 function SubName({ sub }: { sub: Subscription }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -75,7 +85,7 @@ export function SubscriptionLinks({ sub, compact }: { sub: Subscription; compact
   const toast = useToast();
   const { meta } = useAuth();
   const [qr, setQr] = React.useState<string | null>(null);
-  const formats = (meta?.formats ?? ["mihomo", "surge", "singbox", "raw"]).filter((f) => sub.links?.[f]);
+  const formats = previewFormats(meta?.formats).filter((f) => sub.links?.[f]);
   const copy = async (url: string, label: string) => { await copyText(url); toast.success(`已复制 ${label} 链接`); };
   if (sub.supported === false) return <p className="mt-2 text-sm text-muted-foreground">此订阅类型已停用，请从节点库重新生成订阅并选择模板。</p>;
   if (!sub.links || !Object.keys(sub.links).length) return <p className="text-xs text-muted-foreground">该订阅未启用或无权限查看链接</p>;
@@ -174,10 +184,10 @@ function PreviewDialog({ sub, onClose }: { sub: Subscription | null; onClose: ()
   const { meta } = useAuth();
   const [format, setFormat] = React.useState("mihomo");
   React.useEffect(() => { if (sub) setFormat(sub.default_format || "mihomo"); }, [sub]);
-  const q = useQuery({ queryKey: ["subscriptions", sub?.id, "render", format], queryFn: () => get<{ body: string; node_count: number; content_type: string }>(`/api/v1/subscriptions/${sub!.id}/render?format=${format}`), enabled: !!sub });
+  const q = useQuery({ queryKey: ["subscriptions", sub?.id, "render", format], queryFn: () => get<{ body: string; node_count: number; omitted_count: number; content_type: string }>(`/api/v1/subscriptions/${sub!.id}/render?${new URLSearchParams(Object.entries(renderTarget(format)))}`), enabled: !!sub });
   return (
-    <Dialog open={!!sub} onClose={onClose} title={`预览：${sub?.name ?? ""}`} wide description={q.data ? `${q.data.node_count} 个节点 · ${q.data.content_type}` : undefined}>
-      <Tabs className="mb-3" value={format} onChange={setFormat} items={(meta?.formats ?? ["mihomo", "surge", "singbox", "raw"]).map((f) => ({ value: f, label: FORMAT_LABELS[f] ?? f }))} />
+    <Dialog open={!!sub} onClose={onClose} title={`预览：${sub?.name ?? ""}`} wide description={q.data ? `实际输出 ${q.data.node_count} 个节点${q.data.omitted_count ? ` · ${q.data.omitted_count} 个无法以该格式表示` : ""} · ${q.data.content_type}` : undefined}>
+      <Tabs className="mb-3" value={format} onChange={setFormat} items={previewFormats(meta?.formats).map((f) => ({ value: f, label: FORMAT_LABELS[f] ?? f }))} />
       {q.isLoading ? <Spinner /> : q.error ? <p className="text-sm text-red-500">{String((q.error as Error).message)}</p> : <Pre className="max-h-[60vh] whitespace-pre-wrap break-all">{q.data?.body}</Pre>}
     </Dialog>
   );
@@ -552,19 +562,20 @@ function PresetPicker({ presets, onApply }: { presets: Preset[]; onApply: (p: Pr
 function PreviewPane({ state }: { state: EditorState }) {
   const { meta } = useAuth();
   const [format, setFormat] = React.useState(state.default_format || "mihomo");
-  const m = useMutation({ mutationFn: () => post<{ format: string; body: string; node_names: string[]; groups: ProxyGroup[] }>("/api/v1/subscriptions/preview", { ...toPayload(state), format }) });
+  const m = useMutation({ mutationFn: () => post<{ format: string; body: string; node_names: string[]; omitted_count: number; groups: ProxyGroup[] }>("/api/v1/subscriptions/preview", { ...toPayload(state), ...renderTarget(format) }) });
   React.useEffect(() => { m.mutate(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [format]);
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_18rem]">
       <Card className="p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <Tabs value={format} onChange={setFormat} items={(meta?.formats ?? ["mihomo", "surge", "singbox", "raw"]).map((f) => ({ value: f, label: FORMAT_LABELS[f] ?? f }))} />
+          <Tabs value={format} onChange={setFormat} items={previewFormats(meta?.formats).map((f) => ({ value: f, label: FORMAT_LABELS[f] ?? f }))} />
           <Button size="sm" variant="outline" onClick={() => m.mutate()} loading={m.isPending}><RefreshCw className="h-4 w-4" /> 刷新</Button>
         </div>
         {m.isPending && !m.data ? <Spinner /> : m.error ? <p className="text-sm text-red-500">{(m.error as Error).message}</p> : <Pre className="max-h-[65vh] whitespace-pre-wrap break-all">{m.data?.body}</Pre>}
       </Card>
       <Card className="p-4">
         <p className="mb-2 text-sm font-medium">将输出 {m.data?.node_names.length ?? 0} 个节点</p>
+        {!!m.data?.omitted_count && <p className="mb-2 text-xs text-muted-foreground">{m.data.omitted_count} 个节点或前置链路不能以该格式表示，未输出。</p>}
         <ul className="max-h-64 space-y-0.5 overflow-auto text-xs text-muted-foreground">{m.data?.node_names.map((n) => <li key={n} className="wrap-break-word">{n}</li>)}</ul>
         {m.data?.groups?.length ? (
           <>

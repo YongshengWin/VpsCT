@@ -284,6 +284,9 @@ func FileDigest(f *os.File) (string, error) {
 
 // installBinary downloads, verifies and atomically installs name into binDir.
 func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.CoreVersion) (installErr error) {
+	if name == "xray" && (!XrayPlatform() || !agentproto.OfficialXrayPin(v)) {
+		return errors.New("unsupported Xray platform or release pin")
+	}
 	if name == "mita" && v.SHA256[runtime.GOARCH] == "" {
 		return errors.New("mita 锁定版本需要当前架构的 SHA-256")
 	}
@@ -316,6 +319,8 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 			official = url
 		case "snell-server":
 			official = fmt.Sprintf("https://dl.nssurge.com/snell/snell-server-v%s-linux-%s.zip", v.Version, archFor("snellarch"))
+		case "xray":
+			official = url // exact pin already checked independently of local trust mode
 		case "mita":
 			official = fmt.Sprintf("https://github.com/enfein/mieru/releases/download/v%s/mita_%s_linux_%s.tar.gz", v.Version, v.Version, archFor("arch"))
 		default:
@@ -390,7 +395,7 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 	if err != nil {
 		return err
 	}
-	if name == "sing-box" {
+	if name == "sing-box" || name == "xray" {
 		if err = bin.Chmod(0755); err != nil {
 			return err
 		}
@@ -407,10 +412,10 @@ func installBinaryInline(ctx context.Context, binDir, name string, v agentproto.
 		out, _, err := boundedexec.Run(check, "", 64<<10, bin.Name(), "version")
 		cancel()
 		if err != nil {
-			return fmt.Errorf("official sing-box candidate cannot run: %w", err)
+			return fmt.Errorf("official %s candidate cannot run: %w", name, err)
 		}
-		if !strings.Contains(string(out), "sing-box version "+v.Version+"\n") {
-			return errors.New("official sing-box candidate reports a different version")
+		if (name == "xray" && !strings.HasPrefix(string(out), "Xray "+v.Version+" ")) || (name == "sing-box" && !strings.Contains(string(out), "sing-box version "+v.Version+"\n")) {
+			return errors.New("official core candidate reports a different version")
 		}
 		bin, err = os.Open(bin.Name())
 		if err != nil {
